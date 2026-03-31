@@ -1,0 +1,319 @@
+using System.Text;
+using System.Text.Json;
+using Anthropic;
+using ClaudeSharp.Commands;
+using ClaudeSharp.Core.Commands;
+using ClaudeSharp.Core.Context;
+using ClaudeSharp.Core.Permissions;
+using ClaudeSharp.Core.Query;
+using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Tools;
+
+namespace ClaudeSharp.Cli;
+
+internal static class Program
+{
+    public static async Task<int> Main(string[] args)
+    {
+        Console.OutputEncoding = Encoding.UTF8;
+
+        var options = CliOptions.Parse(args);
+        if (options.ShowHelp)
+        {
+            PrintHelp();
+            return 0;
+        }
+
+        var workingDirectory = Path.GetFullPath(
+            string.IsNullOrWhiteSpace(options.WorkingDirectory)
+                ? Environment.CurrentDirectory
+                : options.WorkingDirectory);
+
+        Environment.CurrentDirectory = workingDirectory;
+
+        var contextProvider = new ContextProvider
+        {
+            WorkingDirectory = workingDirectory,
+        };
+        await contextProvider.LoadMemoryAsync();
+
+        var toolRegistry = BuildToolRegistry();
+        var commandRegistry = BuildCommandRegistry();
+        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+
+        using var client = string.IsNullOrWhiteSpace(apiKey)
+            ? new AnthropicClient()
+            : new AnthropicClient { ApiKey = apiKey };
+
+        var config = new QueryEngineConfig
+        {
+            Model = ClaudeModels.Resolve(options.Model),
+        };
+
+        var queryEngine = new QueryEngine(
+            client,
+            toolRegistry,
+            new DefaultPermissionChecker(),
+            config,
+            contextProvider);
+
+        var shell = new ClaudeSharpShell(
+            workingDirectory,
+            apiKey,
+            toolRegistry,
+            commandRegistry,
+            queryEngine,
+            contextProvider.GetPermissionContext());
+
+        return await shell.RunAsync(options.InitialPrompt);
+    }
+
+    private static ToolRegistry BuildToolRegistry()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new BashTool());
+        registry.Register(new FileReadTool());
+        registry.Register(new FileWriteTool());
+        registry.Register(new FileEditTool());
+        registry.Register(new GrepTool());
+        return registry;
+    }
+
+    private static CommandRegistry BuildCommandRegistry()
+    {
+        var registry = new CommandRegistry();
+        registry.Register(new HelpCommand());
+        registry.Register(new ClearCommand());
+        registry.Register(new CostCommand());
+        registry.Register(new ExitCommand());
+        registry.Register(new ModelCommand());
+        return registry;
+    }
+
+    private static void PrintHelp()
+    {
+        Console.WriteLine("""
+Usage:
+  ClaudeSharp [--cwd <path>] [--model <model>] [prompt]
+
+Options:
+  --cwd <path>     Working directory for this session
+  --model <model>  Main model or alias (sonnet / opus / haiku)
+  --help           Show this help
+""");
+    }
+
+    private sealed class ClaudeSharpShell
+    {
+        private readonly string _workingDirectory;
+        private readonly string? _apiKey;
+        private readonly ToolRegistry _toolRegistry;
+        private readonly CommandRegistry _commandRegistry;
+        private readonly QueryEngine _queryEngine;
+        private readonly PermissionContext _permissionContext;
+        private bool _exitRequested;
+
+        public ClaudeSharpShell(
+            string workingDirectory,
+            string? apiKey,
+            ToolRegistry toolRegistry,
+            CommandRegistry commandRegistry,
+            QueryEngine queryEngine,
+            PermissionContext permissionContext)
+        {
+            _workingDirectory = workingDirectory;
+            _apiKey = apiKey;
+            _toolRegistry = toolRegistry;
+            _commandRegistry = commandRegistry;
+            _queryEngine = queryEngine;
+            _permissionContext = permissionContext;
+        }
+
+        public async Task<int> RunAsync(string? initialPrompt)
+        {
+            var interactive = !Console.IsInputRedirected && string.IsNullOrWhiteSpace(initialPrompt);
+            if (interactive)
+                PrintBanner();
+
+            var commandContext = new CommandContext
+            {
+                WriteLine = Console.WriteLine,
+                Tools = _toolRegistry,
+                QueryEngine = _queryEngine,
+                PermissionContext = _permissionContext,
+                Commands = _commandRegistry.GetAll(),
+                RequestExit = () => _exitRequested = true,
+                RequestClear = () =>
+                {
+                    if (!Console.IsOutputRedirected)
+                        Console.Clear();
+                },
+            };
+
+            if (!string.IsNullOrWhiteSpace(initialPrompt))
+            {
+                await HandleInputAsync(initialPrompt, commandContext);
+                return 0;
+            }
+
+            while (!_exitRequested)
+            {
+                if (interactive)
+                    Console.Write("\nclaudesharp> ");
+
+                var input = Console.ReadLine();
+                if (input == null)
+                    break;
+
+                if (string.IsNullOrWhiteSpace(input))
+                    continue;
+
+                await HandleInputAsync(input, commandContext);
+            }
+
+            return 0;
+        }
+
+        private async Task HandleInputAsync(string input, CommandContext commandContext)
+        {
+            if (_commandRegistry.IsCommand(input))
+            {
+                var parts = input.Split(' ', 2, StringSplitOptions.TrimEntries);
+                var name = parts[0];
+                var args = parts.Length > 1 ? parts[1] : "";
+                var command = _commandRegistry.Get(name);
+                if (command != null)
+                    await command.ExecuteAsync(args, commandContext);
+                return;
+            }
+
+            await RunQueryAsync(input);
+        }
+
+        private async Task RunQueryAsync(string input)
+        {
+            var wroteAssistantText = false;
+
+            await foreach (var evt in _queryEngine.SubmitMessageAsync(input))
+            {
+                switch (evt)
+                {
+                    case TextDeltaEvent text:
+                        wroteAssistantText = true;
+                        Console.Write(text.Text);
+                        break;
+
+                    case ThinkingDeltaEvent:
+                        // 先不直接展示模型思考文本，避免污染终端输出。
+                        break;
+
+                    case ToolUseStartEvent toolUse:
+                        if (wroteAssistantText)
+                            Console.WriteLine();
+
+                        Console.WriteLine(
+                            $"\n[{toolUse.ToolName}] {SummarizeToolInput(toolUse.Input)}");
+                        break;
+
+                    case PermissionRequestEvent permissionRequest:
+                        permissionRequest.SetResponse(AskForPermission(permissionRequest));
+                        break;
+
+                    case ToolResultEvent toolResult:
+                        var status = toolResult.IsError ? "failed" : "done";
+                        Console.WriteLine($"[{toolResult.ToolName}] {status}");
+                        if (toolResult.IsError)
+                            Console.WriteLine(toolResult.Result);
+                        break;
+
+                    case MessageEndEvent:
+                        if (wroteAssistantText)
+                            Console.WriteLine();
+                        break;
+
+                    case QueryCompleteEvent complete when !complete.Success:
+                        Console.WriteLine();
+                        Console.WriteLine($"请求失败: {complete.ErrorMessage}");
+                        break;
+                }
+            }
+        }
+
+        private bool AskForPermission(PermissionRequestEvent request)
+        {
+            if (Console.IsInputRedirected)
+                return false;
+
+            Console.Write($"{request.Description}，是否允许？ [y/N] ");
+            var answer = Console.ReadLine()?.Trim();
+            return answer is "y" or "Y" or "yes" or "YES";
+        }
+
+        private static string SummarizeToolInput(JsonElement input)
+        {
+            var raw = input.GetRawText();
+            return raw.Length <= 120 ? raw : $"{raw[..117]}...";
+        }
+
+        private void PrintBanner()
+        {
+            Console.WriteLine("ClaudeSharp (.NET 10)");
+            Console.WriteLine($"Working directory: {_workingDirectory}");
+            Console.WriteLine($"Model: {_queryEngine.CurrentModel}");
+            Console.WriteLine("输入 /help 查看内置命令，/exit 退出。");
+
+            if (string.IsNullOrWhiteSpace(_apiKey))
+            {
+                Console.WriteLine(
+                    "未检测到 ANTHROPIC_API_KEY。你仍然可以使用本地斜杠命令，但真正发起 Claude 请求会失败。");
+            }
+        }
+    }
+
+    private sealed record CliOptions(
+        bool ShowHelp,
+        string? WorkingDirectory,
+        string? Model,
+        string? InitialPrompt)
+    {
+        public static CliOptions Parse(string[] args)
+        {
+            var showHelp = false;
+            string? workingDirectory = null;
+            string? model = null;
+            var remaining = new List<string>();
+
+            for (var i = 0; i < args.Length; i++)
+            {
+                switch (args[i])
+                {
+                    case "--help":
+                    case "-h":
+                        showHelp = true;
+                        break;
+
+                    case "--cwd":
+                        if (i + 1 < args.Length)
+                            workingDirectory = args[++i];
+                        break;
+
+                    case "--model":
+                    case "-m":
+                        if (i + 1 < args.Length)
+                            model = args[++i];
+                        break;
+
+                    default:
+                        remaining.Add(args[i]);
+                        break;
+                }
+            }
+
+            return new CliOptions(
+                showHelp,
+                workingDirectory,
+                model,
+                remaining.Count > 0 ? string.Join(' ', remaining) : null);
+        }
+    }
+}

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ClaudeSharp.Cli/ClaudeSharp.Cli.csproj" />
+    <Project Path="src/ClaudeSharp.Commands/ClaudeSharp.Commands.csproj" />
+    <Project Path="src/ClaudeSharp.Core/ClaudeSharp.Core.csproj" />
+    <Project Path="src/ClaudeSharp.Tools/ClaudeSharp.Tools.csproj" />
+  </Folder>
+</Solution>

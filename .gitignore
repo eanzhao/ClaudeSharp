@@ -1,0 +1,5 @@
+claude-code/
+.idea/
+.DS_Store
+**/bin/
+**/obj/
