@@ -6,6 +6,7 @@ using ClaudeSharp.Core.Hooks;
 using ClaudeSharp.Core.Memory;
 using ClaudeSharp.Core.Commands;
 using ClaudeSharp.Core.Context;
+using ClaudeSharp.Core.Mcp;
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Providers;
 using ClaudeSharp.Core.Query;
@@ -100,6 +101,10 @@ internal static class Program
         var providerRouter = new DefaultProviderCapabilityRouter();
         var toolRegistry = BuildToolRegistry(providerRouter, () => config.Model);
         var commandRegistry = BuildCommandRegistry();
+        await using var mcpRuntime = await McpRuntime.CreateAsync(
+            toolRegistry,
+            workingDirectory,
+            options.McpConfigPath);
         var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
         var hooks = new HookRuntime();
 
@@ -142,13 +147,26 @@ internal static class Program
             initialUsage: resumed?.TotalUsage,
             initialMetadata: resumed?.Metadata);
 
-        var startupNote = resumed switch
+        var startupParts = new List<string>();
+        switch (resumed)
         {
-            null => null,
-            { ContinueExistingSession: true } =>
-                $"Resumed session {resumed.SourceSession.SessionId} ({resumed.Messages.Count} messages)",
-            _ => $"Forked session {session.SessionId} from {resumed.SourceSession.SessionId} ({resumed.Messages.Count} messages)",
-        };
+            case { ContinueExistingSession: true }:
+                startupParts.Add(
+                    $"Resumed session {resumed.SourceSession.SessionId} ({resumed.Messages.Count} messages)");
+                break;
+
+            case not null:
+                startupParts.Add(
+                    $"Forked session {session.SessionId} from {resumed.SourceSession.SessionId} ({resumed.Messages.Count} messages)");
+                break;
+        }
+
+        if (!string.IsNullOrWhiteSpace(mcpRuntime.StartupSummary))
+            startupParts.Add(mcpRuntime.StartupSummary);
+
+        var startupNote = startupParts.Count == 0
+            ? null
+            : string.Join(Environment.NewLine, startupParts);
 
         var shell = new ClaudeSharpShell(
             workingDirectory,
@@ -212,7 +230,7 @@ internal static class Program
     {
         Console.WriteLine("""
 Usage:
-  ClaudeSharp [--cwd <path>] [--model <model>] [--resume <session>] [--continue] [--fork-session] [prompt]
+  ClaudeSharp [--cwd <path>] [--model <model>] [--resume <session>] [--continue] [--fork-session] [--mcp-config <path>] [prompt]
 
 Options:
   --cwd <path>       Working directory for this session
@@ -220,6 +238,7 @@ Options:
   --resume <id>      Resume a specific session by id, directory, manifest, or transcript path
   --continue         Resume the most recently updated session
   --fork-session     Fork the resumed transcript into a brand new session
+  --mcp-config       Load MCP servers from a specific settings.json file
   --help             Show this help
 """);
     }
@@ -432,6 +451,7 @@ Options:
         string? WorkingDirectory,
         string? Model,
         string? ResumeTarget,
+        string? McpConfigPath,
         string? InitialPrompt)
     {
         public static CliOptions Parse(string[] args)
@@ -442,6 +462,7 @@ Options:
             string? workingDirectory = null;
             string? model = null;
             string? resumeTarget = null;
+            string? mcpConfigPath = null;
             var remaining = new List<string>();
 
             for (var i = 0; i < args.Length; i++)
@@ -477,6 +498,11 @@ Options:
                             model = args[++i];
                         break;
 
+                    case "--mcp-config":
+                        if (i + 1 < args.Length)
+                            mcpConfigPath = args[++i];
+                        break;
+
                     default:
                         remaining.Add(args[i]);
                         break;
@@ -490,6 +516,7 @@ Options:
                 workingDirectory,
                 model,
                 resumeTarget,
+                mcpConfigPath,
                 remaining.Count > 0 ? string.Join(' ', remaining) : null);
         }
     }
