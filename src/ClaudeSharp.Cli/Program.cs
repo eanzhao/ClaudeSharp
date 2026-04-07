@@ -101,12 +101,15 @@ internal static class Program
         var providerRouter = new DefaultProviderCapabilityRouter();
         var toolRegistry = BuildToolRegistry(providerRouter, () => config.Model);
         var commandRegistry = BuildCommandRegistry();
+        var hookBuild = HookRuntimeBuilder.Build(
+            workingDirectory,
+            options.SettingsPath);
         await using var mcpRuntime = await McpRuntime.CreateAsync(
             toolRegistry,
             workingDirectory,
-            options.McpConfigPath);
+            options.SettingsPath);
         var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-        var hooks = new HookRuntime();
+        var hooks = hookBuild.Runtime;
 
         using var client = string.IsNullOrWhiteSpace(apiKey)
             ? new AnthropicClient()
@@ -163,6 +166,8 @@ internal static class Program
 
         if (!string.IsNullOrWhiteSpace(mcpRuntime.StartupSummary))
             startupParts.Add(mcpRuntime.StartupSummary);
+        if (!string.IsNullOrWhiteSpace(hookBuild.StartupSummary))
+            startupParts.Add(hookBuild.StartupSummary);
 
         var startupNote = startupParts.Count == 0
             ? null
@@ -230,7 +235,7 @@ internal static class Program
     {
         Console.WriteLine("""
 Usage:
-  ClaudeSharp [--cwd <path>] [--model <model>] [--resume <session>] [--continue] [--fork-session] [--mcp-config <path>] [prompt]
+  ClaudeSharp [--cwd <path>] [--model <model>] [--resume <session>] [--continue] [--fork-session] [--settings <path>] [prompt]
 
 Options:
   --cwd <path>       Working directory for this session
@@ -238,7 +243,8 @@ Options:
   --resume <id>      Resume a specific session by id, directory, manifest, or transcript path
   --continue         Resume the most recently updated session
   --fork-session     Fork the resumed transcript into a brand new session
-  --mcp-config       Load MCP servers from a specific settings.json file
+  --settings <path>  Load hooks and MCP servers from a specific settings.json file
+  --mcp-config       Alias for --settings
   --help             Show this help
 """);
     }
@@ -451,7 +457,7 @@ Options:
         string? WorkingDirectory,
         string? Model,
         string? ResumeTarget,
-        string? McpConfigPath,
+        string? SettingsPath,
         string? InitialPrompt)
     {
         public static CliOptions Parse(string[] args)
@@ -462,7 +468,7 @@ Options:
             string? workingDirectory = null;
             string? model = null;
             string? resumeTarget = null;
-            string? mcpConfigPath = null;
+            string? settingsPath = null;
             var remaining = new List<string>();
 
             for (var i = 0; i < args.Length; i++)
@@ -498,9 +504,10 @@ Options:
                             model = args[++i];
                         break;
 
+                    case "--settings":
                     case "--mcp-config":
                         if (i + 1 < args.Length)
-                            mcpConfigPath = args[++i];
+                            settingsPath = args[++i];
                         break;
 
                     default:
@@ -516,7 +523,7 @@ Options:
                 workingDirectory,
                 model,
                 resumeTarget,
-                mcpConfigPath,
+                settingsPath,
                 remaining.Count > 0 ? string.Join(' ', remaining) : null);
         }
     }

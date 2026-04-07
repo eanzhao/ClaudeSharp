@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ClaudeSharp.Core.Configuration;
 
 namespace ClaudeSharp.Core.Mcp;
 
@@ -10,7 +11,9 @@ public static class McpSettingsLoader
     public static McpSettingsLoadResult Load(
         string workingDirectory,
         string? explicitConfigPath = null) =>
-        LoadFromFiles(GetCandidatePaths(workingDirectory, explicitConfigPath), workingDirectory);
+        LoadFromFiles(
+            SettingsFileLocator.GetCandidatePaths(workingDirectory, explicitConfigPath),
+            workingDirectory);
 
     public static McpSettingsLoadResult LoadFromFiles(
         IEnumerable<string> configPaths,
@@ -48,23 +51,6 @@ public static class McpSettingsLoader
                 .ToArray(),
             diagnostics,
             sources);
-    }
-
-    private static IReadOnlyList<string> GetCandidatePaths(
-        string workingDirectory,
-        string? explicitConfigPath)
-    {
-        if (!string.IsNullOrWhiteSpace(explicitConfigPath))
-            return [explicitConfigPath];
-
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return
-        [
-            Path.Combine(home, ".claudesharp", "settings.json"),
-            Path.Combine(home, ".claude", "settings.json"),
-            Path.Combine(workingDirectory, ".claudesharp", "settings.json"),
-            Path.Combine(workingDirectory, ".claude", "settings.json"),
-        ];
     }
 
     private static IReadOnlyList<McpServerConfig> ParseFile(
