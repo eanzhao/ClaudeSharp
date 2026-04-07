@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Tools.Shell;
 
 namespace ClaudeSharp.Tools;
 
@@ -38,19 +39,6 @@ public class BashTool : ITool
 {
     private const int DefaultTimeoutMs = 120_000;  // 2 分钟
     private const int MaxTimeoutMs = 600_000;      // 10 分钟
-
-    /// <summary>已知的只读命令前缀</summary>
-    private static readonly string[] ReadOnlyCommands =
-    {
-        "ls", "cat", "head", "tail", "wc", "find", "grep", "rg",
-        "git status", "git log", "git diff", "git show", "git branch",
-        "git remote", "git rev-parse", "git describe",
-        "which", "where", "type", "file", "stat",
-        "echo", "printf", "pwd", "env", "printenv",
-        "whoami", "hostname", "uname", "date",
-        "dotnet --version", "node --version", "python --version",
-        "gh pr view", "gh issue view", "gh run view",
-    };
 
     public string Name => "Bash";
 
@@ -156,9 +144,21 @@ public class BashTool : ITool
             cts.CancelAfter(timeout);
 
             await process.WaitForExitAsync(cts.Token);
+            var interpretation = CommandSemantics.Interpret(
+                parsed.Command,
+                process.ExitCode,
+                stdout.ToString(),
+                stderr.ToString());
 
-            return ToolResult.Success(FormatOutput(
-                stdout.ToString(), stderr.ToString(), process.ExitCode));
+            var formatted = FormatOutput(
+                stdout.ToString(),
+                stderr.ToString(),
+                process.ExitCode,
+                interpretation);
+
+            return interpretation.IsError
+                ? ToolResult.Error(formatted)
+                : ToolResult.Success(formatted);
         }
         catch (OperationCanceledException)
         {
@@ -185,12 +185,19 @@ public class BashTool : ITool
             ? cmdProp.GetString() ?? ""
             : "";
 
-        // 只读命令自动允许
-        if (IsReadOnlyCommand(command))
+        var classification = BashCommandClassifier.Classify(command);
+
+        if (classification.Category == BashCommandCategory.ReadOnly)
             return Task.FromResult(PermissionResult.Allow());
 
-        // 其他命令需要用户批准
-        return Task.FromResult(PermissionResult.Ask($"Allow running: {command}"));
+        var message = classification.Category switch
+        {
+            BashCommandCategory.Destructive => $"Potentially destructive command: {command}",
+            BashCommandCategory.Write => $"Allow command that may modify files or git state: {command}",
+            _ => $"Allow running: {command}",
+        };
+
+        return Task.FromResult(PermissionResult.Ask(message));
     }
 
     public bool IsReadOnly(JsonElement input)
@@ -198,7 +205,7 @@ public class BashTool : ITool
         var command = input.TryGetProperty("command", out var cmdProp)
             ? cmdProp.GetString() ?? ""
             : "";
-        return IsReadOnlyCommand(command);
+        return BashCommandClassifier.Classify(command).Category == BashCommandCategory.ReadOnly;
     }
 
     public bool IsConcurrencySafe(JsonElement input) => IsReadOnly(input);
@@ -224,13 +231,6 @@ public class BashTool : ITool
 
     // ─── Private helpers ──────────────────────────────
 
-    private static bool IsReadOnlyCommand(string command)
-    {
-        var trimmed = command.TrimStart();
-        return ReadOnlyCommands.Any(prefix =>
-            trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
-    }
-
     private static string GetShell()
     {
         if (OperatingSystem.IsWindows())
@@ -247,7 +247,11 @@ public class BashTool : ITool
         return $"-c \"{command.Replace("\"", "\\\"")}\"";
     }
 
-    private static string FormatOutput(string stdout, string stderr, int exitCode)
+    private static string FormatOutput(
+        string stdout,
+        string stderr,
+        int exitCode,
+        CommandInterpretation interpretation)
     {
         var sb = new StringBuilder();
 
@@ -260,7 +264,13 @@ public class BashTool : ITool
             sb.Append($"STDERR:\n{stderr.TrimEnd()}");
         }
 
-        if (exitCode != 0)
+        if (!string.IsNullOrWhiteSpace(interpretation.Message))
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.Append($"Note: {interpretation.Message}");
+        }
+
+        if (exitCode != 0 && interpretation.IsError)
         {
             if (sb.Length > 0) sb.AppendLine();
             sb.Append($"Exit code: {exitCode}");

@@ -6,6 +6,7 @@ using ClaudeSharp.Core.Commands;
 using ClaudeSharp.Core.Context;
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Query;
+using ClaudeSharp.Core.Storage;
 using ClaudeSharp.Core.Tools;
 using ClaudeSharp.Tools;
 
@@ -24,10 +25,55 @@ internal static class Program
             return 0;
         }
 
+        if (options.ContinueLatest && !string.IsNullOrWhiteSpace(options.ResumeTarget))
+        {
+            Console.Error.WriteLine("--continue 和 --resume 不能同时使用。");
+            return 1;
+        }
+
+        if (options.ForkSession &&
+            !options.ContinueLatest &&
+            string.IsNullOrWhiteSpace(options.ResumeTarget))
+        {
+            Console.Error.WriteLine("--fork-session 只能和 --continue 或 --resume 一起使用。");
+            return 1;
+        }
+
+        var transcriptStore = new JsonlTranscriptStore();
+        var resumeLoader = new SessionResumeLoader(transcriptStore, new ConversationRecovery());
+        var restorePipeline = new SessionRestorePipeline();
+
+        ProcessedResume? resumed = null;
+        if (options.ContinueLatest || !string.IsNullOrWhiteSpace(options.ResumeTarget))
+        {
+            var source = options.ContinueLatest
+                ? ResumeSource.Latest()
+                : ResumeSource.Session(options.ResumeTarget!);
+
+            var loadResult = await resumeLoader.LoadAsync(source);
+            if (loadResult == null)
+            {
+                Console.Error.WriteLine("没有找到可恢复的会话。");
+                return 1;
+            }
+
+            resumed = await restorePipeline.RestoreAsync(
+                loadResult,
+                new ResumeOptions
+                {
+                    WorkingDirectoryOverride = options.WorkingDirectory,
+                    ModelOverride = string.IsNullOrWhiteSpace(options.Model)
+                        ? null
+                        : ClaudeModels.Resolve(options.Model),
+                    ForkSession = options.ForkSession,
+                });
+        }
+
         var workingDirectory = Path.GetFullPath(
-            string.IsNullOrWhiteSpace(options.WorkingDirectory)
+            resumed?.WorkingDirectory ??
+            (string.IsNullOrWhiteSpace(options.WorkingDirectory)
                 ? Environment.CurrentDirectory
-                : options.WorkingDirectory);
+                : options.WorkingDirectory));
 
         Environment.CurrentDirectory = workingDirectory;
 
@@ -35,6 +81,8 @@ internal static class Program
         {
             WorkingDirectory = workingDirectory,
         };
+        if (resumed?.Metadata.Mode is PermissionMode resumedMode)
+            contextProvider.PermissionContext.Mode = resumedMode;
         await contextProvider.LoadMemoryAsync();
 
         var toolRegistry = BuildToolRegistry();
@@ -45,17 +93,48 @@ internal static class Program
             ? new AnthropicClient()
             : new AnthropicClient { ApiKey = apiKey };
 
+        var model = resumed?.Model ?? ClaudeModels.Resolve(options.Model);
         var config = new QueryEngineConfig
         {
-            Model = ClaudeModels.Resolve(options.Model),
+            Model = model,
         };
+
+        var session = resumed != null && resumed.ContinueExistingSession
+            ? resumed.SourceSession
+            : await transcriptStore.CreateSessionAsync(workingDirectory, model);
+
+        session.WorkingDirectory = workingDirectory;
+        session.Model = model;
+        session.Metadata = resumed?.Metadata.Clone() ?? session.Metadata;
+        await transcriptStore.UpdateSessionAsync(session);
+        var journal = new ConversationJournal(transcriptStore, session);
+        if (resumed != null && !resumed.ContinueExistingSession)
+        {
+            await journal.SeedAsync(
+                resumed.Messages,
+                resumed.Metadata,
+                workingDirectory,
+                model);
+        }
 
         var queryEngine = new QueryEngine(
             client,
             toolRegistry,
             new DefaultPermissionChecker(),
             config,
-            contextProvider);
+            contextProvider,
+            journal: journal,
+            initialMessages: resumed?.Messages,
+            initialUsage: resumed?.TotalUsage,
+            initialMetadata: resumed?.Metadata);
+
+        var startupNote = resumed switch
+        {
+            null => null,
+            { ContinueExistingSession: true } =>
+                $"Resumed session {resumed.SourceSession.SessionId} ({resumed.Messages.Count} messages)",
+            _ => $"Forked session {session.SessionId} from {resumed.SourceSession.SessionId} ({resumed.Messages.Count} messages)",
+        };
 
         var shell = new ClaudeSharpShell(
             workingDirectory,
@@ -63,7 +142,8 @@ internal static class Program
             toolRegistry,
             commandRegistry,
             queryEngine,
-            contextProvider.GetPermissionContext());
+            contextProvider.GetPermissionContext(),
+            startupNote);
 
         return await shell.RunAsync(options.InitialPrompt);
     }
@@ -75,6 +155,7 @@ internal static class Program
         registry.Register(new FileReadTool());
         registry.Register(new FileWriteTool());
         registry.Register(new FileEditTool());
+        registry.Register(new GlobTool());
         registry.Register(new GrepTool());
         return registry;
     }
@@ -84,9 +165,14 @@ internal static class Program
         var registry = new CommandRegistry();
         registry.Register(new HelpCommand());
         registry.Register(new ClearCommand());
+        registry.Register(new CompactCommand());
         registry.Register(new CostCommand());
         registry.Register(new ExitCommand());
         registry.Register(new ModelCommand());
+        registry.Register(new ModeCommand());
+        registry.Register(new SessionCommand());
+        registry.Register(new TitleCommand());
+        registry.Register(new TagCommand());
         return registry;
     }
 
@@ -94,12 +180,15 @@ internal static class Program
     {
         Console.WriteLine("""
 Usage:
-  ClaudeSharp [--cwd <path>] [--model <model>] [prompt]
+  ClaudeSharp [--cwd <path>] [--model <model>] [--resume <session>] [--continue] [--fork-session] [prompt]
 
 Options:
-  --cwd <path>     Working directory for this session
-  --model <model>  Main model or alias (sonnet / opus / haiku)
-  --help           Show this help
+  --cwd <path>       Working directory for this session
+  --model <model>    Main model or alias (sonnet / opus / haiku)
+  --resume <id>      Resume a specific session by id, directory, manifest, or transcript path
+  --continue         Resume the most recently updated session
+  --fork-session     Fork the resumed transcript into a brand new session
+  --help             Show this help
 """);
     }
 
@@ -111,6 +200,7 @@ Options:
         private readonly CommandRegistry _commandRegistry;
         private readonly QueryEngine _queryEngine;
         private readonly PermissionContext _permissionContext;
+        private readonly string? _startupNote;
         private bool _exitRequested;
 
         public ClaudeSharpShell(
@@ -119,7 +209,8 @@ Options:
             ToolRegistry toolRegistry,
             CommandRegistry commandRegistry,
             QueryEngine queryEngine,
-            PermissionContext permissionContext)
+            PermissionContext permissionContext,
+            string? startupNote)
         {
             _workingDirectory = workingDirectory;
             _apiKey = apiKey;
@@ -127,6 +218,7 @@ Options:
             _commandRegistry = commandRegistry;
             _queryEngine = queryEngine;
             _permissionContext = permissionContext;
+            _startupNote = startupNote;
         }
 
         public async Task<int> RunAsync(string? initialPrompt)
@@ -260,6 +352,10 @@ Options:
             Console.WriteLine("ClaudeSharp (.NET 10)");
             Console.WriteLine($"Working directory: {_workingDirectory}");
             Console.WriteLine($"Model: {_queryEngine.CurrentModel}");
+            if (!string.IsNullOrWhiteSpace(_queryEngine.SessionId))
+                Console.WriteLine($"Session: {_queryEngine.SessionId}");
+            if (!string.IsNullOrWhiteSpace(_startupNote))
+                Console.WriteLine(_startupNote);
             Console.WriteLine("输入 /help 查看内置命令，/exit 退出。");
 
             if (string.IsNullOrWhiteSpace(_apiKey))
@@ -272,15 +368,21 @@ Options:
 
     private sealed record CliOptions(
         bool ShowHelp,
+        bool ContinueLatest,
+        bool ForkSession,
         string? WorkingDirectory,
         string? Model,
+        string? ResumeTarget,
         string? InitialPrompt)
     {
         public static CliOptions Parse(string[] args)
         {
             var showHelp = false;
+            var continueLatest = false;
+            var forkSession = false;
             string? workingDirectory = null;
             string? model = null;
+            string? resumeTarget = null;
             var remaining = new List<string>();
 
             for (var i = 0; i < args.Length; i++)
@@ -297,6 +399,19 @@ Options:
                             workingDirectory = args[++i];
                         break;
 
+                    case "--resume":
+                        if (i + 1 < args.Length)
+                            resumeTarget = args[++i];
+                        break;
+
+                    case "--continue":
+                        continueLatest = true;
+                        break;
+
+                    case "--fork-session":
+                        forkSession = true;
+                        break;
+
                     case "--model":
                     case "-m":
                         if (i + 1 < args.Length)
@@ -311,8 +426,11 @@ Options:
 
             return new CliOptions(
                 showHelp,
+                continueLatest,
+                forkSession,
                 workingDirectory,
                 model,
+                resumeTarget,
                 remaining.Count > 0 ? string.Join(' ', remaining) : null);
         }
     }

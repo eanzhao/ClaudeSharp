@@ -1,4 +1,6 @@
 <Solution>
+  <Folder Name="/docs/" />
+  <Folder Name="/docs/plans/" />
   <Folder Name="/src/">
     <Project Path="src/ClaudeSharp.Cli/ClaudeSharp.Cli.csproj" />
     <Project Path="src/ClaudeSharp.Commands/ClaudeSharp.Commands.csproj" />

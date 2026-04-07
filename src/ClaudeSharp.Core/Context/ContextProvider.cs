@@ -1,6 +1,7 @@
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Query;
 using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Core.Markdown;
 
 namespace ClaudeSharp.Core.Context;
 
@@ -215,41 +216,30 @@ public class ContextProvider
     /// </summary>
     public async Task LoadMemoryAsync()
     {
-        var memoryParts = new List<string>();
-        var searchDir = WorkingDirectory;
-
-        while (!string.IsNullOrEmpty(searchDir))
+        var files = await MemoryInstructionScanner.ScanAsync(WorkingDirectory);
+        if (files.Count == 0)
         {
-            var memoryFile = Path.Combine(searchDir, "CLAUDE.md");
-            if (File.Exists(memoryFile))
-            {
-                var content = await File.ReadAllTextAsync(memoryFile);
-                if (!string.IsNullOrWhiteSpace(content))
-                {
-                    memoryParts.Add($"# From {memoryFile}\n{content}");
-                }
-            }
-
-            // Claude Code 也检查 .claude/CLAUDE.md
-            var dotClaudeMemory = Path.Combine(searchDir, ".claude", "CLAUDE.md");
-            if (File.Exists(dotClaudeMemory))
-            {
-                var content = await File.ReadAllTextAsync(dotClaudeMemory);
-                if (!string.IsNullOrWhiteSpace(content))
-                {
-                    memoryParts.Add($"# From {dotClaudeMemory}\n{content}");
-                }
-            }
-
-            var parent = Directory.GetParent(searchDir)?.FullName;
-            if (parent == searchDir)
-                break;
-            searchDir = parent;
+            MemoryContent = null;
+            return;
         }
 
-        if (memoryParts.Count > 0)
+        MemoryContent = string.Join(
+            "\n\n",
+            files.Select(FormatMemoryFile));
+    }
+
+    private static string FormatMemoryFile(MemoryInstructionFile file)
+    {
+        var parts = new List<string> { $"# From {file.Path}" };
+
+        if (file.Frontmatter.TryGetValue("paths", out var pathsValue))
         {
-            MemoryContent = string.Join("\n\n", memoryParts);
+            var paths = FrontmatterParser.SplitPathValue(pathsValue);
+            if (paths.Count > 0)
+                parts.Add($"# Applies to: {string.Join(", ", paths)}");
         }
+
+        parts.Add(file.Content);
+        return string.Join("\n", parts);
     }
 }

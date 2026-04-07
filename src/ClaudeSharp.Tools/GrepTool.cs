@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Tools.Search;
 
 namespace ClaudeSharp.Tools;
 
@@ -74,8 +75,7 @@ public class GrepTool : ITool
             ? pathProp.GetString() ?? context.WorkingDirectory
             : context.WorkingDirectory;
 
-        if (!Path.IsPathRooted(searchPath))
-            searchPath = Path.GetFullPath(Path.Combine(context.WorkingDirectory, searchPath));
+        searchPath = SearchPathUtilities.ResolvePath(searchPath, context.WorkingDirectory);
 
         var includeGlob = input.TryGetProperty("include", out var incProp)
             ? incProp.GetString()
@@ -166,6 +166,8 @@ public class GrepTool : ITool
     public bool IsReadOnly(JsonElement input) => true;
     public bool IsConcurrencySafe(JsonElement input) => true;
 
+    public string GetUserFacingName(JsonElement? input = null) => "Search";
+
     public string? GetActivityDescription(JsonElement? input)
     {
         if (input?.TryGetProperty("pattern", out var p) == true)
@@ -184,9 +186,6 @@ public class GrepTool : ITool
 
     private static bool ShouldSkipPath(string path)
     {
-        return path.Contains("/node_modules/") || path.Contains("/.git/")
-            || path.Contains("/bin/") || path.Contains("/obj/")
-            || path.Contains("\\node_modules\\") || path.Contains("\\.git\\")
-            || path.Contains("\\bin\\") || path.Contains("\\obj\\");
+        return SearchPathUtilities.ShouldSkipPath(path);
     }
 }

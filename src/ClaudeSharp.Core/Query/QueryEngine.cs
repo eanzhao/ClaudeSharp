@@ -1,8 +1,10 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Anthropic;
+using ClaudeSharp.Core.Compaction;
 using ClaudeSharp.Core.Messages;
 using ClaudeSharp.Core.Permissions;
+using ClaudeSharp.Core.Storage;
 using ClaudeSharp.Core.Tools;
 using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
 using ApiInputSchema = Anthropic.Models.Messages.InputSchema;
@@ -39,24 +41,38 @@ public class QueryEngine
 {
     private readonly AnthropicClient _client;
     private readonly ToolRegistry _tools;
-    private readonly IPermissionChecker _permissions;
+    private readonly IToolRuntime _toolRuntime;
+    private readonly IConversationCompactor _compactor;
     private readonly QueryEngineConfig _config;
     private readonly Context.ContextProvider _contextProvider;
-    private readonly List<ConversationMessage> _messages = new();
-    private TokenUsage _totalUsage = TokenUsage.Empty;
+    private readonly IConversationJournal? _journal;
+    private readonly ConversationSessionMetadata _sessionMetadata;
+    private readonly List<ConversationMessage> _messages;
+    private TokenUsage _totalUsage;
 
     public QueryEngine(
         AnthropicClient client,
         ToolRegistry tools,
         IPermissionChecker permissions,
         QueryEngineConfig config,
-        Context.ContextProvider contextProvider)
+        Context.ContextProvider contextProvider,
+        IToolRuntime? toolRuntime = null,
+        IConversationCompactor? compactor = null,
+        IConversationJournal? journal = null,
+        IReadOnlyList<ConversationMessage>? initialMessages = null,
+        TokenUsage? initialUsage = null,
+        ConversationSessionMetadata? initialMetadata = null)
     {
         _client = client;
         _tools = tools;
-        _permissions = permissions;
+        _toolRuntime = toolRuntime ?? new StreamingToolExecutor(tools, permissions);
+        _compactor = compactor ?? new HeuristicConversationCompactor();
         _config = config;
         _contextProvider = contextProvider;
+        _journal = journal;
+        _sessionMetadata = initialMetadata?.Clone() ?? journal?.Metadata ?? new ConversationSessionMetadata();
+        _messages = initialMessages?.ToList() ?? [];
+        _totalUsage = initialUsage ?? ComputeTotalUsage(_messages);
     }
 
     /// <summary>获取当前对话消息</summary>
@@ -75,6 +91,21 @@ public class QueryEngine
         return _config.Model;
     }
 
+    public async Task<string> SetModelAsync(
+        string modelOrAlias,
+        CancellationToken ct = default)
+    {
+        var resolved = SetModel(modelOrAlias);
+        await PersistRuntimeStateAsync(ct);
+        return resolved;
+    }
+
+    public string? SessionId => _journal?.SessionId;
+
+    public string? TranscriptPath => _journal?.TranscriptPath;
+
+    public ConversationSessionMetadata SessionMetadata => _sessionMetadata.Clone();
+
     /// <summary>
     /// 提交用户消息并获取事件流。
     /// 当前依然是“按块返回”，不是 token 级流式，但已经接到新版 Anthropic SDK。
@@ -86,7 +117,7 @@ public class QueryEngine
         var startTime = DateTimeOffset.UtcNow;
         var turnCount = 0;
 
-        _messages.Add(UserMessage.FromText(userInput));
+        await AddMessageAsync(UserMessage.FromText(userInput), ct);
 
         while (!ct.IsCancellationRequested)
         {
@@ -189,12 +220,12 @@ public class QueryEngine
                 yield return new MessageEndEvent(stopReason, responseUsage);
             }
 
-            _messages.Add(new AssistantMessage
+            await AddMessageAsync(new AssistantMessage
             {
                 Content = contentBlocks,
                 StopReason = stopReason,
                 Usage = responseUsage,
-            });
+            }, ct);
 
             if (toolUseBlocks.Count == 0)
                 break;
@@ -229,98 +260,46 @@ public class QueryEngine
         [EnumeratorCancellation] CancellationToken ct)
     {
         var context = CreateToolContext(ct);
-
-        var concurrent = new List<ToolUseBlock>();
-        var sequential = new List<ToolUseBlock>();
-
-        foreach (var block in toolUseBlocks)
+        await foreach (var update in _toolRuntime.RunBatchAsync(toolUseBlocks, context, ct))
         {
-            var tool = _tools.Get(block.Name);
-            if (tool != null && tool.IsConcurrencySafe(block.Input))
-                concurrent.Add(block);
-            else
-                sequential.Add(block);
-        }
-
-        if (concurrent.Count > 0)
-        {
-            var tasks = concurrent.Select(block => ExecuteSingleToolAsync(block, context, ct));
-            var results = await Task.WhenAll(tasks);
-
-            foreach (var (block, result) in concurrent.Zip(results))
+            switch (update)
             {
-                yield return new ToolResultEvent(
-                    block.ToolUseId, block.Name, result.Data, result.IsError);
-                _messages.Add(UserMessage.FromToolResult(
-                    block.ToolUseId, result.Data, result.IsError));
-            }
-        }
-
-        foreach (var block in sequential)
-        {
-            var tool = _tools.Get(block.Name);
-            if (tool != null)
-            {
-                var permission = await _permissions.CheckAsync(tool, block.Input, context);
-
-                if (permission.Behavior == PermissionBehavior.Ask)
+                case ToolPermissionRequestUpdate request:
                 {
-                    var permEvent = new PermissionRequestEvent
+                    var permissionEvent = new PermissionRequestEvent
                     {
-                        ToolName = block.Name,
-                        Description = tool.GetUserFacingName(block.Input),
-                        Input = block.Input,
+                        ToolName = request.Invocation.Name,
+                        Description = request.Description,
+                        Input = request.ObservedInput,
                     };
-                    yield return permEvent;
 
-                    var approved = await permEvent.WaitForResponseAsync();
-                    if (!approved)
-                    {
-                        const string denied = "User denied permission";
-                        yield return new ToolResultEvent(block.ToolUseId, block.Name, denied, true);
-                        _messages.Add(UserMessage.FromToolResult(block.ToolUseId, denied, true));
-                        continue;
-                    }
+                    yield return permissionEvent;
+                    var approved = await permissionEvent.WaitForResponseAsync();
+                    request.SetResponse(approved);
+                    break;
                 }
-                else if (permission.Behavior == PermissionBehavior.Deny)
+                case ToolProgressUpdate progress:
                 {
-                    var msg = permission.Message ?? "Permission denied";
-                    yield return new ToolResultEvent(block.ToolUseId, block.Name, msg, true);
-                    _messages.Add(UserMessage.FromToolResult(block.ToolUseId, msg, true));
-                    continue;
+                    yield return new ToolProgressEvent(
+                        progress.ToolUseId,
+                        progress.Progress.Message ?? progress.Progress.Type);
+                    break;
+                }
+                case ToolCompletedUpdate completed:
+                {
+                    yield return new ToolResultEvent(
+                        completed.Outcome.Invocation.ToolUseId,
+                        completed.Outcome.Invocation.Name,
+                        completed.Outcome.Result.Data,
+                        completed.Outcome.Result.IsError);
+
+                    await AddMessageAsync(UserMessage.FromToolResult(
+                        completed.Outcome.Invocation.ToolUseId,
+                        completed.Outcome.Result.Data,
+                        completed.Outcome.Result.IsError), ct);
+                    break;
                 }
             }
-
-            var result = await ExecuteSingleToolAsync(block, context, ct);
-            yield return new ToolResultEvent(block.ToolUseId, block.Name, result.Data, result.IsError);
-            _messages.Add(UserMessage.FromToolResult(block.ToolUseId, result.Data, result.IsError));
-        }
-    }
-
-    private async Task<ToolResult> ExecuteSingleToolAsync(
-        ToolUseBlock toolUse,
-        ToolExecutionContext context,
-        CancellationToken ct)
-    {
-        var tool = _tools.Get(toolUse.Name);
-        if (tool == null)
-            return ToolResult.Error($"Unknown tool: {toolUse.Name}");
-
-        var validation = await tool.ValidateInputAsync(toolUse.Input, context);
-        if (!validation.IsValid)
-            return ToolResult.Error(validation.Message ?? "Invalid input");
-
-        try
-        {
-            return await tool.ExecuteAsync(toolUse.Input, context, null, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return ToolResult.Error("Tool execution was cancelled.");
-        }
-        catch (Exception ex)
-        {
-            return ToolResult.Error($"Error: {ex.Message}");
         }
     }
 
@@ -462,9 +441,159 @@ public class QueryEngine
     }
 
     /// <summary>清除对话历史</summary>
-    public void ClearMessages()
+    public async Task ClearMessagesAsync(CancellationToken ct = default)
     {
         _messages.Clear();
         _totalUsage = TokenUsage.Empty;
+        if (_journal != null)
+            await _journal.ResetHeadAsync(ct);
+    }
+
+    public void ClearMessages() =>
+        ClearMessagesAsync().GetAwaiter().GetResult();
+
+    public async Task SetSessionTitleAsync(
+        string? title,
+        CancellationToken ct = default)
+    {
+        _sessionMetadata.Title = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
+        if (_journal != null)
+        {
+            await _journal.UpdateMetadataAsync(
+                metadata => metadata.Title = _sessionMetadata.Title,
+                ct);
+        }
+    }
+
+    public async Task AddSessionTagAsync(
+        string tag,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+            return;
+
+        _sessionMetadata.Tags.Add(tag.Trim());
+        if (_journal != null)
+        {
+            var tags = _sessionMetadata.Tags.ToArray();
+            await _journal.UpdateMetadataAsync(
+                metadata =>
+                {
+                    metadata.Tags.Clear();
+                    foreach (var item in tags)
+                        metadata.Tags.Add(item);
+                },
+                ct);
+        }
+    }
+
+    public async Task RemoveSessionTagAsync(
+        string tag,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+            return;
+
+        _sessionMetadata.Tags.Remove(tag.Trim());
+        if (_journal != null)
+        {
+            var tags = _sessionMetadata.Tags.ToArray();
+            await _journal.UpdateMetadataAsync(
+                metadata =>
+                {
+                    metadata.Tags.Clear();
+                    foreach (var item in tags)
+                        metadata.Tags.Add(item);
+                },
+                ct);
+        }
+    }
+
+    public async Task ClearSessionTagsAsync(CancellationToken ct = default)
+    {
+        _sessionMetadata.Tags.Clear();
+        if (_journal != null)
+        {
+            await _journal.UpdateMetadataAsync(
+                metadata => metadata.Tags.Clear(),
+                ct);
+        }
+    }
+
+    public async Task SetPermissionModeAsync(
+        PermissionMode mode,
+        CancellationToken ct = default)
+    {
+        _contextProvider.PermissionContext.Mode = mode;
+        _sessionMetadata.Mode = mode;
+        if (_journal != null)
+        {
+            await _journal.UpdateMetadataAsync(
+                metadata => metadata.Mode = mode,
+                ct);
+        }
+    }
+
+    public async Task<ConversationCompactionResult?> CompactAsync(
+        int preserveTailCount = 8,
+        CancellationToken ct = default)
+    {
+        var result = _compactor.Compact(_messages, preserveTailCount);
+        if (result == null)
+            return null;
+
+        _messages.Clear();
+        _messages.AddRange(result.ActiveMessages);
+
+        if (_journal != null)
+        {
+            await _journal.RecordConversationCheckpointAsync(
+                result.SummaryMessage,
+                result.ActiveMessages,
+                _contextProvider.WorkingDirectory,
+                _config.Model,
+                ct);
+        }
+
+        return result;
+    }
+
+    private async Task AddMessageAsync(
+        ConversationMessage message,
+        CancellationToken ct)
+    {
+        _messages.Add(message);
+        if (_journal != null)
+        {
+            await _journal.AppendMessageAsync(
+                message,
+                _contextProvider.WorkingDirectory,
+                _config.Model,
+                ct);
+        }
+    }
+
+    private async Task PersistRuntimeStateAsync(CancellationToken ct)
+    {
+        if (_journal == null)
+            return;
+
+        await _journal.UpdateSessionInfoAsync(
+            _contextProvider.WorkingDirectory,
+            _config.Model,
+            ct);
+    }
+
+    private static TokenUsage ComputeTotalUsage(
+        IReadOnlyList<ConversationMessage> messages)
+    {
+        var total = TokenUsage.Empty;
+        foreach (var assistant in messages.OfType<AssistantMessage>())
+        {
+            if (assistant.Usage != null)
+                total += assistant.Usage;
+        }
+
+        return total;
     }
 }

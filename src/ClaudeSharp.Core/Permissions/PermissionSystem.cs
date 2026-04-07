@@ -81,8 +81,36 @@ public class PermissionContext
     /// <summary>始终允许的规则 (如 "Bash(git status)")</summary>
     public HashSet<string> AlwaysAllowRules { get; } = new();
 
+    /// <summary>始终询问的规则</summary>
+    public HashSet<string> AlwaysAskRules { get; } = new();
+
     /// <summary>始终拒绝的规则</summary>
     public HashSet<string> AlwaysDenyRules { get; } = new();
+
+    /// <summary>结构化权限规则。</summary>
+    public List<PermissionRule> Rules { get; } = new();
+
+    public void AddRule(PermissionBehavior behavior, string toolName, string? ruleContent = null)
+    {
+        Rules.Add(PermissionRule.Create(behavior, toolName, ruleContent));
+    }
+
+    public IEnumerable<PermissionRule> GetRules(PermissionBehavior behavior)
+    {
+        foreach (var rule in Rules.Where(rule => rule.Behavior == behavior))
+            yield return rule;
+
+        IEnumerable<string> legacyRules = behavior switch
+        {
+            PermissionBehavior.Allow => AlwaysAllowRules,
+            PermissionBehavior.Ask => AlwaysAskRules,
+            PermissionBehavior.Deny => AlwaysDenyRules,
+            _ => Array.Empty<string>(),
+        };
+
+        foreach (var legacy in legacyRules)
+            yield return PermissionRule.Parse(behavior, legacy);
+    }
 }
 
 /// <summary>
@@ -117,10 +145,14 @@ public class DefaultPermissionChecker : IPermissionChecker
         Tools.ToolExecutionContext context)
     {
         var permCtx = context.PermissionContext;
+        var matchedDenyRule = PermissionRuleMatcher.FindFirstMatch(
+            permCtx.GetRules(PermissionBehavior.Deny),
+            tool,
+            input);
 
         // 1. 检查 deny 规则
-        if (permCtx.AlwaysDenyRules.Contains(tool.Name))
-            return PermissionResult.Deny($"Tool '{tool.Name}' is denied by policy.");
+        if (matchedDenyRule != null)
+            return PermissionResult.Deny($"Denied by rule: {matchedDenyRule.ToExpression()}");
 
         // 2. 工具自身的权限检查
         var toolPermission = await tool.CheckPermissionsAsync(input, context);
@@ -132,23 +164,35 @@ public class DefaultPermissionChecker : IPermissionChecker
             return PermissionResult.Allow(toolPermission.UpdatedInput);
 
         // 4. 检查 allow 规则
-        if (permCtx.AlwaysAllowRules.Contains(tool.Name))
+        var matchedAllowRule = PermissionRuleMatcher.FindFirstMatch(
+            permCtx.GetRules(PermissionBehavior.Allow),
+            tool,
+            input);
+        if (matchedAllowRule != null)
             return PermissionResult.Allow(toolPermission.UpdatedInput);
 
-        // 5. 只读操作在 Plan/Auto 模式下自动允许
+        // 5. Ask 规则要早于只读/自动模式生效
+        var matchedAskRule = PermissionRuleMatcher.FindFirstMatch(
+            permCtx.GetRules(PermissionBehavior.Ask),
+            tool,
+            input);
+        if (matchedAskRule != null)
+            return PermissionResult.Ask($"Rule requires confirmation: {matchedAskRule.ToExpression()}");
+
+        // 6. 只读操作在 Plan/Auto 模式下自动允许
         if (tool.IsReadOnly(input) &&
             permCtx.Mode is PermissionMode.Plan or PermissionMode.Auto)
             return PermissionResult.Allow(toolPermission.UpdatedInput);
 
-        // 6. Auto 模式 → 全部允许
+        // 7. Auto 模式 → 全部允许
         if (permCtx.Mode == PermissionMode.Auto)
             return PermissionResult.Allow(toolPermission.UpdatedInput);
 
-        // 7. 工具自身标记为 Allow → 允许
+        // 8. 工具自身标记为 Allow → 允许
         if (toolPermission.Behavior == PermissionBehavior.Allow)
             return toolPermission;
 
-        // 8. 需要询问用户
+        // 9. 需要询问用户
         return PermissionResult.Ask(toolPermission.Message ?? $"Allow {tool.GetUserFacingName(input)}?");
     }
 }
