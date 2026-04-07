@@ -169,8 +169,11 @@ internal static class Program
         registry.Register(new CostCommand());
         registry.Register(new ExitCommand());
         registry.Register(new ModelCommand());
+        registry.Register(new MicrocompactCommand());
         registry.Register(new ModeCommand());
+        registry.Register(new PartialCompactCommand());
         registry.Register(new SessionCommand());
+        registry.Register(new SessionMemoryCompactCommand());
         registry.Register(new TitleCommand());
         registry.Register(new TagCommand());
         return registry;
@@ -316,6 +319,33 @@ Options:
                         Console.WriteLine($"[{toolResult.ToolName}] {status}");
                         if (toolResult.IsError)
                             Console.WriteLine(toolResult.Result);
+                        break;
+
+                    case ContextCompactionEvent compaction:
+                        var prefix = compaction.Automatic ? "[context:auto]" : "[context]";
+                        if (compaction.Mode == "microcompact")
+                        {
+                            Console.WriteLine(
+                                $"{prefix} microcompact: cleared {compaction.ClearedToolResults} tool results, {compaction.ClearedThinkingBlocks} thinking blocks");
+                        }
+                        else if (compaction.Mode == "session_memory")
+                        {
+                            Console.WriteLine(
+                                $"{prefix} session memory: folded {compaction.RemovedMessages} older messages and kept {compaction.PreservedMessages} messages verbatim");
+                        }
+                        else if (compaction.Mode == "compact")
+                        {
+                            Console.WriteLine(
+                                $"{prefix} compact: summarized {compaction.RemovedMessages} messages and kept {compaction.PreservedMessages} messages active");
+                        }
+                        else if (compaction.Mode == "failed")
+                        {
+                            Console.WriteLine($"{prefix} failed: {compaction.Reason}");
+                        }
+                        else if (compaction.Mode == "skipped")
+                        {
+                            Console.WriteLine($"{prefix} skipped: {compaction.Reason}");
+                        }
                         break;
 
                     case MessageEndEvent:

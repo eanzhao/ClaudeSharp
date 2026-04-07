@@ -8,6 +8,7 @@ public sealed class ConversationCompactionResult
     public required ConversationMessage SummaryMessage { get; init; }
     public required IReadOnlyList<ConversationMessage> ActiveMessages { get; init; }
     public required int RemovedMessageCount { get; init; }
+    public ConversationRewriteResult? RewriteResult { get; init; }
 }
 
 public interface IConversationCompactor
@@ -15,12 +16,26 @@ public interface IConversationCompactor
     ConversationCompactionResult? Compact(
         IReadOnlyList<ConversationMessage> messages,
         int preserveTailCount = 8);
+
+    ConversationCompactionResult? CompactUpTo(
+        IReadOnlyList<ConversationMessage> messages,
+        int upToIndex);
+
+    ConversationCompactionResult? CompactFrom(
+        IReadOnlyList<ConversationMessage> messages,
+        int fromIndex);
 }
 
 public sealed class HeuristicConversationCompactor : IConversationCompactor
 {
     private const int MaxSummaryChars = 4000;
     private const int PerMessagePreviewChars = 180;
+    private readonly IConversationRewriter _rewriter;
+
+    public HeuristicConversationCompactor(IConversationRewriter? rewriter = null)
+    {
+        _rewriter = rewriter ?? new ConversationRewriter();
+    }
 
     public ConversationCompactionResult? Compact(
         IReadOnlyList<ConversationMessage> messages,
@@ -30,39 +45,75 @@ public sealed class HeuristicConversationCompactor : IConversationCompactor
         if (messages.Count <= preserveTailCount)
             return null;
 
-        var removedMessages = messages.Take(messages.Count - preserveTailCount).ToList();
-        var preservedMessages = messages.Skip(messages.Count - preserveTailCount).ToList();
-        if (removedMessages.Count == 0)
+        return CompactUpTo(messages, messages.Count - preserveTailCount);
+    }
+
+    public ConversationCompactionResult? CompactUpTo(
+        IReadOnlyList<ConversationMessage> messages,
+        int upToIndex)
+    {
+        var boundary = _rewriter.ResolveUpToBoundary(messages, upToIndex);
+        return Compact(messages, boundary);
+    }
+
+    public ConversationCompactionResult? CompactFrom(
+        IReadOnlyList<ConversationMessage> messages,
+        int fromIndex)
+    {
+        var boundary = _rewriter.ResolveFromBoundary(messages, fromIndex);
+        return Compact(messages, boundary);
+    }
+
+    private ConversationCompactionResult? Compact(
+        IReadOnlyList<ConversationMessage> messages,
+        ConversationRewriteBoundary boundary)
+    {
+        if (boundary.FoldedMessageCount == 0)
+            return null;
+
+        var foldedMessages = messages
+            .Skip(boundary.FoldedStartIndex)
+            .Take(boundary.FoldedMessageCount)
+            .ToArray();
+        if (foldedMessages.Length == 0)
             return null;
 
         var summaryMessage = new UserMessage
         {
             IsMeta = true,
-            Content = [new TextBlock(BuildSummary(removedMessages, preservedMessages.Count))],
+            Content =
+            [
+                new TextBlock(BuildSummary(
+                    foldedMessages,
+                    boundary.PreservedMessageCount,
+                    boundary.Direction)),
+            ],
         };
 
-        var activeMessages = new List<ConversationMessage>(preservedMessages.Count + 1)
-        {
-            summaryMessage,
-        };
-        activeMessages.AddRange(preservedMessages);
+        var rewriteResult = _rewriter.Rewrite(messages, boundary, summaryMessage);
+
+        if (!rewriteResult.HasChanges)
+            return null;
 
         return new ConversationCompactionResult
         {
             SummaryMessage = summaryMessage,
-            ActiveMessages = activeMessages,
-            RemovedMessageCount = removedMessages.Count,
+            ActiveMessages = rewriteResult.Messages,
+            RemovedMessageCount = rewriteResult.FoldedMessages.Count,
+            RewriteResult = rewriteResult,
         };
     }
 
     private static string BuildSummary(
         IReadOnlyList<ConversationMessage> removedMessages,
-        int preservedCount)
+        int preservedCount,
+        ConversationRewriteDirection direction)
     {
         var builder = new StringBuilder();
         builder.AppendLine("Conversation summary before compaction:");
-        builder.AppendLine(
-            $"- Compressed {removedMessages.Count} earlier messages and kept the latest {preservedCount} messages in full.");
+        builder.AppendLine(direction == ConversationRewriteDirection.UpTo
+            ? $"- Compressed {removedMessages.Count} earlier messages and kept the latest {preservedCount} messages in full."
+            : $"- Compressed {removedMessages.Count} later messages and kept the earliest {preservedCount} messages in full.");
         builder.AppendLine("- Key checkpoints:");
 
         foreach (var message in removedMessages)

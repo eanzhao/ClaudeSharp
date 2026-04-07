@@ -7,4 +7,7 @@
     <Project Path="src/ClaudeSharp.Core/ClaudeSharp.Core.csproj" />
     <Project Path="src/ClaudeSharp.Tools/ClaudeSharp.Tools.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj" />
+  </Folder>
 </Solution>

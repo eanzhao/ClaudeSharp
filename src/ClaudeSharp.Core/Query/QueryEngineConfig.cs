@@ -28,6 +28,36 @@ public class QueryEngineConfig
 
     /// <summary>思考模式 token 预算</summary>
     public int ThinkingBudgetTokens { get; set; } = 10240;
+
+    /// <summary>是否启用自动上下文压缩</summary>
+    public bool EnableAutoCompact { get; set; } = true;
+
+    /// <summary>估算的模型上下文窗口大小</summary>
+    public int ApproxContextWindowTokens { get; set; } = 200_000;
+
+    /// <summary>给自动压缩预留的安全 buffer</summary>
+    public int AutoCompactBufferTokens { get; set; } = 12_000;
+
+    /// <summary>自动压缩时至少保留多少条最近消息原文</summary>
+    public int AutoCompactPreserveTailCount { get; set; } = 8;
+
+    /// <summary>是否优先使用 session memory compact 作为自动压缩的温和路径</summary>
+    public bool EnableSessionMemoryCompact { get; set; } = true;
+
+    /// <summary>自动压缩触发前，至少要有多少条消息</summary>
+    public int AutoCompactMinimumMessageCount { get; set; } = 12;
+
+    /// <summary>字符转 token 的粗略估算比率</summary>
+    public int ApproxCharsPerToken { get; set; } = 4;
+
+    /// <summary>进入 warning 级上下文压力的阈值比例</summary>
+    public double AutoCompactWarningRatio { get; set; } = 0.72;
+
+    /// <summary>进入 blocking 级上下文压力的阈值比例</summary>
+    public double AutoCompactBlockingRatio { get; set; } = 0.82;
+
+    /// <summary>自动压缩连续失败的熔断上限</summary>
+    public int AutoCompactFailureLimit { get; set; } = 3;
 }
 
 /// <summary>

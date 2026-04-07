@@ -43,12 +43,16 @@ public class QueryEngine
     private readonly ToolRegistry _tools;
     private readonly IToolRuntime _toolRuntime;
     private readonly IConversationCompactor _compactor;
+    private readonly IMicroCompactor _microCompactor;
+    private readonly ISessionMemoryCompactor _sessionMemoryCompactor;
+    private readonly IContextPressurePipeline _contextPressurePipeline;
     private readonly QueryEngineConfig _config;
     private readonly Context.ContextProvider _contextProvider;
     private readonly IConversationJournal? _journal;
     private readonly ConversationSessionMetadata _sessionMetadata;
     private readonly List<ConversationMessage> _messages;
     private TokenUsage _totalUsage;
+    private int _consecutiveAutoCompactFailures;
 
     public QueryEngine(
         AnthropicClient client,
@@ -58,6 +62,9 @@ public class QueryEngine
         Context.ContextProvider contextProvider,
         IToolRuntime? toolRuntime = null,
         IConversationCompactor? compactor = null,
+        IMicroCompactor? microCompactor = null,
+        ISessionMemoryCompactor? sessionMemoryCompactor = null,
+        IContextPressurePipeline? contextPressurePipeline = null,
         IConversationJournal? journal = null,
         IReadOnlyList<ConversationMessage>? initialMessages = null,
         TokenUsage? initialUsage = null,
@@ -67,6 +74,13 @@ public class QueryEngine
         _tools = tools;
         _toolRuntime = toolRuntime ?? new StreamingToolExecutor(tools, permissions);
         _compactor = compactor ?? new HeuristicConversationCompactor();
+        _microCompactor = microCompactor ?? new TimeBasedMicroCompactor();
+        _sessionMemoryCompactor = sessionMemoryCompactor ?? new SessionMemoryCompactor();
+        _contextPressurePipeline = contextPressurePipeline ??
+                                  new DefaultContextPressurePipeline(
+                                      microCompactor: _microCompactor,
+                                      sessionMemoryCompactor: _sessionMemoryCompactor,
+                                      conversationCompactor: _compactor);
         _config = config;
         _contextProvider = contextProvider;
         _journal = journal;
@@ -122,6 +136,10 @@ public class QueryEngine
         while (!ct.IsCancellationRequested)
         {
             turnCount++;
+
+            var compactionEvents = await PrepareContextForTurnAsync(ct);
+            foreach (var compactionEvent in compactionEvents)
+                yield return compactionEvent;
 
             var systemPrompt = await BuildSystemPromptAsync();
             var apiMessages = ConvertToApiMessages(_messages);
@@ -542,20 +560,219 @@ public class QueryEngine
         if (result == null)
             return null;
 
+        await ApplyCompactionResultAsync(result, ct);
+        return result;
+    }
+
+    public async Task<ConversationCompactionResult?> CompactUpToAsync(
+        int upToIndex,
+        CancellationToken ct = default)
+    {
+        var result = _compactor.CompactUpTo(_messages, upToIndex);
+        if (result == null)
+            return null;
+
+        await ApplyCompactionResultAsync(result, ct);
+        return result;
+    }
+
+    public async Task<ConversationCompactionResult?> CompactFromAsync(
+        int fromIndex,
+        CancellationToken ct = default)
+    {
+        var result = _compactor.CompactFrom(_messages, fromIndex);
+        if (result == null)
+            return null;
+
+        await ApplyCompactionResultAsync(result, ct);
+        return result;
+    }
+
+    public async Task<SessionMemoryCompactionResult?> SessionMemoryCompactAsync(
+        int preserveTailCount = 8,
+        CancellationToken ct = default)
+    {
+        var result = _sessionMemoryCompactor.Compact(
+            _messages,
+            new SessionMemoryCompactionOptions
+            {
+                PreserveTailCount = preserveTailCount,
+            });
+
+        if (result == null || !result.HasChanges)
+            return null;
+
+        await ApplySessionMemoryCompactionResultAsync(result, ct);
+        return result;
+    }
+
+    public async Task<MicrocompactResult?> MicrocompactAsync(
+        int preserveTailCount = 8,
+        bool force = true,
+        CancellationToken ct = default)
+    {
+        var result = _microCompactor.Run(
+            _messages,
+            new MicrocompactRunOptions
+            {
+                PreserveTailCount = preserveTailCount,
+                Force = force,
+            });
+
+        if (!result.HasChanges)
+            return null;
+
+        await ApplyMicrocompactResultAsync(result, ct);
+        return result;
+    }
+
+    private async Task<IReadOnlyList<QueryEvent>> PrepareContextForTurnAsync(
+        CancellationToken ct)
+    {
+        var events = new List<QueryEvent>();
+
+        if (!_config.EnableAutoCompact)
+            return events;
+
+        if (_consecutiveAutoCompactFailures >= _config.AutoCompactFailureLimit)
+        {
+            events.Add(new ContextCompactionEvent
+            {
+                Mode = "skipped",
+                Automatic = true,
+                Reason = $"auto-compact circuit open after {_consecutiveAutoCompactFailures} consecutive failures",
+            });
+            return events;
+        }
+
+        try
+        {
+            var preparation = _contextPressurePipeline.Prepare(
+                _messages,
+                new ContextPressureOptions
+                {
+                    EnableAutoCompact = _config.EnableAutoCompact,
+                    EnableSessionMemoryCompact = _config.EnableSessionMemoryCompact,
+                    PreserveTailCount = _config.AutoCompactPreserveTailCount,
+                    Policy = new AutoCompactPolicyOptions
+                    {
+                        ApproxContextWindowTokens = _config.ApproxContextWindowTokens,
+                        MaxOutputTokens = _config.MaxTokens,
+                        BufferTokens = _config.AutoCompactBufferTokens,
+                        ApproxCharsPerToken = _config.ApproxCharsPerToken,
+                        MinimumMessageCount = _config.AutoCompactMinimumMessageCount,
+                        WarningRatio = _config.AutoCompactWarningRatio,
+                        BlockingRatio = _config.AutoCompactBlockingRatio,
+                    },
+                    SessionMemory = new SessionMemoryCompactionOptions
+                    {
+                        PreserveTailCount = _config.AutoCompactPreserveTailCount,
+                    },
+                });
+
+            if (preparation.MicrocompactResult is { HasChanges: true } microcompact)
+            {
+                await ApplyMicrocompactResultAsync(microcompact, ct);
+                events.Add(new ContextCompactionEvent
+                {
+                    Mode = "microcompact",
+                    Automatic = true,
+                    Reason = preparation.InitialDecision.Reason,
+                    ClearedToolResults = microcompact.ClearedToolResultCount,
+                    ClearedThinkingBlocks = microcompact.ClearedThinkingBlockCount,
+                });
+            }
+
+            if (preparation.SessionMemoryResult is { HasChanges: true } sessionMemory)
+            {
+                await ApplySessionMemoryCompactionResultAsync(sessionMemory, ct);
+                events.Add(new ContextCompactionEvent
+                {
+                    Mode = "session_memory",
+                    Automatic = true,
+                    Reason = preparation.InitialDecision.Reason,
+                    RemovedMessages = sessionMemory.FoldedMessageCount,
+                    PreservedMessages = sessionMemory.ActiveMessages.Count - 1,
+                });
+            }
+
+            if (preparation.CompactionResult != null)
+            {
+                await ApplyCompactionResultAsync(preparation.CompactionResult, ct);
+                events.Add(new ContextCompactionEvent
+                {
+                    Mode = "compact",
+                    Automatic = true,
+                    Reason = preparation.InitialDecision.Reason,
+                    RemovedMessages = preparation.CompactionResult.RemovedMessageCount,
+                    PreservedMessages = preparation.CompactionResult.ActiveMessages.Count - 1,
+                });
+            }
+
+            _consecutiveAutoCompactFailures = 0;
+        }
+        catch (Exception ex)
+        {
+            _consecutiveAutoCompactFailures++;
+            events.Add(new ContextCompactionEvent
+            {
+                Mode = "failed",
+                Automatic = true,
+                Reason = ex.Message,
+            });
+        }
+
+        return events;
+    }
+
+    private async Task ApplyCompactionResultAsync(
+        ConversationCompactionResult result,
+        CancellationToken ct)
+    {
+        await ApplyCheckpointAsync(result.SummaryMessage, result.ActiveMessages, ct);
+    }
+
+    private async Task ApplySessionMemoryCompactionResultAsync(
+        SessionMemoryCompactionResult result,
+        CancellationToken ct)
+    {
+        await ApplyCheckpointAsync(result.MemoryMessage, result.ActiveMessages, ct);
+    }
+
+    private async Task ApplyMicrocompactResultAsync(
+        MicrocompactResult result,
+        CancellationToken ct)
+    {
         _messages.Clear();
-        _messages.AddRange(result.ActiveMessages);
+        _messages.AddRange(result.UpdatedMessages);
 
         if (_journal != null)
         {
-            await _journal.RecordConversationCheckpointAsync(
-                result.SummaryMessage,
-                result.ActiveMessages,
+            await _journal.RecordMicrocompactAsync(
+                result.Edits,
                 _contextProvider.WorkingDirectory,
                 _config.Model,
                 ct);
         }
+    }
 
-        return result;
+    private async Task ApplyCheckpointAsync(
+        ConversationMessage summaryMessage,
+        IReadOnlyList<ConversationMessage> activeMessages,
+        CancellationToken ct)
+    {
+        _messages.Clear();
+        _messages.AddRange(activeMessages);
+
+        if (_journal != null)
+        {
+            await _journal.RecordConversationCheckpointAsync(
+                summaryMessage,
+                activeMessages,
+                _contextProvider.WorkingDirectory,
+                _config.Model,
+                ct);
+        }
     }
 
     private async Task AddMessageAsync(

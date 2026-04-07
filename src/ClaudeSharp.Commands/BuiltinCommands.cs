@@ -1,4 +1,5 @@
 using ClaudeSharp.Core.Commands;
+using ClaudeSharp.Core.Compaction;
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Query;
 
@@ -262,5 +263,112 @@ public class CompactCommand : ICommand
 
         context.WriteLine(
             $"  Compacted {result.RemovedMessageCount} messages and kept {result.ActiveMessages.Count - 1} recent messages in full.");
+    }
+}
+
+public class SessionMemoryCompactCommand : ICommand
+{
+    public string Name => "session-memory";
+    public string Description => "Fold older history into a session-memory summary while keeping recent messages verbatim";
+    public string[] Aliases => ["smcompact"];
+
+    public async Task ExecuteAsync(string args, CommandContext context)
+    {
+        var preserveTailCount = 8;
+        if (!string.IsNullOrWhiteSpace(args) &&
+            !int.TryParse(args.Trim(), out preserveTailCount))
+        {
+            context.WriteLine("  Usage: /session-memory [preserveTailCount]");
+            return;
+        }
+
+        var result = await context.QueryEngine.SessionMemoryCompactAsync(preserveTailCount);
+        if (result == null)
+        {
+            context.WriteLine("  Not enough history to build a session-memory checkpoint yet.");
+            return;
+        }
+
+        var boundaryNote = result.RewriteResult.Boundary.WasAdjusted
+            ? $" Boundary adjusted from {result.RewriteResult.Boundary.RequestedIndex} to {result.RewriteResult.Boundary.AppliedIndex} to keep tool protocol intact."
+            : string.Empty;
+
+        context.WriteLine(
+            $"  Folded {result.FoldedMessageCount} older messages into session memory and kept {result.ActiveMessages.Count - 1} recent messages verbatim.{boundaryNote}");
+    }
+}
+
+public class PartialCompactCommand : ICommand
+{
+    public string Name => "pcompact";
+    public string Description => "Compact a selected message range with from/up_to boundaries";
+    public string[] Aliases => ["partial-compact"];
+
+    public async Task ExecuteAsync(string args, CommandContext context)
+    {
+        var parts = args.Split(' ', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2 || !int.TryParse(parts[1], out var index))
+        {
+            context.WriteLine("  Usage: /pcompact <up_to|from> <index>");
+            return;
+        }
+
+        ConversationCompactionResult? result = parts[0].ToLowerInvariant() switch
+        {
+            "up_to" or "upto" => await context.QueryEngine.CompactUpToAsync(index),
+            "from" => await context.QueryEngine.CompactFromAsync(index),
+            _ => null,
+        };
+
+        if (result == null)
+        {
+            if (parts[0].Equals("up_to", StringComparison.OrdinalIgnoreCase) ||
+                parts[0].Equals("upto", StringComparison.OrdinalIgnoreCase) ||
+                parts[0].Equals("from", StringComparison.OrdinalIgnoreCase))
+            {
+                context.WriteLine("  No messages were compacted for that boundary.");
+            }
+            else
+            {
+                context.WriteLine("  Usage: /pcompact <up_to|from> <index>");
+            }
+
+            return;
+        }
+
+        var boundary = result.RewriteResult?.Boundary;
+        var adjusted = boundary?.WasAdjusted == true
+            ? $" Boundary adjusted from {boundary.RequestedIndex} to {boundary.AppliedIndex} to preserve tool_use/tool_result pairs."
+            : string.Empty;
+
+        context.WriteLine(
+            $"  Compacted {result.RemovedMessageCount} messages with {parts[0]}={index}.{adjusted}");
+    }
+}
+
+public class MicrocompactCommand : ICommand
+{
+    public string Name => "microcompact";
+    public string Description => "Clear old tool results and thinking blocks without rewriting the whole conversation";
+
+    public async Task ExecuteAsync(string args, CommandContext context)
+    {
+        var preserveTailCount = 8;
+        if (!string.IsNullOrWhiteSpace(args) &&
+            !int.TryParse(args.Trim(), out preserveTailCount))
+        {
+            context.WriteLine("  Usage: /microcompact [preserveTailCount]");
+            return;
+        }
+
+        var result = await context.QueryEngine.MicrocompactAsync(preserveTailCount);
+        if (result == null)
+        {
+            context.WriteLine("  No old tool results or thinking blocks needed clearing.");
+            return;
+        }
+
+        context.WriteLine(
+            $"  Cleared {result.ClearedToolResultCount} tool-result messages and {result.ClearedThinkingBlockCount} thinking blocks.");
     }
 }

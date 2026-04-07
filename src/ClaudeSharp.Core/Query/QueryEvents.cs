@@ -33,6 +33,18 @@ public record ToolProgressEvent(string ToolUseId, string Message) : QueryEvent;
 /// <summary>工具结果</summary>
 public record ToolResultEvent(string ToolUseId, string ToolName, string Result, bool IsError) : QueryEvent;
 
+/// <summary>上下文压缩事件</summary>
+public record ContextCompactionEvent : QueryEvent
+{
+    public required string Mode { get; init; }
+    public required bool Automatic { get; init; }
+    public required string Reason { get; init; }
+    public int ClearedToolResults { get; init; }
+    public int ClearedThinkingBlocks { get; init; }
+    public int RemovedMessages { get; init; }
+    public int PreservedMessages { get; init; }
+}
+
 // ─── 权限事件 ─────────────────────────────────────────
 
 /// <summary>

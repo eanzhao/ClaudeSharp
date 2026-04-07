@@ -107,6 +107,12 @@ public interface IConversationJournal
         string model,
         CancellationToken cancellationToken = default);
 
+    Task RecordMicrocompactAsync(
+        IReadOnlyList<MicrocompactEdit> edits,
+        string workingDirectory,
+        string model,
+        CancellationToken cancellationToken = default);
+
     Task ResetHeadAsync(CancellationToken cancellationToken = default);
 }
 
@@ -285,6 +291,42 @@ public sealed class ConversationJournal : IConversationJournal
                 cancellationToken);
 
             _session.CurrentLeafMessageId = activeMessages[^1].Id;
+            await _store.UpdateSessionAsync(_session, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task RecordMicrocompactAsync(
+        IReadOnlyList<MicrocompactEdit> edits,
+        string workingDirectory,
+        string model,
+        CancellationToken cancellationToken = default)
+    {
+        if (edits.Count == 0)
+            return;
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            _session.WorkingDirectory = workingDirectory;
+            _session.Model = model;
+
+            var record = new MicrocompactRecord
+            {
+                Edits = edits,
+            };
+
+            await _store.AppendMetadataAsync(
+                _session,
+                new TranscriptMetadataEntry(
+                    MicrocompactRecord.EventType,
+                    record.ToMetadataPayload(),
+                    DateTimeOffset.UtcNow),
+                cancellationToken);
+
             await _store.UpdateSessionAsync(_session, cancellationToken);
         }
         finally

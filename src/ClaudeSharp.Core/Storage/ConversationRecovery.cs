@@ -69,7 +69,8 @@ public sealed class ConversationRecovery : IConversationRecovery
     public ResumeLoadResult Recover(TranscriptProjection projection)
     {
         var chain = BuildChain(projection);
-        var cleaned = CleanupMessages(chain);
+        var microcompact = BuildMicrocompactState(projection.MetadataEntries);
+        var cleaned = CleanupMessages(ApplyMicrocompact(chain, microcompact));
 
         return new ResumeLoadResult
         {
@@ -155,6 +156,42 @@ public sealed class ConversationRecovery : IConversationRecovery
         return checkpoint;
     }
 
+    private static IReadOnlyDictionary<string, MicrocompactEdit> BuildMicrocompactState(
+        IReadOnlyList<TranscriptMetadataEntry> metadataEntries)
+    {
+        var state = new Dictionary<string, MicrocompactEdit>(StringComparer.Ordinal);
+        foreach (var entry in metadataEntries)
+        {
+            if (string.Equals(entry.EventType, "reset-head", StringComparison.OrdinalIgnoreCase))
+            {
+                state.Clear();
+                continue;
+            }
+
+            if (!MicrocompactRecord.TryParse(entry, out var record) || record == null)
+                continue;
+
+            foreach (var edit in record.Edits)
+            {
+                if (state.TryGetValue(edit.MessageId, out var existing))
+                {
+                    state[edit.MessageId] = new MicrocompactEdit
+                    {
+                        MessageId = edit.MessageId,
+                        ClearToolResult = existing.ClearToolResult || edit.ClearToolResult,
+                        ClearThinking = existing.ClearThinking || edit.ClearThinking,
+                    };
+                }
+                else
+                {
+                    state[edit.MessageId] = edit;
+                }
+            }
+        }
+
+        return state;
+    }
+
     private static IReadOnlyList<ConversationMessage> BuildCheckpointChain(
         TranscriptProjection projection,
         ConversationCheckpoint checkpoint)
@@ -200,6 +237,73 @@ public sealed class ConversationRecovery : IConversationRecovery
         }
 
         return Array.Empty<ConversationMessage>();
+    }
+
+    private static IReadOnlyList<ConversationMessage> ApplyMicrocompact(
+        IReadOnlyList<ConversationMessage> messages,
+        IReadOnlyDictionary<string, MicrocompactEdit> edits)
+    {
+        if (messages.Count == 0 || edits.Count == 0)
+            return messages;
+
+        var rewritten = new List<ConversationMessage>(messages.Count);
+        foreach (var message in messages)
+        {
+            if (!edits.TryGetValue(message.Id, out var edit))
+            {
+                rewritten.Add(message);
+                continue;
+            }
+
+            rewritten.Add(ApplyMicrocompactEdit(message, edit));
+        }
+
+        return rewritten;
+    }
+
+    private static ConversationMessage ApplyMicrocompactEdit(
+        ConversationMessage message,
+        MicrocompactEdit edit)
+    {
+        return message switch
+        {
+            UserMessage user when edit.ClearToolResult => RewriteUserMessage(user),
+            AssistantMessage assistant when edit.ClearThinking => RewriteAssistantMessage(assistant),
+            _ => message,
+        };
+    }
+
+    private static ConversationMessage RewriteUserMessage(UserMessage user)
+    {
+        var rewritten = user.Content.Select(block =>
+        {
+            return block is ToolResultBlock result
+                ? new ToolResultBlock(
+                    result.ToolUseId,
+                    MicrocompactPlaceholders.OldToolResult,
+                    result.IsError)
+                : block;
+        }).ToList();
+
+        return user with
+        {
+            Content = rewritten,
+            ToolUseResult = string.IsNullOrWhiteSpace(user.ToolUseResult)
+                ? user.ToolUseResult
+                : MicrocompactPlaceholders.OldToolResult,
+        };
+    }
+
+    private static ConversationMessage RewriteAssistantMessage(AssistantMessage assistant)
+    {
+        var rewritten = assistant.Content.Select(block =>
+        {
+            return block is ThinkingBlock
+                ? new ThinkingBlock(MicrocompactPlaceholders.OldThinking)
+                : block;
+        }).ToList();
+
+        return assistant with { Content = rewritten };
     }
 
     private static IReadOnlyList<ConversationMessage> CleanupMessages(
