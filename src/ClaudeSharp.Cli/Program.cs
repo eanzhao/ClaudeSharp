@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Anthropic;
 using ClaudeSharp.Commands;
+using ClaudeSharp.Core.Agents;
 using ClaudeSharp.Core.Hooks;
 using ClaudeSharp.Core.Memory;
 using ClaudeSharp.Core.Commands;
@@ -98,22 +99,27 @@ internal static class Program
             Model = model,
             UseStreamingApi = true,
         };
+        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        using var client = string.IsNullOrWhiteSpace(apiKey)
+            ? new AnthropicClient()
+            : new AnthropicClient { ApiKey = apiKey };
         var providerRouter = new DefaultProviderCapabilityRouter();
-        var toolRegistry = BuildToolRegistry(providerRouter, () => config.Model);
-        var commandRegistry = BuildCommandRegistry();
         var hookBuild = HookRuntimeBuilder.Build(
             workingDirectory,
             options.SettingsPath);
+        var hooks = hookBuild.Runtime;
+        var agentTaskRuntime = new InMemoryAgentTaskRuntime();
+        var toolRegistry = BuildToolRegistry(
+            providerRouter,
+            () => config.Model,
+            client,
+            hooks,
+            agentTaskRuntime);
+        var commandRegistry = BuildCommandRegistry();
         await using var mcpRuntime = await McpRuntime.CreateAsync(
             toolRegistry,
             workingDirectory,
             options.SettingsPath);
-        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-        var hooks = hookBuild.Runtime;
-
-        using var client = string.IsNullOrWhiteSpace(apiKey)
-            ? new AnthropicClient()
-            : new AnthropicClient { ApiKey = apiKey };
 
         var session = resumed != null && resumed.ContinueExistingSession
             ? resumed.SourceSession
@@ -187,7 +193,10 @@ internal static class Program
 
     private static ToolRegistry BuildToolRegistry(
         IProviderCapabilityRouter providerRouter,
-        Func<string?> currentModelAccessor)
+        Func<string?> currentModelAccessor,
+        AnthropicClient client,
+        IHookRuntime hooks,
+        IAgentTaskRuntime agentTaskRuntime)
     {
         var registry = new ToolRegistry();
         registry.Register(new BashTool());
@@ -198,6 +207,11 @@ internal static class Program
         registry.Register(new GrepTool());
         registry.Register(new WebFetchTool());
         registry.Register(new WebSearchTool(providerRouter, currentModelAccessor));
+        registry.Register(new AgentTool(
+            new QueryEngineAgentRunner(client, hooks: hooks),
+            providerRouter,
+            agentTaskRuntime,
+            hooks));
         return registry;
     }
 
