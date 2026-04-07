@@ -231,6 +231,113 @@ public sealed class QueryEngineStreamingTests
         Assert.Equal(result.SummaryText, provider.SessionMemoryContent);
     }
 
+    [Fact]
+    public async Task SubmitMessageAsync_FinalizesToolUseBlockWhenStreamingStopEventIsMissing()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(CreateStreamingResponse(
+            ("message_start", new
+            {
+                type = "message_start",
+                message = new
+                {
+                    id = "msg-stream-2",
+                    type = "message",
+                    role = "assistant",
+                    model = ClaudeModels.DefaultMainModel,
+                    content = Array.Empty<object>(),
+                    stop_reason = (string?)null,
+                    stop_sequence = (string?)null,
+                    usage = new
+                    {
+                        input_tokens = 1,
+                        output_tokens = 0,
+                        cache_read_input_tokens = 0,
+                        cache_creation_input_tokens = 0,
+                    },
+                },
+            }),
+            ("content_block_start", new
+            {
+                type = "content_block_start",
+                index = 0,
+                content_block = new
+                {
+                    type = "tool_use",
+                    id = "toolu_missing_stop",
+                    name = "search",
+                    input = new { },
+                },
+            }),
+            ("content_block_delta", new
+            {
+                type = "content_block_delta",
+                index = 0,
+                delta = new
+                {
+                    type = "input_json_delta",
+                    partial_json = "{\"command\":\"fallback\"}",
+                },
+            }),
+            ("message_delta", new
+            {
+                type = "message_delta",
+                delta = new
+                {
+                    stop_reason = "tool_use",
+                    stop_sequence = (string?)null,
+                },
+                usage = new
+                {
+                    input_tokens = 1,
+                    output_tokens = 1,
+                    cache_read_input_tokens = 0,
+                    cache_creation_input_tokens = 0,
+                },
+            }),
+            ("message_stop", new
+            {
+                type = "message_stop",
+            })));
+
+        var tools = new ToolRegistry();
+        tools.Register(new FakeTool
+        {
+            Name = "search",
+            InputSchema = TestSupport.Json(new
+            {
+                type = "object",
+                properties = new
+                {
+                    command = new { type = "string" },
+                },
+            }),
+        });
+
+        var engine = TestSupport.CreateQueryEngine(
+            TestSupport.CreateAnthropicClient(handler),
+            tools,
+            new ContextProvider
+            {
+                WorkingDirectory = temp.Root,
+            },
+            new DefaultPermissionChecker(),
+            new QueryEngineConfig
+            {
+                UseStreamingApi = true,
+                MaxTurns = 1,
+                EnableAutoCompact = false,
+            },
+            journal: new RecordingJournal());
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("find this"));
+
+        var toolUse = Assert.Single(events.OfType<ToolUseStartEvent>());
+        Assert.Equal("toolu_missing_stop", toolUse.ToolUseId);
+        Assert.Equal("fallback", toolUse.Input.GetProperty("command").GetString());
+    }
+
     private static async Task<List<QueryEvent>> CollectAsync(IAsyncEnumerable<QueryEvent> events)
     {
         var result = new List<QueryEvent>();

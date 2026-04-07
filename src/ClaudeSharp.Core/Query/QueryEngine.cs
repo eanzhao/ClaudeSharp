@@ -1149,22 +1149,17 @@ public class QueryEngine : IAsyncDisposable
                 if (!blockBuilders.Remove(index, out var builder))
                     continue;
 
-                var finalizedBlock = builder.Build();
-                if (finalizedBlock == null)
-                    continue;
-
-                turn.ContentBlocks.Add(finalizedBlock);
-                if (finalizedBlock is ToolUseBlock toolUseBlock)
-                {
-                    turn.ToolUseBlocks.Add(toolUseBlock);
-                    yield return new ToolUseStartEvent(
-                        toolUseBlock.ToolUseId,
-                        toolUseBlock.Name,
-                        toolUseBlock.Input);
-                }
+                foreach (var finalizedEvent in FinalizeStreamingBlock(turn, builder))
+                    yield return finalizedEvent;
 
                 continue;
             }
+        }
+
+        foreach (var (_, builder) in blockBuilders.OrderBy(pair => pair.Key))
+        {
+            foreach (var finalizedEvent in FinalizeStreamingBlock(turn, builder))
+                yield return finalizedEvent;
         }
     }
 
@@ -1268,6 +1263,28 @@ public class QueryEngine : IAsyncDisposable
         }
 
         return null;
+    }
+
+    private static IReadOnlyList<QueryEvent> FinalizeStreamingBlock(
+        AssistantTurnAccumulator turn,
+        StreamingContentBlockBuilder builder)
+    {
+        var finalizedBlock = builder.Build();
+        if (finalizedBlock == null)
+            return [];
+
+        turn.ContentBlocks.Add(finalizedBlock);
+        if (finalizedBlock is not ToolUseBlock toolUseBlock)
+            return [];
+
+        turn.ToolUseBlocks.Add(toolUseBlock);
+        return
+        [
+            new ToolUseStartEvent(
+                toolUseBlock.ToolUseId,
+                toolUseBlock.Name,
+                toolUseBlock.Input),
+        ];
     }
 
     private sealed class AssistantTurnAccumulator
