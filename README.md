@@ -60,7 +60,7 @@ dotnet run --project src/ClaudeSharp.Cli -- --continue
 dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --no-restore
 
 # Enforce the ClaudeSharp.Core line-coverage gate
-dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --no-restore \
+dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --configuration Release --no-restore \
   /p:CollectCoverage=true \
   /p:CoverletOutputFormat=json \
   /p:CoverletOutput=TestResults/coverage-threshold/ \
