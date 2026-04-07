@@ -3,3 +3,8 @@ claude-code/
 .DS_Store
 **/bin/
 **/obj/
+**/TestResults/
+coverage/
+coverage-threshold/
+runtime-coverage/
+foundations-coverage/

@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore ClaudeSharp.slnx
+
+      - name: Build
+        run: dotnet build ClaudeSharp.slnx --configuration Release --no-restore
+
+      - name: Test With Coverage Gate
+        run: >
+          dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj
+          --configuration Release
+          --no-build
+          /p:CollectCoverage=true
+          /p:CoverletOutputFormat=json
+          /p:CoverletOutput=TestResults/coverage-ci/
+          '/p:Include=[ClaudeSharp.Core]*'
+          /p:Threshold=90
+          /p:ThresholdType=line
+          /p:ThresholdStat=total

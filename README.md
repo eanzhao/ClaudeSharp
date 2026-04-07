@@ -53,6 +53,25 @@ dotnet run --project src/ClaudeSharp.Cli -- --cwd /path/to/project --model opus 
 dotnet run --project src/ClaudeSharp.Cli -- --continue
 ```
 
+## Test And Coverage
+
+```bash
+# Run the full test suite
+dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --no-restore
+
+# Enforce the ClaudeSharp.Core line-coverage gate
+dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --no-restore \
+  /p:CollectCoverage=true \
+  /p:CoverletOutputFormat=json \
+  /p:CoverletOutput=TestResults/coverage-threshold/ \
+  '/p:Include=[ClaudeSharp.Core]*' \
+  /p:Threshold=90 \
+  /p:ThresholdType=line \
+  /p:ThresholdStat=total
+```
+
+The GitHub Actions workflow in `.github/workflows/ci.yml` runs the same coverage gate on every push and pull request.
+
 ## CLI Options
 
 | Option | Description |
