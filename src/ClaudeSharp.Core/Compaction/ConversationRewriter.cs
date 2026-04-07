@@ -2,6 +2,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Compaction;
 
+/// <summary>
+/// Defines the contract for conversation rewriter.
+/// </summary>
 public interface IConversationRewriter
 {
     ConversationRewriteBoundary ResolveFromBoundary(
@@ -28,6 +31,9 @@ public interface IConversationRewriter
         ConversationMessage summaryMessage);
 }
 
+/// <summary>
+/// Represents conversation rewriter.
+/// </summary>
 public sealed class ConversationRewriter : IConversationRewriter
 {
     public ConversationRewriteBoundary ResolveFromBoundary(

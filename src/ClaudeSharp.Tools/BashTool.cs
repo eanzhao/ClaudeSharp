@@ -9,7 +9,7 @@ using ClaudeSharp.Tools.Shell;
 namespace ClaudeSharp.Tools;
 
 /// <summary>
-/// BashTool 输入参数 — 对应 Claude Code 的 BashTool inputSchema (Zod)
+/// Represents the input payload for the Bash tool.
 /// </summary>
 public class BashToolInput
 {
@@ -24,21 +24,12 @@ public class BashToolInput
 }
 
 /// <summary>
-/// BashTool — 对应 Claude Code 的 tools/BashTool/BashTool.tsx (~160KB)
-///
-/// Claude Code 中最复杂的工具，负责：
-/// 1. 执行用户 shell 命令
-/// 2. 流式读取 stdout/stderr
-/// 3. 超时管理
-/// 4. 复杂的权限检查 (只读命令自动允许，写命令需要批准)
-/// 5. Sandbox 安全限制
-///
-/// 本实现为简化版，保留核心执行逻辑和基础权限检查
+/// Executes shell commands in the user's working directory.
 /// </summary>
 public class BashTool : ITool
 {
-    private const int DefaultTimeoutMs = 120_000;  // 2 分钟
-    private const int MaxTimeoutMs = 600_000;      // 10 分钟
+    private const int DefaultTimeoutMs = 120_000;  // 2 minutes
+    private const int MaxTimeoutMs = 600_000;      // 10 minutes
 
     public string Name => "Bash";
 
@@ -175,8 +166,7 @@ public class BashTool : ITool
     }
 
     /// <summary>
-    /// 权限检查 — 对应 Claude Code 的 bashPermissions.ts (~99KB)
-    /// 简化版: 只读命令自动允许，其他命令需要用户批准
+    /// Checks whether the requested command needs approval.
     /// </summary>
     public Task<PermissionResult> CheckPermissionsAsync(
         JsonElement input, ToolExecutionContext context)

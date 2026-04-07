@@ -2,6 +2,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Storage;
 
+/// <summary>
+/// Represents options for resume.
+/// </summary>
 public sealed class ResumeOptions
 {
     public string? WorkingDirectoryOverride { get; init; }
@@ -9,6 +12,9 @@ public sealed class ResumeOptions
     public bool ForkSession { get; init; }
 }
 
+/// <summary>
+/// Represents processed resume.
+/// </summary>
 public sealed class ProcessedResume
 {
     public required TranscriptSession SourceSession { get; init; }
@@ -20,6 +26,9 @@ public sealed class ProcessedResume
     public required bool ContinueExistingSession { get; init; }
 }
 
+/// <summary>
+/// Defines the contract for session restore pipeline.
+/// </summary>
 public interface ISessionRestorePipeline
 {
     Task<ProcessedResume> RestoreAsync(
@@ -28,6 +37,9 @@ public interface ISessionRestorePipeline
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Provides session restore pipeline.
+/// </summary>
 public sealed class SessionRestorePipeline : ISessionRestorePipeline
 {
     public Task<ProcessedResume> RestoreAsync(

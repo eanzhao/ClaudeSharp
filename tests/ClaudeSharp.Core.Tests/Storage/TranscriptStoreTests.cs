@@ -5,6 +5,9 @@ using ClaudeSharp.Core.Storage;
 
 namespace ClaudeSharp.Core.Tests.Storage;
 
+/// <summary>
+/// Contains tests for transcript Store.
+/// </summary>
 public sealed class TranscriptStoreTests
 {
     [Fact]

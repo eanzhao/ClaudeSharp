@@ -5,6 +5,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for streaming Tool Executor Flow.
+/// </summary>
 public sealed class StreamingToolExecutorFlowTests
 {
     [Fact]

@@ -1,8 +1,7 @@
 namespace ClaudeSharp.Core.Query;
 
 /// <summary>
-/// Claude 模型解析入口。
-/// 内部改成委托给 ClaudeModelCatalog，这样模型元数据就能单独复用。
+/// Exposes common model constants and alias resolution helpers.
 /// </summary>
 public static class ClaudeModels
 {

@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Tests.Compaction;
 
+/// <summary>
+/// Contains tests for conversation Compactor.
+/// </summary>
 public sealed class ConversationCompactorTests
 {
     [Fact]

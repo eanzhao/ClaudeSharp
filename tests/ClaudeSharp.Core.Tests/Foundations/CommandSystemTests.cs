@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Foundations;
 
+/// <summary>
+/// Contains tests for command System.
+/// </summary>
 public sealed class CommandSystemTests
 {
     [Fact]

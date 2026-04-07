@@ -7,13 +7,7 @@ using ClaudeSharp.Core.Tools;
 namespace ClaudeSharp.Tools;
 
 /// <summary>
-/// FileReadTool — 对应 Claude Code 的 tools/FileReadTool/FileReadTool.ts
-///
-/// 功能:
-/// 1. 读取文本文件 (带行号，类似 cat -n)
-/// 2. 支持 offset/limit 分段读取
-/// 3. 支持图片文件 (返回 base64)
-/// 4. 只读工具，可并行执行
+/// Reads files from the local filesystem.
 /// </summary>
 public class FileReadTool : ITool
 {
@@ -80,13 +74,13 @@ public class FileReadTool : ITool
         if (string.IsNullOrWhiteSpace(filePath))
             return ToolResult.Error("file_path is required.");
 
-        // 解析路径
+        // Resolve the requested path.
         filePath = ResolvePath(filePath, context.WorkingDirectory);
 
         if (!File.Exists(filePath))
             return ToolResult.Error($"File not found: {filePath}");
 
-        // 图片文件 → base64
+        // Return a short Base64 preview for image files.
         if (IsImageFile(filePath))
         {
             var bytes = await File.ReadAllBytesAsync(filePath, ct);
@@ -95,7 +89,7 @@ public class FileReadTool : ITool
             return ToolResult.Success($"[Image file: {filePath}, {bytes.Length} bytes, {ext}]\nBase64: {base64[..Math.Min(200, base64.Length)]}...");
         }
 
-        // 文本文件读取
+        // Read the file as text.
         var offset = input.TryGetProperty("offset", out var offsetProp) ? offsetProp.GetInt32() : 0;
         var limit = input.TryGetProperty("limit", out var limitProp) ? limitProp.GetInt32() : MaxLinesToRead;
         limit = Math.Min(limit, MaxLinesToRead);
@@ -117,7 +111,7 @@ public class FileReadTool : ITool
                 sb.AppendLine($"{lineNum,6}: {selected[i]}");
             }
 
-            // 添加信息头
+            // Add a header describing the selected line range.
             var header = $"File: {filePath} ({totalLines} lines total)";
             if (offset > 0 || selected.Length < totalLines)
             {
@@ -132,10 +126,10 @@ public class FileReadTool : ITool
         }
     }
 
-    // Read 是只读工具
+    // Read is a read-only tool.
     public bool IsReadOnly(JsonElement input) => true;
     public bool IsConcurrencySafe(JsonElement input) => true;
-    public int MaxResultSizeChars => int.MaxValue; // Claude Code 中 Read 设为 Infinity
+    public int MaxResultSizeChars => int.MaxValue; // Claude Code treats Read as effectively unbounded.
 
     public string? GetActivityDescription(JsonElement? input)
     {

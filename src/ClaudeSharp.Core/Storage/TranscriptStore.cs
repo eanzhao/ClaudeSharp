@@ -4,6 +4,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Storage;
 
+/// <summary>
+/// Represents transcript session.
+/// </summary>
 public sealed class TranscriptSession
 {
     public required string SessionId { get; init; }
@@ -18,16 +21,25 @@ public sealed class TranscriptSession
     public string? CurrentLeafMessageId { get; set; }
 }
 
+/// <summary>
+/// Represents transcript metadata entry.
+/// </summary>
 public sealed record TranscriptMetadataEntry(
     string EventType,
     JsonElement? Payload = null,
     DateTimeOffset? RecordedAt = null);
 
+/// <summary>
+/// Represents stored transcript message.
+/// </summary>
 public sealed record StoredTranscriptMessage(
     ConversationMessage Message,
     string? ParentMessageId,
     long Sequence);
 
+/// <summary>
+/// Represents transcript projection.
+/// </summary>
 public sealed class TranscriptProjection
 {
     public required TranscriptSession Session { get; init; }
@@ -35,8 +47,14 @@ public sealed class TranscriptProjection
     public required IReadOnlyList<TranscriptMetadataEntry> MetadataEntries { get; init; }
 }
 
+/// <summary>
+/// Represents options for transcript load.
+/// </summary>
 public sealed record TranscriptLoadOptions;
 
+/// <summary>
+/// Defines the contract for transcript store.
+/// </summary>
 public interface ITranscriptStore
 {
     Task<TranscriptSession> CreateSessionAsync(
@@ -72,6 +90,9 @@ public interface ITranscriptStore
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Defines the contract for conversation journal.
+/// </summary>
 public interface IConversationJournal
 {
     string SessionId { get; }
@@ -116,6 +137,9 @@ public interface IConversationJournal
     Task ResetHeadAsync(CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Represents conversation journal.
+/// </summary>
 public sealed class ConversationJournal : IConversationJournal
 {
     private readonly ITranscriptStore _store;
@@ -377,6 +401,9 @@ public sealed class ConversationJournal : IConversationJournal
     }
 }
 
+/// <summary>
+/// Provides jsonl transcript store.
+/// </summary>
 public sealed class JsonlTranscriptStore : ITranscriptStore
 {
     private const string SessionsDirectoryName = "sessions";

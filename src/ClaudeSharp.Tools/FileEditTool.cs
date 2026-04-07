@@ -6,16 +6,7 @@ using ClaudeSharp.Core.Tools;
 namespace ClaudeSharp.Tools;
 
 /// <summary>
-/// FileEditTool — 对应 Claude Code 的 tools/FileEditTool/
-///
-/// Claude Code 的核心设计之一：通过精确的 "search and replace" 实现文件编辑
-/// 不是整文件覆盖，而是找到精确文本并替换，保留文件其余部分不变
-///
-/// 这个模式的优点：
-/// 1. 最小化变更范围
-/// 2. 保留原文件格式和缩进
-/// 3. 减少 token 消耗（只发送变化部分）
-/// 4. 用户更容易 review 变更
+/// Provides file edit tool.
 /// </summary>
 public class FileEditTool : ITool
 {
@@ -92,7 +83,7 @@ public class FileEditTool : ITool
         {
             var content = await File.ReadAllTextAsync(filePath, ct);
 
-            // 计算匹配次数
+            // Count exact matches before attempting the replacement.
             var count = CountOccurrences(content, oldString);
             if (count == 0)
                 return ToolResult.Error(
@@ -104,11 +95,11 @@ public class FileEditTool : ITool
                     $"old_string found {count} times in {filePath}. " +
                     "Include more context to make the match unique.");
 
-            // 执行替换
+            // Perform the replacement.
             var newContent = content.Replace(oldString, newString);
             await File.WriteAllTextAsync(filePath, newContent, ct);
 
-            // 生成简短的 diff 摘要
+            // Produce a short diff summary.
             var oldLines = oldString.Split('\n').Length;
             var newLines = newString.Split('\n').Length;
             var diffSummary = oldLines == newLines

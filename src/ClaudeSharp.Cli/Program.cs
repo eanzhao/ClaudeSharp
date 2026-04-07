@@ -2,9 +2,12 @@ using System.Text;
 using System.Text.Json;
 using Anthropic;
 using ClaudeSharp.Commands;
+using ClaudeSharp.Core.Hooks;
+using ClaudeSharp.Core.Memory;
 using ClaudeSharp.Core.Commands;
 using ClaudeSharp.Core.Context;
 using ClaudeSharp.Core.Permissions;
+using ClaudeSharp.Core.Providers;
 using ClaudeSharp.Core.Query;
 using ClaudeSharp.Core.Storage;
 using ClaudeSharp.Core.Tools;
@@ -12,6 +15,9 @@ using ClaudeSharp.Tools;
 
 namespace ClaudeSharp.Cli;
 
+/// <summary>
+/// Hosts the ClaudeSharp CLI entry point.
+/// </summary>
 internal static class Program
 {
     public static async Task<int> Main(string[] args)
@@ -85,19 +91,21 @@ internal static class Program
             contextProvider.PermissionContext.Mode = resumedMode;
         await contextProvider.LoadMemoryAsync();
 
-        var toolRegistry = BuildToolRegistry();
-        var commandRegistry = BuildCommandRegistry();
-        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-
-        using var client = string.IsNullOrWhiteSpace(apiKey)
-            ? new AnthropicClient()
-            : new AnthropicClient { ApiKey = apiKey };
-
         var model = resumed?.Model ?? ClaudeModels.Resolve(options.Model);
         var config = new QueryEngineConfig
         {
             Model = model,
+            UseStreamingApi = true,
         };
+        var providerRouter = new DefaultProviderCapabilityRouter();
+        var toolRegistry = BuildToolRegistry(providerRouter, () => config.Model);
+        var commandRegistry = BuildCommandRegistry();
+        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        var hooks = new HookRuntime();
+
+        using var client = string.IsNullOrWhiteSpace(apiKey)
+            ? new AnthropicClient()
+            : new AnthropicClient { ApiKey = apiKey };
 
         var session = resumed != null && resumed.ContinueExistingSession
             ? resumed.SourceSession
@@ -108,6 +116,10 @@ internal static class Program
         session.Metadata = resumed?.Metadata.Clone() ?? session.Metadata;
         await transcriptStore.UpdateSessionAsync(session);
         var journal = new ConversationJournal(transcriptStore, session);
+        var memoryLayout = CreateMemdirLayout(workingDirectory);
+        memoryLayout.EnsureDirectories();
+        var sessionMemoryFile = memoryLayout.CreateSessionMemoryFile(session.SessionId);
+        contextProvider.SessionMemoryContent = await sessionMemoryFile.LoadAsync();
         if (resumed != null && !resumed.ContinueExistingSession)
         {
             await journal.SeedAsync(
@@ -117,13 +129,15 @@ internal static class Program
                 model);
         }
 
-        var queryEngine = new QueryEngine(
+        await using var queryEngine = new QueryEngine(
             client,
             toolRegistry,
             new DefaultPermissionChecker(),
             config,
             contextProvider,
+            hooks: hooks,
             journal: journal,
+            sessionMemoryFile: sessionMemoryFile,
             initialMessages: resumed?.Messages,
             initialUsage: resumed?.TotalUsage,
             initialMetadata: resumed?.Metadata);
@@ -148,7 +162,9 @@ internal static class Program
         return await shell.RunAsync(options.InitialPrompt);
     }
 
-    private static ToolRegistry BuildToolRegistry()
+    private static ToolRegistry BuildToolRegistry(
+        IProviderCapabilityRouter providerRouter,
+        Func<string?> currentModelAccessor)
     {
         var registry = new ToolRegistry();
         registry.Register(new BashTool());
@@ -157,7 +173,20 @@ internal static class Program
         registry.Register(new FileEditTool());
         registry.Register(new GlobTool());
         registry.Register(new GrepTool());
+        registry.Register(new WebFetchTool());
+        registry.Register(new WebSearchTool(providerRouter, currentModelAccessor));
         return registry;
+    }
+
+    private static MemdirLayout CreateMemdirLayout(string workingDirectory)
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var memoryBaseDirectory = Path.Combine(home, ".claudesharp", "memory");
+        return new MemdirLayout
+        {
+            MemoryBaseDirectory = memoryBaseDirectory,
+            ProjectRootDirectory = workingDirectory,
+        };
     }
 
     private static CommandRegistry BuildCommandRegistry()
@@ -299,7 +328,7 @@ Options:
                         break;
 
                     case ThinkingDeltaEvent:
-                        // 先不直接展示模型思考文本，避免污染终端输出。
+                        // Hide raw thinking text for now to keep the terminal output clean.
                         break;
 
                     case ToolUseStartEvent toolUse:

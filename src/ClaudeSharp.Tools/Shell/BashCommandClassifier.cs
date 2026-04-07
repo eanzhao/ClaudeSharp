@@ -1,5 +1,8 @@
 namespace ClaudeSharp.Tools.Shell;
 
+/// <summary>
+/// Defines bash command category values.
+/// </summary>
 public enum BashCommandCategory
 {
     ReadOnly,
@@ -8,14 +11,16 @@ public enum BashCommandCategory
     Unknown,
 }
 
+/// <summary>
+/// Represents bash command classification.
+/// </summary>
 public sealed record BashCommandClassification(
     BashCommandCategory Category,
     string BaseCommand,
     string? Reason = null);
 
 /// <summary>
-/// Bash 命令分类器。
-/// 不追求“全都识别”，而是尽量只在能证明只读时才放行，其余保持保守。
+/// Represents bash command classifier.
 /// </summary>
 public static class BashCommandClassifier
 {

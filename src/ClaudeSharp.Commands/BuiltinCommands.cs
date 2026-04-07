@@ -5,6 +5,9 @@ using ClaudeSharp.Core.Query;
 
 namespace ClaudeSharp.Commands;
 
+/// <summary>
+/// Represents help command.
+/// </summary>
 public class HelpCommand : ICommand
 {
     public string Name => "help";
@@ -25,6 +28,9 @@ public class HelpCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents clear command.
+/// </summary>
 public class ClearCommand : ICommand
 {
     public string Name => "clear";
@@ -38,6 +44,9 @@ public class ClearCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents cost command.
+/// </summary>
 public class CostCommand : ICommand
 {
     public string Name => "cost";
@@ -48,7 +57,7 @@ public class CostCommand : ICommand
         var usage = context.QueryEngine.TotalUsage;
         var messages = context.QueryEngine.Messages;
 
-        // 简化的成本估算 (Sonnet 定价)
+        // Simplified cost estimate using Sonnet pricing.
         var inputCost = usage.InputTokens * 3.0 / 1_000_000;
         var outputCost = usage.OutputTokens * 15.0 / 1_000_000;
         var cacheCost = usage.CacheReadInputTokens * 0.3 / 1_000_000;
@@ -68,6 +77,9 @@ public class CostCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents exit command.
+/// </summary>
 public class ExitCommand : ICommand
 {
     public string Name => "exit";
@@ -81,6 +93,9 @@ public class ExitCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents model command.
+/// </summary>
 public class ModelCommand : ICommand
 {
     public string Name => "model";
@@ -101,6 +116,9 @@ public class ModelCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents session command.
+/// </summary>
 public class SessionCommand : ICommand
 {
     public string Name => "session";
@@ -125,6 +143,9 @@ public class SessionCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents mode command.
+/// </summary>
 public class ModeCommand : ICommand
 {
     public string Name => "mode";
@@ -152,6 +173,9 @@ public class ModeCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents title command.
+/// </summary>
 public class TitleCommand : ICommand
 {
     public string Name => "title";
@@ -178,6 +202,9 @@ public class TitleCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents tag command.
+/// </summary>
 public class TagCommand : ICommand
 {
     public string Name => "tag";
@@ -239,6 +266,9 @@ public class TagCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents compact command.
+/// </summary>
 public class CompactCommand : ICommand
 {
     public string Name => "compact";
@@ -266,6 +296,9 @@ public class CompactCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents session memory compact command.
+/// </summary>
 public class SessionMemoryCompactCommand : ICommand
 {
     public string Name => "session-memory";
@@ -298,6 +331,9 @@ public class SessionMemoryCompactCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents partial compact command.
+/// </summary>
 public class PartialCompactCommand : ICommand
 {
     public string Name => "pcompact";
@@ -346,6 +382,9 @@ public class PartialCompactCommand : ICommand
     }
 }
 
+/// <summary>
+/// Represents microcompact command.
+/// </summary>
 public class MicrocompactCommand : ICommand
 {
     public string Name => "microcompact";

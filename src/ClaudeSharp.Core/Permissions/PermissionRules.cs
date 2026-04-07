@@ -6,9 +6,7 @@ using ClaudeSharp.Core.Tools;
 namespace ClaudeSharp.Core.Permissions;
 
 /// <summary>
-/// 结构化权限规则。
-/// 从 Claude Code 的 PermissionRule + shellRuleMatching 里提炼出来，
-/// 用统一格式描述「哪个工具 + 哪段目标内容」该如何处理。
+/// Represents permission rule.
 /// </summary>
 public sealed record PermissionRule
 {
@@ -33,7 +31,7 @@ public sealed record PermissionRule
     }
 
     /// <summary>
-    /// 解析类似 Bash(git status)、Bash(git:*)、Read(/tmp/*.md) 这样的规则表达式。
+    /// Handles parse.
     /// </summary>
     public static PermissionRule Parse(PermissionBehavior behavior, string expression)
     {
@@ -57,6 +55,9 @@ public sealed record PermissionRule
             : $"{ToolName}({RuleContent})";
 }
 
+/// <summary>
+/// Defines permission rule match kind values.
+/// </summary>
 internal enum PermissionRuleMatchKind
 {
     Exact,
@@ -65,10 +66,7 @@ internal enum PermissionRuleMatchKind
 }
 
 /// <summary>
-/// Claude Code 风格的规则匹配器：
-/// - exact: git status
-/// - prefix: git:*
-/// - wildcard: git *origin*
+/// Represents permission rule matcher.
 /// </summary>
 public static class PermissionRuleMatcher
 {

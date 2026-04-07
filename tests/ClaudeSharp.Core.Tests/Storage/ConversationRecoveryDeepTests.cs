@@ -5,6 +5,9 @@ using ClaudeSharp.Core.Storage;
 
 namespace ClaudeSharp.Core.Tests.Storage;
 
+/// <summary>
+/// Contains tests for conversation Recovery Deep.
+/// </summary>
 public sealed class ConversationRecoveryDeepTests
 {
     [Fact]

@@ -4,6 +4,9 @@ using ClaudeSharp.Core.Storage;
 
 namespace ClaudeSharp.Core.Tests.Compaction;
 
+/// <summary>
+/// Contains tests for metadata Round Trip.
+/// </summary>
 public sealed class MetadataRoundTripTests
 {
     [Fact]

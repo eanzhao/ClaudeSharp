@@ -7,10 +7,7 @@ using ClaudeSharp.Tools.Search;
 namespace ClaudeSharp.Tools;
 
 /// <summary>
-/// GrepTool — 对应 Claude Code 的 tools/GrepTool/
-///
-/// 在文件中按正则表达式搜索内容
-/// Claude Code 使用 ripgrep (rg) 作为后端，C# 版使用内置正则引擎
+/// Provides grep tool.
 /// </summary>
 public class GrepTool : ITool
 {

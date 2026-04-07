@@ -4,6 +4,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for permission Rules.
+/// </summary>
 public sealed class PermissionRulesTests
 {
     [Fact]

@@ -2,6 +2,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Compaction;
 
+/// <summary>
+/// Represents microcompact edit.
+/// </summary>
 public sealed class MicrocompactEdit
 {
     public required string MessageId { get; init; }
@@ -9,6 +12,9 @@ public sealed class MicrocompactEdit
     public bool ClearThinking { get; init; }
 }
 
+/// <summary>
+/// Represents options for microcompact run.
+/// </summary>
 public sealed class MicrocompactRunOptions
 {
     public int PreserveTailCount { get; init; } = 8;
@@ -17,6 +23,9 @@ public sealed class MicrocompactRunOptions
     public bool ClearThinkingBlocks { get; init; } = true;
 }
 
+/// <summary>
+/// Represents microcompact result.
+/// </summary>
 public sealed class MicrocompactResult
 {
     public required IReadOnlyList<ConversationMessage> UpdatedMessages { get; init; }
@@ -27,6 +36,9 @@ public sealed class MicrocompactResult
     public bool HasChanges => Edits.Count > 0;
 }
 
+/// <summary>
+/// Defines the contract for micro compactor.
+/// </summary>
 public interface IMicroCompactor
 {
     MicrocompactResult Run(
@@ -35,12 +47,18 @@ public interface IMicroCompactor
         DateTimeOffset? now = null);
 }
 
+/// <summary>
+/// Represents microcompact placeholders.
+/// </summary>
 public static class MicrocompactPlaceholders
 {
     public const string OldToolResult = "[Old tool result content cleared]";
     public const string OldThinking = "[Old thinking content cleared]";
 }
 
+/// <summary>
+/// Provides time based micro compactor.
+/// </summary>
 public sealed class TimeBasedMicroCompactor : IMicroCompactor
 {
     public MicrocompactResult Run(

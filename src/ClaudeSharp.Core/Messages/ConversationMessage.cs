@@ -4,8 +4,7 @@ using System.Text.Json.Serialization;
 namespace ClaudeSharp.Core.Messages;
 
 /// <summary>
-/// 消息基类 — 对应 Claude Code 的 Message union type (types/message.ts)
-/// Claude Code 使用 TypeScript discriminated union, C# 用 abstract record + 子类
+/// Represents a message stored in the conversation transcript.
 /// </summary>
 public abstract record ConversationMessage
 {
@@ -15,7 +14,7 @@ public abstract record ConversationMessage
 }
 
 /// <summary>
-/// 用户消息 — 对应 Claude Code 的 UserMessage
+/// Represents user message.
 /// </summary>
 public record UserMessage : ConversationMessage
 {
@@ -23,22 +22,24 @@ public record UserMessage : ConversationMessage
     public required IReadOnlyList<ContentBlock> Content { get; init; }
 
     /// <summary>
-    /// 关联的工具结果 (当此消息是 tool_result 时)
-    /// 对应 Claude Code 的 toolUseResult 字段
+    /// Gets the raw tool result text attached to the message.
     /// </summary>
     public string? ToolUseResult { get; init; }
 
     /// <summary>
-    /// 是否为系统注入的元消息 (非用户输入)
-    /// 对应 Claude Code 的 isMeta 字段
+    /// Gets a value indicating whether the message was generated for internal bookkeeping.
     /// </summary>
     public bool IsMeta { get; init; }
 
-    /// <summary>便捷构造：从纯文本创建用户消息</summary>
+    /// <summary>
+    /// Creates a user message that contains a single text block.
+    /// </summary>
     public static UserMessage FromText(string text) =>
         new() { Content = [new TextBlock(text)] };
 
-    /// <summary>便捷构造：创建 tool_result 消息</summary>
+    /// <summary>
+    /// Creates a user message that contains a tool result block.
+    /// </summary>
     public static UserMessage FromToolResult(string toolUseId, string content, bool isError = false) =>
         new()
         {
@@ -48,7 +49,7 @@ public record UserMessage : ConversationMessage
 }
 
 /// <summary>
-/// 助手消息 — 对应 Claude Code 的 AssistantMessage
+/// Represents assistant message.
 /// </summary>
 public record AssistantMessage : ConversationMessage
 {
@@ -57,12 +58,14 @@ public record AssistantMessage : ConversationMessage
     public string? StopReason { get; init; }
     public TokenUsage? Usage { get; init; }
 
-    /// <summary>API 错误标记 (如 max_output_tokens)</summary>
+    /// <summary>
+    /// Gets the API error captured for this message, if any.
+    /// </summary>
     public string? ApiError { get; init; }
 }
 
 /// <summary>
-/// 系统消息 — 对应 Claude Code 的 SystemMessage
+/// Represents system message.
 /// </summary>
 public record SystemMessage : ConversationMessage
 {
@@ -71,11 +74,10 @@ public record SystemMessage : ConversationMessage
     public string? Subtype { get; init; }
 }
 
-// ─── Content Block 类型 ───────────────────────────────
+// Content block types
 
 /// <summary>
-/// 内容块基类 — 对应 Anthropic API 的 content block 模型
-/// Claude Code 中也多处使用 ContentBlockParam
+/// Represents a polymorphic content block compatible with the Anthropic Messages API.
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(TextBlock), "text")]
@@ -88,6 +90,9 @@ public abstract record ContentBlock
     public abstract string Type { get; }
 }
 
+/// <summary>
+/// Represents text block.
+/// </summary>
 public record TextBlock(string Text) : ContentBlock
 {
     [JsonPropertyName("type")]
@@ -97,6 +102,9 @@ public record TextBlock(string Text) : ContentBlock
     public string Text { get; init; } = Text;
 }
 
+/// <summary>
+/// Represents tool use block.
+/// </summary>
 public record ToolUseBlock : ContentBlock
 {
     [JsonPropertyName("type")]
@@ -112,6 +120,9 @@ public record ToolUseBlock : ContentBlock
     public required JsonElement Input { get; init; }
 }
 
+/// <summary>
+/// Represents tool result block.
+/// </summary>
 public record ToolResultBlock : ContentBlock
 {
     [JsonPropertyName("type")]
@@ -134,6 +145,9 @@ public record ToolResultBlock : ContentBlock
     }
 }
 
+/// <summary>
+/// Represents thinking block.
+/// </summary>
 public record ThinkingBlock(string Text, string? Signature = null) : ContentBlock
 {
     [JsonPropertyName("type")]
@@ -149,7 +163,7 @@ public record ThinkingBlock(string Text, string? Signature = null) : ContentBloc
 // ─── Token Usage ──────────────────────────────────────
 
 /// <summary>
-/// Token 使用统计 — 对应 Claude Code 的 cost-tracker.ts
+/// Represents token usage.
 /// </summary>
 public record TokenUsage
 {

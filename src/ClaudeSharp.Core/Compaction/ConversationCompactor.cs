@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Compaction;
 
+/// <summary>
+/// Represents conversation compaction result.
+/// </summary>
 public sealed class ConversationCompactionResult
 {
     public required ConversationMessage SummaryMessage { get; init; }
@@ -11,6 +14,9 @@ public sealed class ConversationCompactionResult
     public ConversationRewriteResult? RewriteResult { get; init; }
 }
 
+/// <summary>
+/// Defines the contract for conversation compactor.
+/// </summary>
 public interface IConversationCompactor
 {
     ConversationCompactionResult? Compact(
@@ -26,6 +32,9 @@ public interface IConversationCompactor
         int fromIndex);
 }
 
+/// <summary>
+/// Provides heuristic conversation compactor.
+/// </summary>
 public sealed class HeuristicConversationCompactor : IConversationCompactor
 {
     private const int MaxSummaryChars = 4000;

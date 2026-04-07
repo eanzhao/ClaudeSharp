@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Tests.Compaction;
 
+/// <summary>
+/// Contains tests for context Pressure Pipeline.
+/// </summary>
 public sealed class ContextPressurePipelineTests
 {
     [Fact]

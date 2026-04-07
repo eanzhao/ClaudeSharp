@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Storage;
 
+/// <summary>
+/// Represents resume source.
+/// </summary>
 public sealed record ResumeSource(bool ContinueLatest, string? SessionIdOrPath = null)
 {
     public static ResumeSource Latest() => new(true);
@@ -11,6 +14,9 @@ public sealed record ResumeSource(bool ContinueLatest, string? SessionIdOrPath =
         new(false, sessionIdOrPath);
 }
 
+/// <summary>
+/// Represents resume load result.
+/// </summary>
 public sealed class ResumeLoadResult
 {
     public required TranscriptSession Session { get; init; }
@@ -19,6 +25,9 @@ public sealed class ResumeLoadResult
     public required ConversationSessionMetadata Metadata { get; init; }
 }
 
+/// <summary>
+/// Defines the contract for session resume loader.
+/// </summary>
 public interface ISessionResumeLoader
 {
     Task<ResumeLoadResult?> LoadAsync(
@@ -26,11 +35,17 @@ public interface ISessionResumeLoader
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Defines the contract for conversation recovery.
+/// </summary>
 public interface IConversationRecovery
 {
     ResumeLoadResult Recover(TranscriptProjection projection);
 }
 
+/// <summary>
+/// Provides session resume loader.
+/// </summary>
 public sealed class SessionResumeLoader : ISessionResumeLoader
 {
     private readonly ITranscriptStore _store;
@@ -64,6 +79,9 @@ public sealed class SessionResumeLoader : ISessionResumeLoader
     }
 }
 
+/// <summary>
+/// Represents conversation recovery.
+/// </summary>
 public sealed class ConversationRecovery : IConversationRecovery
 {
     public ResumeLoadResult Recover(TranscriptProjection projection)

@@ -2,6 +2,9 @@ using ClaudeSharp.Core.Query;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for claude Model Catalog.
+/// </summary>
 public sealed class ClaudeModelCatalogTests
 {
     [Fact]

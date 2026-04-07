@@ -4,6 +4,9 @@ using ClaudeSharp.Core.Markdown;
 
 namespace ClaudeSharp.Core.Tests.Foundations;
 
+/// <summary>
+/// Contains tests for frontmatter Parser Deep.
+/// </summary>
 public sealed class FrontmatterParserDeepTests
 {
     [Fact]

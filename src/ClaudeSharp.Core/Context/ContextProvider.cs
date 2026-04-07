@@ -6,20 +6,14 @@ using ClaudeSharp.Core.Markdown;
 namespace ClaudeSharp.Core.Context;
 
 /// <summary>
-/// 上下文提供器 — 对应 Claude Code 的 context.ts + systemPrompt (getSystemPrompt)
-///
-/// 负责收集并组装系统提示，包括：
-/// 1. 核心身份与能力说明
-/// 2. 每个工具的 prompt() 输出
-/// 3. Git 状态快照
-/// 4. Memory 文件 (CLAUDE.md)
-/// 5. 当前日期
+/// Provides context provider.
 /// </summary>
 public class ContextProvider
 {
     public string WorkingDirectory { get; set; } = Environment.CurrentDirectory;
     public PermissionContext PermissionContext { get; set; } = new();
     public string? MemoryContent { get; set; }
+    public string? SessionMemoryContent { get; set; }
 
     public PermissionContext GetPermissionContext()
     {
@@ -28,10 +22,7 @@ public class ContextProvider
     }
 
     /// <summary>
-    /// 构建完整的系统提示 — 对应 Claude Code 的 getSystemPrompt()
-    ///
-    /// Claude Code 的系统提示结构:
-    /// [Identity] + [Tool prompts] + [Environment info] + [Git status] + [CLAUDE.md]
+    /// Builds system prompt.
     /// </summary>
     public async Task<string> BuildSystemPromptAsync(
         IReadOnlyList<ITool> tools,
@@ -39,13 +30,13 @@ public class ContextProvider
     {
         var parts = new List<string>();
 
-        // 1. 核心身份提示
+        // 1. Add the core identity prompt.
         parts.Add(GetIdentityPrompt());
 
-        // 2. 环境信息
+        // 2. Add the environment section.
         parts.Add(GetEnvironmentSection());
 
-        // 3. 工具使用说明 (每个工具自己的 prompt)
+        // 3. Add tool-specific usage guidance.
         var toolPromptCtx = new ToolPromptContext
         {
             PermissionContext = GetPermissionContext(),
@@ -68,20 +59,25 @@ public class ContextProvider
             }
         }
 
-        // 4. Git 状态快照
+        // 4. Add the git status snapshot.
         var gitStatus = await GetGitStatusAsync();
         if (!string.IsNullOrWhiteSpace(gitStatus))
         {
             parts.Add($"# Current git status\n{gitStatus}");
         }
 
-        // 5. CLAUDE.md / Memory 内容 — 对应 getUserContext()
+        // 5. Add project instructions loaded from CLAUDE.md-style files.
         if (!string.IsNullOrWhiteSpace(MemoryContent))
         {
             parts.Add($"# User's project instructions (CLAUDE.md)\n{MemoryContent}");
         }
 
-        // 6. 自定义提示 / 追加提示
+        if (!string.IsNullOrWhiteSpace(SessionMemoryContent))
+        {
+            parts.Add($"# Session memory\n{SessionMemoryContent}");
+        }
+
+        // 6. Apply custom or appended system prompts.
         if (!string.IsNullOrWhiteSpace(config.CustomSystemPrompt))
         {
             parts.Clear();
@@ -97,7 +93,7 @@ public class ContextProvider
     }
 
     /// <summary>
-    /// 核心身份提示 — 对应 Claude Code 的 identityPrompt (constants/prompts.ts)
+    /// Builds the core identity prompt used by ClaudeSharp.
     /// </summary>
     private string GetIdentityPrompt()
     {
@@ -141,7 +137,7 @@ public class ContextProvider
     }
 
     /// <summary>
-    /// 获取 Git 状态 — 对应 Claude Code 的 getGitStatus() (context.ts)
+    /// Collects the current Git branch, status, and recent commits.
     /// </summary>
     private async Task<string?> GetGitStatusAsync()
     {
@@ -211,8 +207,7 @@ public class ContextProvider
     }
 
     /// <summary>
-    /// 从 CLAUDE.md 加载 Memory 内容 — 对应 getMemoryFiles() + getClaudeMds()
-    /// Claude Code 会搜索 cwd 向上沿路径查找所有 CLAUDE.md
+    /// Loads memory.
     /// </summary>
     public async Task LoadMemoryAsync()
     {

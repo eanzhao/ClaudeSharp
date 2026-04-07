@@ -1,9 +1,7 @@
 namespace ClaudeSharp.Core.Commands;
 
 /// <summary>
-/// 斜杠命令接口 — 对应 Claude Code 的 Command (commands.ts)
-///
-/// Claude Code 有 86+ 个命令，每个命令是独立模块
+/// Defines a slash command.
 /// </summary>
 public interface ICommand
 {
@@ -11,15 +9,19 @@ public interface ICommand
     string Description { get; }
     string[] Aliases => [];
 
-    /// <summary>是否需要参数</summary>
+    /// <summary>
+    /// Gets a value indicating whether the command requires arguments.
+    /// </summary>
     bool RequiresArgs => false;
 
-    /// <summary>执行命令</summary>
+    /// <summary>
+    /// Executes the command.
+    /// </summary>
     Task ExecuteAsync(string args, CommandContext context);
 }
 
 /// <summary>
-/// 命令执行上下文
+/// Provides the runtime services needed by a command.
 /// </summary>
 public class CommandContext
 {
@@ -33,7 +35,7 @@ public class CommandContext
 }
 
 /// <summary>
-/// 命令注册表 — 对应 Claude Code 的 commands.ts (getCommands)
+/// Registers and resolves slash commands.
 /// </summary>
 public class CommandRegistry
 {

@@ -7,6 +7,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for context Provider Deep.
+/// </summary>
 public sealed class ContextProviderDeepTests
 {
     [Fact]

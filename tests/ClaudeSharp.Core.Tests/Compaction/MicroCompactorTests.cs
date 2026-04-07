@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Tests.Compaction;
 
+/// <summary>
+/// Contains tests for micro Compactor.
+/// </summary>
 public sealed class MicroCompactorTests
 {
     [Fact]

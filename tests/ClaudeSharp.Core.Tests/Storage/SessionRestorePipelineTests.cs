@@ -4,6 +4,9 @@ using ClaudeSharp.Core.Storage;
 
 namespace ClaudeSharp.Core.Tests.Storage;
 
+/// <summary>
+/// Contains tests for session Restore Pipeline.
+/// </summary>
 public sealed class SessionRestorePipelineTests
 {
     [Fact]

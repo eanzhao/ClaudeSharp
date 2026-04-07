@@ -3,20 +3,16 @@ using System.Text.Json;
 namespace ClaudeSharp.Core.Tools;
 
 /// <summary>
-/// 工具注册表 — 对应 Claude Code 的 tools.ts (getAllBaseTools, getTools, assembleToolPool)
-///
-/// Claude Code 中工具注册表的设计要点：
-/// 1. getAllBaseTools(): 返回所有可能的工具（受 feature flag 控制）
-/// 2. getTools(): 根据权限过滤掉 deny 的工具
-/// 3. assembleToolPool(): 合并内置工具和 MCP 工具，去重
-/// 4. 工具按名称排序以保证 prompt cache 稳定性
+/// Provides tool registry.
 /// </summary>
 public class ToolRegistry
 {
     private readonly Dictionary<string, ITool> _tools = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ITool> _aliases = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>注册一个工具</summary>
+    /// <summary>
+    /// Handles register.
+    /// </summary>
     public void Register(ITool tool)
     {
         _tools[tool.Name] = tool;
@@ -24,7 +20,9 @@ public class ToolRegistry
             _aliases[alias] = tool;
     }
 
-    /// <summary>按名称或别名获取工具</summary>
+    /// <summary>
+    /// Handles get.
+    /// </summary>
     public ITool? Get(string name)
     {
         if (_tools.TryGetValue(name, out var tool))
@@ -34,7 +32,9 @@ public class ToolRegistry
         return null;
     }
 
-    /// <summary>获取所有已启用的工具 — 对应 getTools()</summary>
+    /// <summary>
+    /// Gets enabled tools.
+    /// </summary>
     public IReadOnlyList<ITool> GetEnabledTools()
     {
         return _tools.Values
@@ -43,12 +43,14 @@ public class ToolRegistry
             .ToList();
     }
 
-    /// <summary>获取所有工具 — 对应 getAllBaseTools()</summary>
+    /// <summary>
+    /// Gets all tools.
+    /// </summary>
     public IReadOnlyList<ITool> GetAllTools() =>
         _tools.Values.OrderBy(t => t.Name, StringComparer.Ordinal).ToList();
 
     /// <summary>
-    /// 生成 API 工具定义列表 — 对应构建 tool schema 发送给 Anthropic API
+    /// Gets tool definitions.
     /// </summary>
     public IReadOnlyList<JsonElement> GetToolDefinitions()
     {
@@ -71,7 +73,7 @@ public class ToolRegistry
     }
 
     /// <summary>
-    /// 异步生成工具定义（推荐使用）
+    /// Gets tool definitions.
     /// </summary>
     public async Task<IReadOnlyList<JsonElement>> GetToolDefinitionsAsync()
     {

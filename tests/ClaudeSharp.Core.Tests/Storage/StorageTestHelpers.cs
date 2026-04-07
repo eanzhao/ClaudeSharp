@@ -4,6 +4,9 @@ using ClaudeSharp.Core.Storage;
 
 namespace ClaudeSharp.Core.Tests.Storage;
 
+/// <summary>
+/// Represents temp directory scope.
+/// </summary>
 internal sealed class TempDirectoryScope : IDisposable
 {
     public TempDirectoryScope(string? name = null)
@@ -33,6 +36,9 @@ internal sealed class TempDirectoryScope : IDisposable
     }
 }
 
+/// <summary>
+/// Represents storage test data.
+/// </summary>
 internal static class StorageTestData
 {
     public static JsonElement Json(object value) =>

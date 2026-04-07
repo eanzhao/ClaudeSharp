@@ -4,6 +4,9 @@ using ClaudeSharp.Core.Storage;
 
 namespace ClaudeSharp.Core.Compaction;
 
+/// <summary>
+/// Represents microcompact record.
+/// </summary>
 public sealed class MicrocompactRecord
 {
     public const string EventType = "microcompact";

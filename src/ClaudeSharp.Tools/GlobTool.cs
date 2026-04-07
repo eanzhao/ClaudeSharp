@@ -8,8 +8,7 @@ using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
 namespace ClaudeSharp.Tools;
 
 /// <summary>
-/// GlobTool — 对应 Claude Code 的文件名搜索工具。
-/// 负责按 glob pattern 找文件，把“找文件”从 Bash 里拆出来。
+/// Provides glob tool.
 /// </summary>
 public class GlobTool : ITool
 {

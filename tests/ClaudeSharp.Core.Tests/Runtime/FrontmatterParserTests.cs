@@ -2,6 +2,9 @@ using ClaudeSharp.Core.Markdown;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for frontmatter Parser.
+/// </summary>
 public sealed class FrontmatterParserTests
 {
     [Fact]

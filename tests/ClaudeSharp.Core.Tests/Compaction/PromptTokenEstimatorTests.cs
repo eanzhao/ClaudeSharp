@@ -4,6 +4,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Tests.Compaction;
 
+/// <summary>
+/// Contains tests for prompt Token Estimator.
+/// </summary>
 public sealed class PromptTokenEstimatorTests
 {
     [Fact]

@@ -4,9 +4,7 @@ using ClaudeSharp.Core.Messages;
 namespace ClaudeSharp.Core.Tools;
 
 /// <summary>
-/// 工具运行时接口。
-/// 把 QueryEngine 里的工具调度逻辑拆出来，后面不管接流式 API 还是 headless host，
-/// 都可以复用同一套 batch 执行协议。
+/// Defines the contract for tool runtime.
 /// </summary>
 public interface IToolRuntime
 {
@@ -16,10 +14,13 @@ public interface IToolRuntime
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Represents tool run update.
+/// </summary>
 public abstract record ToolRunUpdate;
 
 /// <summary>
-/// 运行时向宿主请求权限确认。
+/// Represents tool permission request update.
 /// </summary>
 public sealed record ToolPermissionRequestUpdate : ToolRunUpdate
 {
@@ -36,13 +37,22 @@ public sealed record ToolPermissionRequestUpdate : ToolRunUpdate
     public Task<bool> WaitForResponseAsync() => _response.Task;
 }
 
+/// <summary>
+/// Represents tool progress update.
+/// </summary>
 public sealed record ToolProgressUpdate(
     string ToolUseId,
     string ToolName,
     ToolProgress Progress) : ToolRunUpdate;
 
+/// <summary>
+/// Represents tool completed update.
+/// </summary>
 public sealed record ToolCompletedUpdate(ToolRunOutcome Outcome) : ToolRunUpdate;
 
+/// <summary>
+/// Represents tool run outcome.
+/// </summary>
 public sealed record ToolRunOutcome(
     ToolUseBlock Invocation,
     ITool Tool,

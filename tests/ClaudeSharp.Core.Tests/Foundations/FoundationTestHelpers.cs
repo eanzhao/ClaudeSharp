@@ -6,6 +6,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Foundations;
 
+/// <summary>
+/// Provides shared helpers for foundation-layer tests.
+/// </summary>
 internal static class FoundationTestHelpers
 {
     public static JsonElement Json(object value) => JsonSerializer.SerializeToElement(value);

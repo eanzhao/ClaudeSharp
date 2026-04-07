@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Tests.Compaction;
 
+/// <summary>
+/// Contains tests for conversation Rewriter.
+/// </summary>
 public sealed class ConversationRewriterTests
 {
     [Fact]

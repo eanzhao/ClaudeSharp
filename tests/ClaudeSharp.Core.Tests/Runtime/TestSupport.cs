@@ -5,6 +5,8 @@ using Anthropic;
 using ClaudeSharp.Core.Commands;
 using ClaudeSharp.Core.Compaction;
 using ClaudeSharp.Core.Context;
+using ClaudeSharp.Core.Hooks;
+using ClaudeSharp.Core.Memory;
 using ClaudeSharp.Core.Messages;
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Query;
@@ -13,6 +15,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Provides shared helpers for runtime tests.
+/// </summary>
 internal static class TestSupport
 {
     public static JsonElement Json(object value) =>
@@ -41,7 +46,9 @@ internal static class TestSupport
         IConversationCompactor? compactor = null,
         IMicroCompactor? microCompactor = null,
         ISessionMemoryCompactor? sessionMemoryCompactor = null,
-        IContextPressurePipeline? contextPressurePipeline = null)
+        IContextPressurePipeline? contextPressurePipeline = null,
+        IHookRuntime? hooks = null,
+        SessionMemoryFile? sessionMemoryFile = null)
     {
         return new QueryEngine(
             client,
@@ -54,13 +61,18 @@ internal static class TestSupport
             microCompactor: microCompactor,
             sessionMemoryCompactor: sessionMemoryCompactor,
             contextPressurePipeline: contextPressurePipeline,
+            hooks: hooks,
             journal: journal,
+            sessionMemoryFile: sessionMemoryFile,
             initialMessages: initialMessages,
             initialUsage: initialUsage,
             initialMetadata: initialMetadata);
     }
 }
 
+/// <summary>
+/// Represents temp directory.
+/// </summary>
 internal sealed class TempDirectory : IDisposable
 {
     public TempDirectory(string? name = null)
@@ -106,6 +118,9 @@ internal sealed class TempDirectory : IDisposable
     }
 }
 
+/// <summary>
+/// Provides fake tool.
+/// </summary>
 internal sealed class FakeTool : ITool
 {
     public required string Name { get; init; }
@@ -156,6 +171,9 @@ internal sealed class FakeTool : ITool
     public int MaxResultSizeChars => MaxResultSize;
 }
 
+/// <summary>
+/// Provides stub permission checker.
+/// </summary>
 internal sealed class StubPermissionChecker : IPermissionChecker
 {
     public Func<ITool, JsonElement, ToolExecutionContext, Task<PermissionResult>>? Handler { get; init; }
@@ -164,6 +182,9 @@ internal sealed class StubPermissionChecker : IPermissionChecker
         Handler?.Invoke(tool, input, context) ?? Task.FromResult(PermissionResult.Allow());
 }
 
+/// <summary>
+/// Represents recording journal.
+/// </summary>
 internal sealed class RecordingJournal : IConversationJournal
 {
     public string SessionId { get; init; } = "session-1";
@@ -258,6 +279,9 @@ internal sealed class RecordingJournal : IConversationJournal
     }
 }
 
+/// <summary>
+/// Represents fake anthropic handler.
+/// </summary>
 internal sealed class FakeAnthropicHandler : HttpMessageHandler
 {
     private readonly Queue<Func<HttpResponseMessage>> _actions = new();

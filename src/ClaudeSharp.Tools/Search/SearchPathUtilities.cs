@@ -1,5 +1,8 @@
 namespace ClaudeSharp.Tools.Search;
 
+/// <summary>
+/// Represents search path utilities.
+/// </summary>
 internal static class SearchPathUtilities
 {
     private static readonly HashSet<string> IgnoredDirectoryNames =

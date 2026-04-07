@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Compaction;
 
+/// <summary>
+/// Represents options for prompt token estimator.
+/// </summary>
 public sealed class PromptTokenEstimatorOptions
 {
     public int ApproxCharsPerToken { get; init; } = 4;
@@ -21,6 +24,9 @@ public sealed class PromptTokenEstimatorOptions
     public int MinimumTextTokens { get; init; } = 1;
 }
 
+/// <summary>
+/// Represents prompt token estimate.
+/// </summary>
 public sealed class PromptTokenEstimate
 {
     public required int TotalTokens { get; init; }
@@ -33,6 +39,9 @@ public sealed class PromptTokenEstimate
     public required int MessageCount { get; init; }
 }
 
+/// <summary>
+/// Defines the contract for prompt token estimator.
+/// </summary>
 public interface IPromptTokenEstimator
 {
     PromptTokenEstimate Estimate(
@@ -40,6 +49,9 @@ public interface IPromptTokenEstimator
         PromptTokenEstimatorOptions? options = null);
 }
 
+/// <summary>
+/// Represents heuristic prompt token estimator.
+/// </summary>
 public sealed class HeuristicPromptTokenEstimator : IPromptTokenEstimator
 {
     public PromptTokenEstimate Estimate(

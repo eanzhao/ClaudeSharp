@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for permission System.
+/// </summary>
 public class PermissionSystemTests
 {
     [Fact]

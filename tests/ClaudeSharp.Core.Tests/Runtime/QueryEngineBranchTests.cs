@@ -10,6 +10,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for query Engine Branch.
+/// </summary>
 public sealed class QueryEngineBranchTests
 {
     [Theory]

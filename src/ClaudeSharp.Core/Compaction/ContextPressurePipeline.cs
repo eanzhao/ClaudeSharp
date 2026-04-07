@@ -2,6 +2,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Compaction;
 
+/// <summary>
+/// Represents options for context pressure.
+/// </summary>
 public sealed class ContextPressureOptions
 {
     public required bool EnableAutoCompact { get; init; }
@@ -11,6 +14,9 @@ public sealed class ContextPressureOptions
     public SessionMemoryCompactionOptions SessionMemory { get; init; } = new();
 }
 
+/// <summary>
+/// Represents context preparation result.
+/// </summary>
 public sealed class ContextPreparationResult
 {
     public required AutoCompactDecision InitialDecision { get; init; }
@@ -25,6 +31,9 @@ public sealed class ContextPreparationResult
         CompactionResult != null;
 }
 
+/// <summary>
+/// Defines the contract for context pressure pipeline.
+/// </summary>
 public interface IContextPressurePipeline
 {
     ContextPreparationResult Prepare(
@@ -33,6 +42,9 @@ public interface IContextPressurePipeline
         DateTimeOffset? now = null);
 }
 
+/// <summary>
+/// Provides default context pressure pipeline.
+/// </summary>
 public sealed class DefaultContextPressurePipeline : IContextPressurePipeline
 {
     private readonly IAutoCompactPolicy _policy;

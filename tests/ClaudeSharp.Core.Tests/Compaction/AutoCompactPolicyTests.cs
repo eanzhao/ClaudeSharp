@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Tests.Compaction;
 
+/// <summary>
+/// Contains tests for auto Compact Policy.
+/// </summary>
 public sealed class AutoCompactPolicyTests
 {
     [Fact]

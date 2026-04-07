@@ -4,6 +4,9 @@ using ClaudeSharp.Core.Storage;
 
 namespace ClaudeSharp.Core.Compaction;
 
+/// <summary>
+/// Represents conversation checkpoint.
+/// </summary>
 public sealed class ConversationCheckpoint
 {
     public required IReadOnlyList<string> ActiveMessageIds { get; init; }

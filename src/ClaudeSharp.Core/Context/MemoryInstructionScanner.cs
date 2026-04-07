@@ -3,12 +3,7 @@ using ClaudeSharp.Core.Markdown;
 namespace ClaudeSharp.Core.Context;
 
 /// <summary>
-/// 从工作目录向上扫描 Claude 风格的指令文件。
-/// 当前实现保留 Claude Code 里最值得复用的一段：
-/// - CLAUDE.md
-/// - CLAUDE.local.md
-/// - .claude/CLAUDE.md
-/// - .claude/rules/*.md
+/// Provides memory instruction scanner.
 /// </summary>
 public static class MemoryInstructionScanner
 {
@@ -86,6 +81,9 @@ public static class MemoryInstructionScanner
     }
 }
 
+/// <summary>
+/// Represents memory instruction file.
+/// </summary>
 public sealed record MemoryInstructionFile(
     string Path,
     string Content,

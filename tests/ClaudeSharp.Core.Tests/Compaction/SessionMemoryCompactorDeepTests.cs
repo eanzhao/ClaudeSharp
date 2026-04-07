@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Tests.Compaction;
 
+/// <summary>
+/// Contains tests for session Memory Compactor Deep.
+/// </summary>
 public sealed class SessionMemoryCompactorDeepTests
 {
     [Fact]

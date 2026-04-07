@@ -7,6 +7,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for query Engine.
+/// </summary>
 public class QueryEngineTests
 {
     [Fact]

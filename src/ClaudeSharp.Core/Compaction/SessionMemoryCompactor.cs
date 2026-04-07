@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Compaction;
 
+/// <summary>
+/// Represents options for session memory compaction.
+/// </summary>
 public sealed class SessionMemoryCompactionOptions
 {
     public int PreserveTailCount { get; init; } = 8;
@@ -14,6 +17,9 @@ public sealed class SessionMemoryCompactionOptions
     public string TailNote { get; init; } = "Recent original messages remain verbatim.";
 }
 
+/// <summary>
+/// Represents session memory compaction result.
+/// </summary>
 public sealed class SessionMemoryCompactionResult
 {
     public required ConversationRewriteResult RewriteResult { get; init; }
@@ -28,6 +34,9 @@ public sealed class SessionMemoryCompactionResult
     public bool HasChanges => RewriteResult.HasChanges;
 }
 
+/// <summary>
+/// Defines the contract for session memory compactor.
+/// </summary>
 public interface ISessionMemoryCompactor
 {
     SessionMemoryCompactionResult? Compact(
@@ -35,6 +44,9 @@ public interface ISessionMemoryCompactor
         SessionMemoryCompactionOptions? options = null);
 }
 
+/// <summary>
+/// Provides session memory compactor.
+/// </summary>
 public sealed class SessionMemoryCompactor : ISessionMemoryCompactor
 {
     private readonly IConversationRewriter _rewriter;

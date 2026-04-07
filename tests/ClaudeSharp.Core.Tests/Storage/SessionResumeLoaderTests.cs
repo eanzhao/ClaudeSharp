@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Storage;
 
 namespace ClaudeSharp.Core.Tests.Storage;
 
+/// <summary>
+/// Contains tests for session Resume Loader.
+/// </summary>
 public sealed class SessionResumeLoaderTests
 {
     [Fact]

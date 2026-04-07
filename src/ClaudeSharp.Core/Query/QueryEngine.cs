@@ -1,7 +1,10 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using Anthropic;
 using ClaudeSharp.Core.Compaction;
+using ClaudeSharp.Core.Hooks;
+using ClaudeSharp.Core.Memory;
 using ClaudeSharp.Core.Messages;
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Storage;
@@ -27,17 +30,9 @@ using ApiToolUseBlockParam = Anthropic.Models.Messages.ToolUseBlockParam;
 namespace ClaudeSharp.Core.Query;
 
 /// <summary>
-/// 查询引擎 — 对应 Claude Code 的 QueryEngine 类 (QueryEngine.ts)
-///
-/// 这是 Claude Code 最核心的组件，负责：
-/// 1. 管理对话消息链
-/// 2. 构建系统提示 (包含工具定义和上下文)
-/// 3. 调用 Anthropic API
-/// 4. 实现 agentic loop: API调用 → 工具执行 → 结果回传 → 再次调用
-/// 5. 权限检查和用户审批流程
-/// 6. Token 使用统计
+/// Runs the main conversation loop, including model calls, tool execution, and compaction.
 /// </summary>
-public class QueryEngine
+public class QueryEngine : IAsyncDisposable
 {
     private readonly AnthropicClient _client;
     private readonly ToolRegistry _tools;
@@ -46,13 +41,17 @@ public class QueryEngine
     private readonly IMicroCompactor _microCompactor;
     private readonly ISessionMemoryCompactor _sessionMemoryCompactor;
     private readonly IContextPressurePipeline _contextPressurePipeline;
+    private readonly IHookRuntime _hooks;
     private readonly QueryEngineConfig _config;
     private readonly Context.ContextProvider _contextProvider;
     private readonly IConversationJournal? _journal;
+    private readonly SessionMemoryFile? _sessionMemoryFile;
     private readonly ConversationSessionMetadata _sessionMetadata;
     private readonly List<ConversationMessage> _messages;
     private TokenUsage _totalUsage;
     private int _consecutiveAutoCompactFailures;
+    private bool _sessionStarted;
+    private bool _sessionEnded;
 
     public QueryEngine(
         AnthropicClient client,
@@ -65,14 +64,17 @@ public class QueryEngine
         IMicroCompactor? microCompactor = null,
         ISessionMemoryCompactor? sessionMemoryCompactor = null,
         IContextPressurePipeline? contextPressurePipeline = null,
+        IHookRuntime? hooks = null,
         IConversationJournal? journal = null,
+        SessionMemoryFile? sessionMemoryFile = null,
         IReadOnlyList<ConversationMessage>? initialMessages = null,
         TokenUsage? initialUsage = null,
         ConversationSessionMetadata? initialMetadata = null)
     {
         _client = client;
         _tools = tools;
-        _toolRuntime = toolRuntime ?? new StreamingToolExecutor(tools, permissions);
+        var effectiveHooks = hooks ?? HookRuntime.Empty;
+        _toolRuntime = toolRuntime ?? new StreamingToolExecutor(tools, permissions, effectiveHooks);
         _compactor = compactor ?? new HeuristicConversationCompactor();
         _microCompactor = microCompactor ?? new TimeBasedMicroCompactor();
         _sessionMemoryCompactor = sessionMemoryCompactor ?? new SessionMemoryCompactor();
@@ -81,24 +83,34 @@ public class QueryEngine
                                       microCompactor: _microCompactor,
                                       sessionMemoryCompactor: _sessionMemoryCompactor,
                                       conversationCompactor: _compactor);
+        _hooks = effectiveHooks;
         _config = config;
         _contextProvider = contextProvider;
         _journal = journal;
+        _sessionMemoryFile = sessionMemoryFile;
         _sessionMetadata = initialMetadata?.Clone() ?? journal?.Metadata ?? new ConversationSessionMetadata();
         _messages = initialMessages?.ToList() ?? [];
         _totalUsage = initialUsage ?? ComputeTotalUsage(_messages);
     }
 
-    /// <summary>获取当前对话消息</summary>
+    /// <summary>
+    /// Gets the current conversation messages.
+    /// </summary>
     public IReadOnlyList<ConversationMessage> Messages => _messages;
 
-    /// <summary>获取累计 token 用量</summary>
+    /// <summary>
+    /// Gets the accumulated token usage.
+    /// </summary>
     public TokenUsage TotalUsage => _totalUsage;
 
-    /// <summary>当前模型</summary>
+    /// <summary>
+    /// Gets the active model identifier.
+    /// </summary>
     public string CurrentModel => _config.Model;
 
-    /// <summary>切换模型（支持常见别名）</summary>
+    /// <summary>
+    /// Resolves a model alias and updates the active model.
+    /// </summary>
     public string SetModel(string modelOrAlias)
     {
         _config.Model = ClaudeModels.Resolve(modelOrAlias);
@@ -121,8 +133,7 @@ public class QueryEngine
     public ConversationSessionMetadata SessionMetadata => _sessionMetadata.Clone();
 
     /// <summary>
-    /// 提交用户消息并获取事件流。
-    /// 当前依然是“按块返回”，不是 token 级流式，但已经接到新版 Anthropic SDK。
+    /// Sends a user message through the agent loop and streams query events.
     /// </summary>
     public async IAsyncEnumerable<QueryEvent> SubmitMessageAsync(
         string userInput,
@@ -130,6 +141,8 @@ public class QueryEngine
     {
         var startTime = DateTimeOffset.UtcNow;
         var turnCount = 0;
+
+        await EnsureSessionStartedAsync(ct);
 
         await AddMessageAsync(UserMessage.FromText(userInput), ct);
 
@@ -147,35 +160,66 @@ public class QueryEngine
 
             yield return new StatusEvent("calling_api");
 
-            var contentBlocks = new List<ContentBlock>();
-            var toolUseBlocks = new List<ToolUseBlock>();
-            TokenUsage? responseUsage = null;
-            string? stopReason = null;
+            var assistantTurn = new AssistantTurnAccumulator();
 
-            Anthropic.Models.Messages.Message? response = null;
             string? requestError = null;
-            try
+            var request = new ApiMessageCreateParams
             {
-                var request = new ApiMessageCreateParams
-                {
-                    Model = _config.Model,
-                    MaxTokens = _config.MaxTokens,
-                    System = systemPrompt,
-                    Messages = apiMessages,
-                    Tools = ConvertToolDefinitions(toolDefs),
-                    ToolChoice = new ApiToolChoiceAuto(),
-                    Thinking = CreateThinkingConfig(),
-                };
+                Model = _config.Model,
+                MaxTokens = _config.MaxTokens,
+                System = systemPrompt,
+                Messages = apiMessages,
+                Tools = ConvertToolDefinitions(toolDefs),
+                ToolChoice = new ApiToolChoiceAuto(),
+                Thinking = CreateThinkingConfig(),
+            };
 
-                response = await _client.Messages.Create(request, ct);
-            }
-            catch (Exception ex)
+            if (_config.UseStreamingApi)
             {
-                requestError = ex.Message;
+                await using var streamEnumerator =
+                    StreamAssistantTurnAsync(request, assistantTurn, ct).GetAsyncEnumerator(ct);
+
+                while (true)
+                {
+                    QueryEvent? nextEvent;
+                    try
+                    {
+                        if (!await streamEnumerator.MoveNextAsync())
+                            break;
+
+                        nextEvent = streamEnumerator.Current;
+                    }
+                    catch (Exception ex)
+                    {
+                        requestError = ex.Message;
+                        break;
+                    }
+
+                    yield return nextEvent;
+                }
+            }
+            else
+            {
+                try
+                {
+                    await CollectAssistantTurnAsync(request, assistantTurn, ct);
+                }
+                catch (Exception ex)
+                {
+                    requestError = ex.Message;
+                }
             }
 
             if (requestError != null)
             {
+                await _hooks.OnStopFailureAsync(
+                    BuildStopHookContext(
+                        success: false,
+                        errorMessage: requestError,
+                        duration: DateTimeOffset.UtcNow - startTime,
+                        turnCount),
+                    ct);
+
                 yield return new QueryCompleteEvent
                 {
                     Success = false,
@@ -187,65 +231,26 @@ public class QueryEngine
                 yield break;
             }
 
-            if (response != null)
+            if (assistantTurn.Usage != null)
+                _totalUsage += assistantTurn.Usage;
+
+            if (!_config.UseStreamingApi)
             {
-                stopReason = response.StopReason?.Raw();
-                responseUsage = new TokenUsage
-                {
-                    InputTokens = (int)response.Usage.InputTokens,
-                    OutputTokens = (int)response.Usage.OutputTokens,
-                    CacheReadInputTokens = (int)(response.Usage.CacheReadInputTokens ?? 0),
-                    CacheCreationInputTokens = (int)(response.Usage.CacheCreationInputTokens ?? 0),
-                };
-                _totalUsage += responseUsage;
-
-                foreach (var content in response.Content)
-                {
-                    if (content.TryPickText(out var textContent))
-                    {
-                        var block = new TextBlock(textContent.Text);
-                        contentBlocks.Add(block);
-                        yield return new TextDeltaEvent(textContent.Text);
-                    }
-                    else if (content.TryPickThinking(out var thinkingContent))
-                    {
-                        var block = new ThinkingBlock(
-                            thinkingContent.Thinking,
-                            thinkingContent.Signature);
-                        contentBlocks.Add(block);
-                        yield return new ThinkingDeltaEvent(thinkingContent.Thinking);
-                    }
-                    else if (content.TryPickToolUse(out var toolUseContent))
-                    {
-                        var inputJson = JsonSerializer.SerializeToElement(toolUseContent.Input);
-                        var block = new ToolUseBlock
-                        {
-                            ToolUseId = toolUseContent.ID,
-                            Name = toolUseContent.Name,
-                            Input = inputJson,
-                        };
-
-                        contentBlocks.Add(block);
-                        toolUseBlocks.Add(block);
-
-                        yield return new ToolUseStartEvent(
-                            toolUseContent.ID,
-                            toolUseContent.Name,
-                            inputJson);
-                    }
-                }
-
-                yield return new MessageEndEvent(stopReason, responseUsage);
+                foreach (var evt in EmitBufferedAssistantTurnEvents(assistantTurn))
+                    yield return evt;
             }
+
+            if (assistantTurn.MessageId != null || assistantTurn.Usage != null || assistantTurn.ContentBlocks.Count > 0)
+                yield return new MessageEndEvent(assistantTurn.StopReason, assistantTurn.Usage);
 
             await AddMessageAsync(new AssistantMessage
             {
-                Content = contentBlocks,
-                StopReason = stopReason,
-                Usage = responseUsage,
+                Content = assistantTurn.ContentBlocks,
+                StopReason = assistantTurn.StopReason,
+                Usage = assistantTurn.Usage,
             }, ct);
 
-            if (toolUseBlocks.Count == 0)
+            if (assistantTurn.ToolUseBlocks.Count == 0)
                 break;
 
             if (turnCount >= _config.MaxTurns)
@@ -255,11 +260,19 @@ public class QueryEngine
                 break;
             }
 
-            await foreach (var evt in ExecuteToolCallsAsync(toolUseBlocks, ct))
+            await foreach (var evt in ExecuteToolCallsAsync(assistantTurn.ToolUseBlocks, ct))
             {
                 yield return evt;
             }
         }
+
+        await _hooks.OnStopAsync(
+            BuildStopHookContext(
+                success: true,
+                errorMessage: null,
+                duration: DateTimeOffset.UtcNow - startTime,
+                turnCount),
+            ct);
 
         yield return new QueryCompleteEvent
         {
@@ -271,7 +284,7 @@ public class QueryEngine
     }
 
     /// <summary>
-    /// 执行工具调用 — 对应 query.ts 中的 runTools + toolOrchestration.ts
+    /// Executes the tool calls returned by the model.
     /// </summary>
     private async IAsyncEnumerable<QueryEvent> ExecuteToolCallsAsync(
         List<ToolUseBlock> toolUseBlocks,
@@ -339,7 +352,7 @@ public class QueryEngine
     }
 
     /// <summary>
-    /// 将内部消息模型转换为官方 Anthropic C# SDK 的 Messages API 结构。
+    /// Converts internal messages into Anthropic Messages API payloads.
     /// </summary>
     private static List<ApiMessageParam> ConvertToApiMessages(
         List<ConversationMessage> messages)
@@ -458,9 +471,12 @@ public class QueryEngine
         return tools;
     }
 
-    /// <summary>清除对话历史</summary>
+    /// <summary>
+    /// Clears messages.
+    /// </summary>
     public async Task ClearMessagesAsync(CancellationToken ct = default)
     {
+        await EndSessionAsync(dueToClear: true, ct);
         _messages.Clear();
         _totalUsage = TokenUsage.Empty;
         if (_journal != null)
@@ -556,11 +572,29 @@ public class QueryEngine
         int preserveTailCount = 8,
         CancellationToken ct = default)
     {
+        await _hooks.OnPreCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.Conversation,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: preserveTailCount,
+                messageCount: _messages.Count),
+            ct);
+
         var result = _compactor.Compact(_messages, preserveTailCount);
         if (result == null)
             return null;
 
         await ApplyCompactionResultAsync(result, ct);
+        await _hooks.OnPostCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.Conversation,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: preserveTailCount,
+                messageCount: _messages.Count,
+                conversationResult: result),
+            ct);
         return result;
     }
 
@@ -568,11 +602,29 @@ public class QueryEngine
         int upToIndex,
         CancellationToken ct = default)
     {
+        await _hooks.OnPreCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.Conversation,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: upToIndex,
+                messageCount: _messages.Count),
+            ct);
+
         var result = _compactor.CompactUpTo(_messages, upToIndex);
         if (result == null)
             return null;
 
         await ApplyCompactionResultAsync(result, ct);
+        await _hooks.OnPostCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.Conversation,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: upToIndex,
+                messageCount: _messages.Count,
+                conversationResult: result),
+            ct);
         return result;
     }
 
@@ -580,11 +632,29 @@ public class QueryEngine
         int fromIndex,
         CancellationToken ct = default)
     {
+        await _hooks.OnPreCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.Conversation,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: fromIndex,
+                messageCount: _messages.Count),
+            ct);
+
         var result = _compactor.CompactFrom(_messages, fromIndex);
         if (result == null)
             return null;
 
         await ApplyCompactionResultAsync(result, ct);
+        await _hooks.OnPostCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.Conversation,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: fromIndex,
+                messageCount: _messages.Count,
+                conversationResult: result),
+            ct);
         return result;
     }
 
@@ -592,6 +662,15 @@ public class QueryEngine
         int preserveTailCount = 8,
         CancellationToken ct = default)
     {
+        await _hooks.OnPreCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.SessionMemory,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: preserveTailCount,
+                messageCount: _messages.Count),
+            ct);
+
         var result = _sessionMemoryCompactor.Compact(
             _messages,
             new SessionMemoryCompactionOptions
@@ -603,6 +682,15 @@ public class QueryEngine
             return null;
 
         await ApplySessionMemoryCompactionResultAsync(result, ct);
+        await _hooks.OnPostCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.SessionMemory,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: preserveTailCount,
+                messageCount: _messages.Count,
+                sessionMemoryResult: result),
+            ct);
         return result;
     }
 
@@ -611,6 +699,15 @@ public class QueryEngine
         bool force = true,
         CancellationToken ct = default)
     {
+        await _hooks.OnPreCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.Microcompact,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: preserveTailCount,
+                messageCount: _messages.Count),
+            ct);
+
         var result = _microCompactor.Run(
             _messages,
             new MicrocompactRunOptions
@@ -623,6 +720,15 @@ public class QueryEngine
             return null;
 
         await ApplyMicrocompactResultAsync(result, ct);
+        await _hooks.OnPostCompactAsync(
+            new CompactHookContext(
+                CompactionLifecycleKind.Microcompact,
+                automatic: false,
+                reason: "manual",
+                preserveTailCount: preserveTailCount,
+                messageCount: _messages.Count,
+                microcompactResult: result),
+            ct);
         return result;
     }
 
@@ -672,7 +778,25 @@ public class QueryEngine
 
             if (preparation.MicrocompactResult is { HasChanges: true } microcompact)
             {
+                await _hooks.OnPreCompactAsync(
+                    new CompactHookContext(
+                        CompactionLifecycleKind.Microcompact,
+                        automatic: true,
+                        reason: preparation.InitialDecision.Reason,
+                        preserveTailCount: _config.AutoCompactPreserveTailCount,
+                        messageCount: _messages.Count),
+                    ct);
+
                 await ApplyMicrocompactResultAsync(microcompact, ct);
+                await _hooks.OnPostCompactAsync(
+                    new CompactHookContext(
+                        CompactionLifecycleKind.Microcompact,
+                        automatic: true,
+                        reason: preparation.InitialDecision.Reason,
+                        preserveTailCount: _config.AutoCompactPreserveTailCount,
+                        messageCount: _messages.Count,
+                        microcompactResult: microcompact),
+                    ct);
                 events.Add(new ContextCompactionEvent
                 {
                     Mode = "microcompact",
@@ -685,7 +809,25 @@ public class QueryEngine
 
             if (preparation.SessionMemoryResult is { HasChanges: true } sessionMemory)
             {
+                await _hooks.OnPreCompactAsync(
+                    new CompactHookContext(
+                        CompactionLifecycleKind.SessionMemory,
+                        automatic: true,
+                        reason: preparation.InitialDecision.Reason,
+                        preserveTailCount: _config.AutoCompactPreserveTailCount,
+                        messageCount: _messages.Count),
+                    ct);
+
                 await ApplySessionMemoryCompactionResultAsync(sessionMemory, ct);
+                await _hooks.OnPostCompactAsync(
+                    new CompactHookContext(
+                        CompactionLifecycleKind.SessionMemory,
+                        automatic: true,
+                        reason: preparation.InitialDecision.Reason,
+                        preserveTailCount: _config.AutoCompactPreserveTailCount,
+                        messageCount: _messages.Count,
+                        sessionMemoryResult: sessionMemory),
+                    ct);
                 events.Add(new ContextCompactionEvent
                 {
                     Mode = "session_memory",
@@ -698,7 +840,25 @@ public class QueryEngine
 
             if (preparation.CompactionResult != null)
             {
+                await _hooks.OnPreCompactAsync(
+                    new CompactHookContext(
+                        CompactionLifecycleKind.Conversation,
+                        automatic: true,
+                        reason: preparation.InitialDecision.Reason,
+                        preserveTailCount: _config.AutoCompactPreserveTailCount,
+                        messageCount: _messages.Count),
+                    ct);
+
                 await ApplyCompactionResultAsync(preparation.CompactionResult, ct);
+                await _hooks.OnPostCompactAsync(
+                    new CompactHookContext(
+                        CompactionLifecycleKind.Conversation,
+                        automatic: true,
+                        reason: preparation.InitialDecision.Reason,
+                        preserveTailCount: _config.AutoCompactPreserveTailCount,
+                        messageCount: _messages.Count,
+                        conversationResult: preparation.CompactionResult),
+                    ct);
                 events.Add(new ContextCompactionEvent
                 {
                     Mode = "compact",
@@ -737,6 +897,10 @@ public class QueryEngine
         CancellationToken ct)
     {
         await ApplyCheckpointAsync(result.MemoryMessage, result.ActiveMessages, ct);
+        if (_sessionMemoryFile != null)
+            await _sessionMemoryFile.SaveAsync(result.SummaryText, ct);
+
+        _contextProvider.SessionMemoryContent = result.SummaryText;
     }
 
     private async Task ApplyMicrocompactResultAsync(
@@ -799,6 +963,485 @@ public class QueryEngine
             _contextProvider.WorkingDirectory,
             _config.Model,
             ct);
+    }
+
+    private async Task CollectAssistantTurnAsync(
+        ApiMessageCreateParams request,
+        AssistantTurnAccumulator turn,
+        CancellationToken ct)
+    {
+        var response = await _client.Messages.Create(request, ct);
+
+        turn.MessageId = response.ID;
+        turn.StopReason = response.StopReason?.Raw();
+        turn.Usage = CreateTokenUsage(
+            response.Usage.InputTokens,
+            response.Usage.OutputTokens,
+            response.Usage.CacheReadInputTokens,
+            response.Usage.CacheCreationInputTokens);
+
+        foreach (var content in response.Content)
+        {
+            if (content.TryPickText(out var textContent))
+            {
+                turn.ContentBlocks.Add(new TextBlock(textContent.Text));
+            }
+            else if (content.TryPickThinking(out var thinkingContent))
+            {
+                turn.ContentBlocks.Add(new ThinkingBlock(
+                    thinkingContent.Thinking,
+                    thinkingContent.Signature));
+            }
+            else if (content.TryPickToolUse(out var toolUseContent))
+            {
+                var inputJson = JsonSerializer.SerializeToElement(toolUseContent.Input);
+                var block = new ToolUseBlock
+                {
+                    ToolUseId = toolUseContent.ID,
+                    Name = toolUseContent.Name,
+                    Input = inputJson,
+                };
+
+                turn.ContentBlocks.Add(block);
+                turn.ToolUseBlocks.Add(block);
+            }
+        }
+    }
+
+    private static IReadOnlyList<QueryEvent> EmitBufferedAssistantTurnEvents(
+        AssistantTurnAccumulator turn)
+    {
+        var events = new List<QueryEvent>();
+        foreach (var block in turn.ContentBlocks)
+        {
+            switch (block)
+            {
+                case TextBlock text:
+                    events.Add(new TextDeltaEvent(text.Text));
+                    break;
+                case ThinkingBlock thinking:
+                    events.Add(new ThinkingDeltaEvent(thinking.Text));
+                    break;
+                case ToolUseBlock toolUse:
+                    events.Add(new ToolUseStartEvent(
+                        toolUse.ToolUseId,
+                        toolUse.Name,
+                        toolUse.Input));
+                    break;
+            }
+        }
+
+        return events;
+    }
+
+    private async IAsyncEnumerable<QueryEvent> StreamAssistantTurnAsync(
+        ApiMessageCreateParams request,
+        AssistantTurnAccumulator turn,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        var blockBuilders = new Dictionary<long, StreamingContentBlockBuilder>();
+        var rawResponse = await _client.Messages.WithRawResponse.CreateStreaming(request, ct);
+        using var httpResponse = rawResponse.RawMessage;
+        await using var stream = await httpResponse.Content.ReadAsStreamAsync(ct);
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+
+        string? eventName = null;
+        var dataBuilder = new StringBuilder();
+
+        while (!ct.IsCancellationRequested)
+        {
+            var line = await reader.ReadLineAsync(ct);
+            if (line == null)
+                break;
+
+            if (line.StartsWith("event:", StringComparison.OrdinalIgnoreCase))
+            {
+                eventName = line[6..].Trim();
+                continue;
+            }
+
+            if (line.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (dataBuilder.Length > 0)
+                    dataBuilder.Append('\n');
+
+                dataBuilder.Append(line[5..].Trim());
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(line))
+                continue;
+
+            if (dataBuilder.Length == 0)
+            {
+                eventName = null;
+                continue;
+            }
+
+            using var payloadDocument = JsonDocument.Parse(dataBuilder.ToString());
+            var payload = payloadDocument.RootElement.Clone();
+            var resolvedEventName = string.IsNullOrWhiteSpace(eventName) &&
+                                    payload.TryGetProperty("type", out var typeProperty)
+                ? typeProperty.GetString()
+                : eventName;
+
+            dataBuilder.Clear();
+            eventName = null;
+
+            if (string.Equals(resolvedEventName, "ping", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (string.Equals(resolvedEventName, "message_start", StringComparison.OrdinalIgnoreCase))
+            {
+                var message = payload.GetProperty("message");
+                turn.MessageId = message.GetProperty("id").GetString();
+                if (!string.IsNullOrWhiteSpace(turn.MessageId))
+                    yield return new MessageStartEvent(turn.MessageId);
+                continue;
+            }
+
+            if (string.Equals(resolvedEventName, "message_delta", StringComparison.OrdinalIgnoreCase))
+            {
+                if (payload.TryGetProperty("delta", out var delta))
+                {
+                    turn.StopReason = TryGetString(delta, "stop_reason");
+                }
+
+                if (payload.TryGetProperty("usage", out var usage))
+                {
+                    turn.Usage = CreateTokenUsage(
+                        TryGetInt64(usage, "input_tokens"),
+                        TryGetInt64(usage, "output_tokens"),
+                        TryGetInt64(usage, "cache_read_input_tokens"),
+                        TryGetInt64(usage, "cache_creation_input_tokens"));
+                }
+
+                continue;
+            }
+
+            if (string.Equals(resolvedEventName, "content_block_start", StringComparison.OrdinalIgnoreCase))
+            {
+                var index = payload.GetProperty("index").GetInt64();
+                var builder = CreateStreamingBlockBuilder(payload);
+                if (builder == null)
+                    continue;
+
+                blockBuilders[index] = builder;
+                foreach (var initialEvent in builder.GetInitialEvents())
+                    yield return initialEvent;
+                continue;
+            }
+
+            if (string.Equals(resolvedEventName, "content_block_delta", StringComparison.OrdinalIgnoreCase))
+            {
+                var index = payload.GetProperty("index").GetInt64();
+                if (!blockBuilders.TryGetValue(index, out var builder))
+                    continue;
+
+                foreach (var deltaEvent in builder.ApplyDelta(payload))
+                    yield return deltaEvent;
+                continue;
+            }
+
+            if (string.Equals(resolvedEventName, "content_block_stop", StringComparison.OrdinalIgnoreCase))
+            {
+                var index = payload.GetProperty("index").GetInt64();
+                if (!blockBuilders.Remove(index, out var builder))
+                    continue;
+
+                var finalizedBlock = builder.Build();
+                if (finalizedBlock == null)
+                    continue;
+
+                turn.ContentBlocks.Add(finalizedBlock);
+                if (finalizedBlock is ToolUseBlock toolUseBlock)
+                {
+                    turn.ToolUseBlocks.Add(toolUseBlock);
+                    yield return new ToolUseStartEvent(
+                        toolUseBlock.ToolUseId,
+                        toolUseBlock.Name,
+                        toolUseBlock.Input);
+                }
+
+                continue;
+            }
+        }
+    }
+
+    private async Task EnsureSessionStartedAsync(CancellationToken ct)
+    {
+        if (_sessionStarted)
+            return;
+
+        _sessionStarted = true;
+        _sessionEnded = false;
+
+        await _hooks.OnSessionStartAsync(
+            new SessionHookContext(
+                SessionId,
+                _contextProvider.WorkingDirectory,
+                _config.Model,
+                _sessionMetadata,
+                _messages.Count),
+            ct);
+    }
+
+    private async Task EndSessionAsync(bool dueToClear, CancellationToken ct)
+    {
+        if (!_sessionStarted || _sessionEnded)
+            return;
+
+        _sessionEnded = true;
+        await _hooks.OnSessionEndAsync(
+            new SessionEndHookContext(
+                SessionId,
+                _contextProvider.WorkingDirectory,
+                _config.Model,
+                _sessionMetadata,
+                _messages.Count,
+                dueToClear),
+            ct);
+
+        if (dueToClear)
+            _sessionStarted = false;
+    }
+
+    private StopHookContext BuildStopHookContext(
+        bool success,
+        string? errorMessage,
+        TimeSpan duration,
+        int turnCount) =>
+        new(
+            SessionId,
+            _contextProvider.WorkingDirectory,
+            _config.Model,
+            success,
+            errorMessage,
+            duration,
+            turnCount,
+            _totalUsage);
+
+    public async ValueTask DisposeAsync()
+    {
+        await EndSessionAsync(dueToClear: false, CancellationToken.None);
+    }
+
+    private static TokenUsage CreateTokenUsage(
+        long? inputTokens,
+        long? outputTokens,
+        long? cacheReadInputTokens,
+        long? cacheCreationInputTokens) =>
+        new()
+        {
+            InputTokens = (int)(inputTokens ?? 0),
+            OutputTokens = (int)(outputTokens ?? 0),
+            CacheReadInputTokens = (int)(cacheReadInputTokens ?? 0),
+            CacheCreationInputTokens = (int)(cacheCreationInputTokens ?? 0),
+        };
+
+    private static StreamingContentBlockBuilder? CreateStreamingBlockBuilder(
+        JsonElement payload)
+    {
+        var contentBlock = payload.GetProperty("content_block");
+        var blockType = contentBlock.GetProperty("type").GetString();
+
+        if (string.Equals(blockType, "text", StringComparison.Ordinal))
+            return new TextStreamingBlockBuilder(TryGetString(contentBlock, "text") ?? string.Empty);
+
+        if (string.Equals(blockType, "thinking", StringComparison.Ordinal))
+        {
+            return new ThinkingStreamingBlockBuilder(
+                TryGetString(contentBlock, "thinking") ?? string.Empty,
+                TryGetString(contentBlock, "signature"));
+        }
+
+        if (string.Equals(blockType, "tool_use", StringComparison.Ordinal))
+        {
+            var initialInput = contentBlock.TryGetProperty("input", out var input)
+                ? input.Clone()
+                : JsonSerializer.SerializeToElement(new { });
+
+            return new ToolUseStreamingBlockBuilder(
+                contentBlock.GetProperty("id").GetString() ?? string.Empty,
+                contentBlock.GetProperty("name").GetString() ?? string.Empty,
+                initialInput);
+        }
+
+        return null;
+    }
+
+    private sealed class AssistantTurnAccumulator
+    {
+        public string? MessageId { get; set; }
+        public string? StopReason { get; set; }
+        public TokenUsage? Usage { get; set; }
+        public List<ContentBlock> ContentBlocks { get; } = [];
+        public List<ToolUseBlock> ToolUseBlocks { get; } = [];
+    }
+
+    private abstract class StreamingContentBlockBuilder
+    {
+        public virtual IReadOnlyList<QueryEvent> GetInitialEvents() => [];
+
+        public abstract IReadOnlyList<QueryEvent> ApplyDelta(JsonElement payload);
+
+        public abstract ContentBlock? Build();
+    }
+
+    private sealed class TextStreamingBlockBuilder : StreamingContentBlockBuilder
+    {
+        private readonly StringBuilder _text;
+
+        public TextStreamingBlockBuilder(string initialText)
+        {
+            _text = new StringBuilder(initialText ?? string.Empty);
+        }
+
+        public override IReadOnlyList<QueryEvent> GetInitialEvents() =>
+            string.IsNullOrEmpty(_text.ToString())
+                ? []
+                : [new TextDeltaEvent(_text.ToString())];
+
+        public override IReadOnlyList<QueryEvent> ApplyDelta(JsonElement payload)
+        {
+            if (!payload.TryGetProperty("delta", out var delta) ||
+                !string.Equals(TryGetString(delta, "type"), "text_delta", StringComparison.Ordinal))
+            {
+                return [];
+            }
+
+            var text = TryGetString(delta, "text");
+            if (string.IsNullOrEmpty(text))
+                return [];
+
+            _text.Append(text);
+            return [new TextDeltaEvent(text)];
+        }
+
+        public override ContentBlock Build() => new TextBlock(_text.ToString());
+    }
+
+    private sealed class ThinkingStreamingBlockBuilder : StreamingContentBlockBuilder
+    {
+        private readonly StringBuilder _thinking;
+        private string? _signature;
+
+        public ThinkingStreamingBlockBuilder(string initialThinking, string? signature)
+        {
+            _thinking = new StringBuilder(initialThinking ?? string.Empty);
+            _signature = signature;
+        }
+
+        public override IReadOnlyList<QueryEvent> GetInitialEvents() =>
+            string.IsNullOrEmpty(_thinking.ToString())
+                ? []
+                : [new ThinkingDeltaEvent(_thinking.ToString())];
+
+        public override IReadOnlyList<QueryEvent> ApplyDelta(JsonElement payload)
+        {
+            if (!payload.TryGetProperty("delta", out var delta))
+                return [];
+
+            var deltaType = TryGetString(delta, "type");
+            if (string.Equals(deltaType, "thinking_delta", StringComparison.Ordinal))
+            {
+                var thinking = TryGetString(delta, "thinking");
+                if (string.IsNullOrEmpty(thinking))
+                    return [];
+
+                _thinking.Append(thinking);
+                return [new ThinkingDeltaEvent(thinking)];
+            }
+
+            if (string.Equals(deltaType, "signature_delta", StringComparison.Ordinal))
+                _signature = TryGetString(delta, "signature");
+
+            return [];
+        }
+
+        public override ContentBlock Build() =>
+            new ThinkingBlock(_thinking.ToString(), _signature);
+    }
+
+    private sealed class ToolUseStreamingBlockBuilder : StreamingContentBlockBuilder
+    {
+        private readonly string _toolUseId;
+        private readonly string _name;
+        private readonly JsonElement _initialInput;
+        private readonly StringBuilder _partialJson = new();
+
+        public ToolUseStreamingBlockBuilder(
+            string toolUseId,
+            string name,
+            JsonElement initialInput)
+        {
+            _toolUseId = toolUseId;
+            _name = name;
+            _initialInput = initialInput.Clone();
+        }
+
+        public override IReadOnlyList<QueryEvent> ApplyDelta(JsonElement payload)
+        {
+            if (!payload.TryGetProperty("delta", out var delta) ||
+                !string.Equals(TryGetString(delta, "type"), "input_json_delta", StringComparison.Ordinal))
+            {
+                return [];
+            }
+
+            var partialJson = TryGetString(delta, "partial_json");
+            if (!string.IsNullOrEmpty(partialJson))
+            {
+                _partialJson.Append(partialJson);
+            }
+
+            return [];
+        }
+
+        public override ContentBlock Build() =>
+            new ToolUseBlock
+            {
+                ToolUseId = _toolUseId,
+                Name = _name,
+                Input = BuildInput(),
+            };
+
+        private JsonElement BuildInput()
+        {
+            if (_partialJson.Length > 0)
+            {
+                try
+                {
+                    using var document = JsonDocument.Parse(_partialJson.ToString());
+                    return document.RootElement.Clone();
+                }
+                catch
+                {
+                    // Fall through to the initial input if the stream is malformed.
+                }
+            }
+
+            if (_initialInput.ValueKind is not JsonValueKind.Undefined and not JsonValueKind.Null)
+                return _initialInput.Clone();
+
+            return JsonSerializer.SerializeToElement(new { });
+        }
+    }
+
+    private static string? TryGetString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) &&
+        property.ValueKind != JsonValueKind.Null
+            ? property.GetString()
+            : null;
+
+    private static long? TryGetInt64(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.Number)
+        {
+            return null;
+        }
+
+        return property.TryGetInt64(out var value) ? value : null;
     }
 
     private static TokenUsage ComputeTotalUsage(

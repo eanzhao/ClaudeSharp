@@ -1,24 +1,27 @@
 using System.Runtime.CompilerServices;
 using ClaudeSharp.Core.Messages;
+using ClaudeSharp.Core.Hooks;
 using ClaudeSharp.Core.Permissions;
 
 namespace ClaudeSharp.Core.Tools;
 
 /// <summary>
-/// Claude Code 风格的批量工具执行器。
-/// 先做校验和权限编排，再按并发安全性把调用分成并行批次和串行批次。
+/// Represents streaming tool executor.
 /// </summary>
 public sealed class StreamingToolExecutor : IToolRuntime
 {
     private readonly ToolRegistry _registry;
     private readonly IPermissionChecker _permissions;
+    private readonly IHookRuntime _hooks;
 
     public StreamingToolExecutor(
         ToolRegistry registry,
-        IPermissionChecker permissions)
+        IPermissionChecker permissions,
+        IHookRuntime? hooks = null)
     {
         _registry = registry;
         _permissions = permissions;
+        _hooks = hooks ?? HookRuntime.Empty;
     }
 
     public async IAsyncEnumerable<ToolRunUpdate> RunBatchAsync(
@@ -70,6 +73,30 @@ public sealed class StreamingToolExecutor : IToolRuntime
 
             if (plan is ToolPermissionRequestPlan permissionRequest)
             {
+                var hookDecision = await _hooks.RunPermissionRequestAsync(
+                    new PermissionRequestHookContext(
+                        candidate.Invocation,
+                        candidate.Tool,
+                        context,
+                        permissionRequest.ApprovedPlan.EffectiveInput,
+                        permissionRequest.Request.Description),
+                    cancellationToken);
+
+                if (hookDecision.HasDecision)
+                {
+                    if (hookDecision.Approved == true)
+                    {
+                        concurrentPlans.Add(permissionRequest.ApprovedPlan);
+                        continue;
+                    }
+
+                    yield return CreateCompleted(
+                        candidate.Invocation,
+                        candidate.Tool,
+                        ToolResult.Error(hookDecision.Message ?? "User denied permission"));
+                    continue;
+                }
+
                 yield return permissionRequest.Request;
 
                 var approved = await permissionRequest.Request.WaitForResponseAsync();
@@ -108,19 +135,46 @@ public sealed class StreamingToolExecutor : IToolRuntime
             var plan = await AuthorizeAsync(candidate, context, cancellationToken);
             if (plan is ToolPermissionRequestPlan permissionRequest)
             {
-                yield return permissionRequest.Request;
-
-                var approved = await permissionRequest.Request.WaitForResponseAsync();
-                if (!approved)
-                {
-                    yield return CreateCompleted(
+                var hookDecision = await _hooks.RunPermissionRequestAsync(
+                    new PermissionRequestHookContext(
                         candidate.Invocation,
                         candidate.Tool,
-                        ToolResult.Error("User denied permission"));
-                    continue;
-                }
+                        context,
+                        permissionRequest.ApprovedPlan.EffectiveInput,
+                        permissionRequest.Request.Description),
+                    cancellationToken);
 
-                plan = permissionRequest.ApprovedPlan;
+                if (hookDecision.HasDecision)
+                {
+                    if (hookDecision.Approved == true)
+                    {
+                        plan = permissionRequest.ApprovedPlan;
+                    }
+                    else
+                    {
+                        yield return CreateCompleted(
+                            candidate.Invocation,
+                            candidate.Tool,
+                            ToolResult.Error(hookDecision.Message ?? "User denied permission"));
+                        continue;
+                    }
+                }
+                else
+                {
+                    yield return permissionRequest.Request;
+
+                    var approved = await permissionRequest.Request.WaitForResponseAsync();
+                    if (!approved)
+                    {
+                        yield return CreateCompleted(
+                            candidate.Invocation,
+                            candidate.Tool,
+                            ToolResult.Error("User denied permission"));
+                        continue;
+                    }
+
+                    plan = permissionRequest.ApprovedPlan;
+                }
             }
 
             if (plan is not ToolExecutionPlan authorized)
@@ -144,12 +198,28 @@ public sealed class StreamingToolExecutor : IToolRuntime
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        var preToolUse = await _hooks.RunPreToolUseAsync(
+            new PreToolUseHookContext(
+                candidate.Invocation,
+                candidate.Tool,
+                context,
+                candidate.Invocation.Input),
+            cancellationToken);
+
+        if (preToolUse.Action == HookAction.Block)
+        {
+            return ToolAuthorizationResult.Denied(
+                preToolUse.Message ?? "Blocked by PreToolUse hook");
+        }
+
+        var observedInput = preToolUse.UpdatedInput ?? candidate.Invocation.Input;
+
         var permission = await _permissions.CheckAsync(
             candidate.Tool,
-            candidate.Invocation.Input,
+            observedInput,
             context);
 
-        var effectiveInput = permission.UpdatedInput ?? candidate.Invocation.Input;
+        var effectiveInput = permission.UpdatedInput ?? observedInput;
 
         return permission.Behavior switch
         {
@@ -172,7 +242,7 @@ public sealed class StreamingToolExecutor : IToolRuntime
         };
     }
 
-    private static async Task<ToolRunOutcome> ExecuteAuthorizedAsync(
+    private async Task<ToolRunOutcome> ExecuteAuthorizedAsync(
         ToolExecutionPlan plan,
         ToolExecutionContext context,
         CancellationToken cancellationToken)
@@ -196,10 +266,23 @@ public sealed class StreamingToolExecutor : IToolRuntime
             result = ToolResult.Error($"Error: {ex.Message}");
         }
 
-        return new ToolRunOutcome(
+        var outcome = new ToolRunOutcome(
             plan.Invocation,
             plan.Tool,
             ClampResult(plan.Tool, result));
+
+        var postContext = new PostToolUseHookContext(
+            plan.Invocation,
+            plan.Tool,
+            context,
+            plan.EffectiveInput,
+            outcome.Result);
+
+        await _hooks.OnPostToolUseAsync(postContext, cancellationToken);
+        if (outcome.Result.IsError)
+            await _hooks.OnPostToolUseFailureAsync(postContext, cancellationToken);
+
+        return outcome;
     }
 
     private static ToolCompletedUpdate CreateCompleted(

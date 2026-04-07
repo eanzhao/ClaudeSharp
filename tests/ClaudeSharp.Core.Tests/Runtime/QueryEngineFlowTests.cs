@@ -11,6 +11,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for query Engine Flow.
+/// </summary>
 public sealed class QueryEngineFlowTests
 {
     [Fact]

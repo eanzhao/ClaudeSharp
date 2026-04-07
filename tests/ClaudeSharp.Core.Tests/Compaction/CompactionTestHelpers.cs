@@ -3,6 +3,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Tests.Compaction;
 
+/// <summary>
+/// Provides shared helpers for compaction tests.
+/// </summary>
 internal static class CompactionTestHelpers
 {
     public static JsonElement Json(object value) => JsonSerializer.SerializeToElement(value);

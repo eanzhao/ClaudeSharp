@@ -1,8 +1,7 @@
 namespace ClaudeSharp.Tools.Shell;
 
 /// <summary>
-/// 命令退出码语义解释器。
-/// 参考 Claude Code 的 tools/BashTool/commandSemantics.ts。
+/// Represents command semantics.
 /// </summary>
 public static class CommandSemantics
 {
@@ -112,4 +111,7 @@ public static class CommandSemantics
     }
 }
 
+/// <summary>
+/// Represents the interpreted outcome of a shell command.
+/// </summary>
 public readonly record struct CommandInterpretation(bool IsError, string? Message);

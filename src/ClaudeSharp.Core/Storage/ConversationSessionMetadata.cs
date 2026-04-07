@@ -2,6 +2,9 @@ using ClaudeSharp.Core.Permissions;
 
 namespace ClaudeSharp.Core.Storage;
 
+/// <summary>
+/// Represents conversation session metadata.
+/// </summary>
 public sealed class ConversationSessionMetadata
 {
     public string? Title { get; set; }

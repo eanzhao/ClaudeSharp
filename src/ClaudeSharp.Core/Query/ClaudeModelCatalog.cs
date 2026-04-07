@@ -1,9 +1,7 @@
 namespace ClaudeSharp.Core.Query;
 
 /// <summary>
-/// Claude 模型目录。
-/// 参考 Claude Code 的 utils/model/configs.ts / aliases.ts / model.ts，
-/// 把模型别名、稳定 ID、provider-specific ID 整理成一个可复用表。
+/// Defines the canonical Claude model catalog and alias mapping rules.
 /// </summary>
 public static class ClaudeModelCatalog
 {
@@ -183,6 +181,9 @@ public static class ClaudeModelCatalog
     }
 }
 
+/// <summary>
+/// Defines the supported Claude model families.
+/// </summary>
 public enum ClaudeModelFamily
 {
     Sonnet,
@@ -190,12 +191,18 @@ public enum ClaudeModelFamily
     Haiku,
 }
 
+/// <summary>
+/// Stores provider-specific model identifiers for a Claude model.
+/// </summary>
 public sealed record ClaudeModelProviderIds(
     string FirstParty,
     string Bedrock,
     string Vertex,
     string Foundry);
 
+/// <summary>
+/// Represents claude model descriptor.
+/// </summary>
 public sealed record ClaudeModelDescriptor(
     string StableId,
     string SourceCanonicalId,

@@ -2,6 +2,9 @@ using ClaudeSharp.Core.Messages;
 
 namespace ClaudeSharp.Core.Compaction;
 
+/// <summary>
+/// Defines auto compact action values.
+/// </summary>
 public enum AutoCompactAction
 {
     None,
@@ -9,6 +12,9 @@ public enum AutoCompactAction
     FullCompact,
 }
 
+/// <summary>
+/// Represents auto compact decision.
+/// </summary>
 public sealed class AutoCompactDecision
 {
     public required AutoCompactAction Action { get; init; }
@@ -17,6 +23,9 @@ public sealed class AutoCompactDecision
     public required int AvailableInputBudgetTokens { get; init; }
 }
 
+/// <summary>
+/// Represents options for auto compact policy.
+/// </summary>
 public sealed class AutoCompactPolicyOptions
 {
     public required int ApproxContextWindowTokens { get; init; }
@@ -28,6 +37,9 @@ public sealed class AutoCompactPolicyOptions
     public required double BlockingRatio { get; init; }
 }
 
+/// <summary>
+/// Defines the contract for auto compact policy.
+/// </summary>
 public interface IAutoCompactPolicy
 {
     AutoCompactDecision Evaluate(
@@ -35,6 +47,9 @@ public interface IAutoCompactPolicy
         AutoCompactPolicyOptions options);
 }
 
+/// <summary>
+/// Provides heuristic auto compact policy.
+/// </summary>
 public sealed class HeuristicAutoCompactPolicy : IAutoCompactPolicy
 {
     private readonly IPromptTokenEstimator _tokenEstimator;

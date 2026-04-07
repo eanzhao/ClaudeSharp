@@ -6,10 +6,7 @@ using YamlDotNet.Serialization;
 namespace ClaudeSharp.Core.Markdown;
 
 /// <summary>
-/// Markdown frontmatter 解析器。
-/// 主要参考 Claude Code 的 utils/frontmatterParser.ts：
-/// 抽出 YAML 头、在 YAML 比较挑剔时做一次自动加引号重试，
-/// 并补上 paths 花括号展开之类的小工具。
+/// Parses Markdown frontmatter and normalizes the extracted values.
 /// </summary>
 public static partial class FrontmatterParser
 {
@@ -245,6 +242,9 @@ public static partial class FrontmatterParser
     private static partial Regex SimpleKeyValueRegexFactory();
 }
 
+/// <summary>
+/// Represents parsed markdown.
+/// </summary>
 public sealed record ParsedMarkdown(
     IReadOnlyDictionary<string, object?> Frontmatter,
     string Content);

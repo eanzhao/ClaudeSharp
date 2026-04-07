@@ -7,6 +7,9 @@ using ClaudeSharp.Core.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
+/// <summary>
+/// Contains tests for context Provider Branch.
+/// </summary>
 public sealed class ContextProviderBranchTests
 {
     [Fact]

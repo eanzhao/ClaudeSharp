@@ -5,9 +5,7 @@ using ClaudeSharp.Core.Tools;
 namespace ClaudeSharp.Tools;
 
 /// <summary>
-/// FileWriteTool — 对应 Claude Code 的 tools/FileWriteTool/
-///
-/// 创建或覆写文件内容。写操作需要用户权限批准。
+/// Provides file write tool.
 /// </summary>
 public class FileWriteTool : ITool
 {
@@ -69,7 +67,7 @@ public class FileWriteTool : ITool
 
         try
         {
-            // 确保目录存在
+            // Ensure that the target directory exists.
             var dir = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                 Directory.CreateDirectory(dir);

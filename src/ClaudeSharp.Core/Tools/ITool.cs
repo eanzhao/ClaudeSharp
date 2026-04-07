@@ -5,40 +5,37 @@ using ClaudeSharp.Core.Permissions;
 namespace ClaudeSharp.Core.Tools;
 
 /// <summary>
-/// 工具接口 — 对应 Claude Code 的 Tool&lt;Input, Output, Progress&gt; 类型 (Tool.ts)
-///
-/// 设计要点 (从 Claude Code 源码学到的):
-/// 1. 每个工具是自包含模块：定义 schema、权限、执行逻辑、UI 渲染
-/// 2. inputSchema 用于生成 JSON Schema 发送给 API
-/// 3. checkPermissions 在每次工具调用前检查权限
-/// 4. prompt() 返回嵌入系统提示的工具说明文字
-/// 5. isConcurrencySafe 决定是否可以并行执行
+/// Defines the contract that every tool implementation must follow.
 /// </summary>
 public interface ITool
 {
-    /// <summary>工具名称（API tool_use 中的 name 字段）</summary>
+    /// <summary>
+    /// Gets the tool name exposed in tool_use calls.
+    /// </summary>
     string Name { get; }
 
-    /// <summary>别名（向后兼容用）— 对应 Tool.aliases</summary>
+    /// <summary>
+    /// Gets backward-compatible aliases for the tool.
+    /// </summary>
     string[] Aliases => [];
 
-    /// <summary>工具描述（展示给模型看）— 对应 Tool.description()</summary>
+    /// <summary>
+    /// Gets the description shown to the model.
+    /// </summary>
     Task<string> GetDescriptionAsync();
 
     /// <summary>
-    /// 获取 JSON Schema（发送给 API 的 tool input schema）
-    /// 对应 Tool.inputSchema，Claude Code 用 Zod 自动生成
+    /// Gets the JSON schema sent to the API for tool inputs.
     /// </summary>
     JsonElement GetInputSchema();
 
     /// <summary>
-    /// 生成系统提示中的工具说明 — 对应 Tool.prompt()
-    /// 这是 Claude Code 中非常重要的概念：每个工具负责自己的 prompt
+    /// Builds the tool-specific prompt fragment included in the system prompt.
     /// </summary>
     Task<string> GetPromptAsync(ToolPromptContext context);
 
     /// <summary>
-    /// 执行工具 — 对应 Tool.call()
+    /// Executes the tool call.
     /// </summary>
     Task<ToolResult> ExecuteAsync(
         JsonElement input,
@@ -47,103 +44,145 @@ public interface ITool
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// 输入验证 — 对应 Tool.validateInput()
-    /// 在权限检查之前运行
+    /// Validates the input before permission checks run.
     /// </summary>
     Task<ValidationResult> ValidateInputAsync(JsonElement input, ToolExecutionContext context)
         => Task.FromResult(ValidationResult.Valid());
 
     /// <summary>
-    /// 权限检查 — 对应 Tool.checkPermissions()
-    /// 决定是否需要用户批准
+    /// Checks whether the tool call should be auto-approved, denied, or confirmed.
     /// </summary>
     Task<PermissionResult> CheckPermissionsAsync(JsonElement input, ToolExecutionContext context)
         => Task.FromResult(PermissionResult.Allow());
 
-    /// <summary>是否启用 — 对应 Tool.isEnabled()</summary>
+    /// <summary>
+    /// Gets a value indicating whether the tool is enabled.
+    /// </summary>
     bool IsEnabled() => true;
 
-    /// <summary>是否只读操作 — 对应 Tool.isReadOnly()</summary>
+    /// <summary>
+    /// Gets a value indicating whether the invocation only reads state.
+    /// </summary>
     bool IsReadOnly(JsonElement input) => false;
 
-    /// <summary>是否破坏性操作 — 对应 Tool.isDestructive()</summary>
+    /// <summary>
+    /// Gets a value indicating whether the invocation can make destructive changes.
+    /// </summary>
     bool IsDestructive(JsonElement input) => false;
 
     /// <summary>
-    /// 是否可并行执行 — 对应 Tool.isConcurrencySafe()
-    /// 默认 false (安全保守)，只读工具应返回 true
+    /// Gets a value indicating whether the invocation can safely run in parallel.
     /// </summary>
     bool IsConcurrencySafe(JsonElement input) => false;
 
-    /// <summary>用户可见的工具名 — 对应 Tool.userFacingName()</summary>
+    /// <summary>
+    /// Gets the user-facing tool name.
+    /// </summary>
     string GetUserFacingName(JsonElement? input = null) => Name;
 
-    /// <summary>活动描述(用于 spinner) — 对应 Tool.getActivityDescription()</summary>
+    /// <summary>
+    /// Gets the activity description shown in progress UI.
+    /// </summary>
     string? GetActivityDescription(JsonElement? input) => null;
 
-    /// <summary>结果大小上限 — 对应 Tool.maxResultSizeChars</summary>
+    /// <summary>
+    /// Gets the maximum allowed result size in characters.
+    /// </summary>
     int MaxResultSizeChars => 100_000;
 }
 
-// ─── 上下文类型 ──────────────────────────────────────
+// Context types
 
 /// <summary>
-/// 工具执行上下文 — 对应 Claude Code 的 ToolUseContext (Tool.ts)
-/// 传递给每个工具的运行时信息
+/// Represents tool execution context.
 /// </summary>
 public class ToolExecutionContext
 {
-    /// <summary>当前工作目录</summary>
+    /// <summary>
+    /// Gets the working directory.
+    /// </summary>
     public required string WorkingDirectory { get; init; }
 
-    /// <summary>权限上下文</summary>
+    /// <summary>
+    /// Gets the permission context.
+    /// </summary>
     public required PermissionContext PermissionContext { get; init; }
 
-    /// <summary>所有已注册的工具</summary>
+    /// <summary>
+    /// Gets the registered tools.
+    /// </summary>
     public required IReadOnlyList<ITool> Tools { get; init; }
 
-    /// <summary>当前对话中的所有消息</summary>
+    /// <summary>
+    /// Gets the current conversation messages.
+    /// </summary>
     public required IReadOnlyList<ConversationMessage> Messages { get; init; }
 
-    /// <summary>中止控制器</summary>
+    /// <summary>
+    /// Gets the cancellation token.
+    /// </summary>
     public required CancellationToken CancellationToken { get; init; }
 
-    /// <summary>是否为非交互式会话 (headless/SDK)</summary>
+    /// <summary>
+    /// Gets a value indicating whether the session is non-interactive.
+    /// </summary>
     public bool IsNonInteractiveSession { get; init; }
 
-    /// <summary>主循环模型名</summary>
+    /// <summary>
+    /// Gets the model used by the main loop.
+    /// </summary>
     public string MainLoopModel { get; init; } = Query.ClaudeModels.DefaultMainModel;
 }
 
 /// <summary>
-/// 工具 prompt 生成上下文 — 对应 Tool.prompt() 的参数
+/// Represents tool prompt context.
 /// </summary>
 public class ToolPromptContext
 {
+    /// <summary>
+    /// Gets the active permission context.
+    /// </summary>
     public required PermissionContext PermissionContext { get; init; }
+
+    /// <summary>
+    /// Gets the tools currently registered for the session.
+    /// </summary>
     public required IReadOnlyList<ITool> Tools { get; init; }
 }
 
-// ─── 结果类型 ────────────────────────────────────────
+// Result types
 
 /// <summary>
-/// 工具执行结果 — 对应 Claude Code 的 ToolResult&lt;T&gt;
+/// Represents tool result.
 /// </summary>
 public class ToolResult
 {
+    /// <summary>
+    /// Gets the text payload returned to the model.
+    /// </summary>
     public required string Data { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether the result represents an error.
+    /// </summary>
     public bool IsError { get; init; }
+
+    /// <summary>
+    /// Gets additional messages that should be appended to the conversation.
+    /// </summary>
     public IReadOnlyList<ConversationMessage>? NewMessages { get; init; }
 
     public static ToolResult Success(string data) => new() { Data = data };
     public static ToolResult Error(string message) => new() { Data = message, IsError = true };
 }
 
-/// <summary>工具进度报告</summary>
+/// <summary>
+/// Represents tool progress.
+/// </summary>
 public record ToolProgress(string ToolUseId, string Type, string? Message = null, double? Percentage = null);
 
 /// <summary>
-/// 输入验证结果 — 对应 Claude Code 的 ValidationResult
+/// Represents validation result.
 /// </summary>
 public record ValidationResult(bool IsValid, string? Message = null)
 {
