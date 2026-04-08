@@ -208,6 +208,7 @@ internal static class Program
         IAgentTaskRuntime agentTaskRuntime)
     {
         var registry = new ToolRegistry();
+        var backgroundRunScheduler = new BackgroundAgentRunScheduler(maxConcurrency: 1);
         registry.Register(new BashTool());
         registry.Register(new FileReadTool());
         registry.Register(new FileWriteTool());
@@ -220,7 +221,8 @@ internal static class Program
             new QueryEngineAgentRunner(client, hooks: hooks),
             providerRouter,
             agentTaskRuntime,
-            hooks));
+            hooks,
+            backgroundRunScheduler));
         registry.Register(new AgentStatusTool(agentTaskRuntime));
         registry.Register(new AgentStopTool(agentTaskRuntime));
         return registry;

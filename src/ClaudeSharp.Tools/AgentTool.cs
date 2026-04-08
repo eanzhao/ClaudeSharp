@@ -36,17 +36,20 @@ public sealed class AgentTool : ITool
     private readonly IProviderCapabilityRouter _providerCapabilityRouter;
     private readonly IAgentTaskRuntime _taskRuntime;
     private readonly IHookRuntime _hooks;
+    private readonly BackgroundAgentRunScheduler _backgroundRunScheduler;
 
     public AgentTool(
         IAgentExecutionRunner runner,
         IProviderCapabilityRouter? providerCapabilityRouter = null,
         IAgentTaskRuntime? taskRuntime = null,
-        IHookRuntime? hooks = null)
+        IHookRuntime? hooks = null,
+        BackgroundAgentRunScheduler? backgroundRunScheduler = null)
     {
         _runner = runner;
         _providerCapabilityRouter = providerCapabilityRouter ?? new DefaultProviderCapabilityRouter();
         _taskRuntime = taskRuntime ?? new InMemoryAgentTaskRuntime();
         _hooks = hooks ?? HookRuntime.Empty;
+        _backgroundRunScheduler = backgroundRunScheduler ?? new BackgroundAgentRunScheduler();
     }
 
     public string Name => "Agent";
@@ -181,74 +184,113 @@ public sealed class AgentTool : ITool
         var backgroundRun = _taskRuntime.StartBackgroundRun(
             BuildTitle(input.Prompt),
             owner: "subagent",
-            workItemId: workItem.Id);
+            workItemId: workItem.Id,
+            initialStatus: AgentBackgroundRunStatus.Queued);
         _taskRuntime.AppendBackgroundRunOutput(
             backgroundRun.Id,
             $"Queued prompt: {input.Prompt.Trim()}");
         var cancellationSource = new CancellationTokenSource();
+        var logger = new BackgroundRunLogger(_taskRuntime, backgroundRun.Id);
+        Action? cancellationCallback = null;
         _taskRuntime.RegisterBackgroundRunCancellation(
             backgroundRun.Id,
-            cancellationSource.Cancel);
-        var logger = new BackgroundRunLogger(_taskRuntime, backgroundRun.Id);
+            () => cancellationCallback?.Invoke());
 
-        _ = Task.Run(async () =>
+        try
         {
-            try
-            {
-                var result = await RunSubagentAsync(
-                    input,
-                    context,
-                    logger,
-                    cancellationSource.Token);
-                logger.Flush();
-                if (result.Success)
+            cancellationCallback = _backgroundRunScheduler.Enqueue(
+                backgroundRun.Id,
+                async cancellationToken =>
                 {
-                    _taskRuntime.UpdateWorkItem(workItem.Id, item =>
-                        item.Status = AgentWorkItemStatus.Completed);
+                    try
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        var result = await RunSubagentAsync(
+                            input,
+                            context,
+                            logger,
+                            cancellationToken);
+                        logger.Flush();
+                        if (result.Success)
+                        {
+                            _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                                item.Status = AgentWorkItemStatus.Completed);
+                            _taskRuntime.AppendBackgroundRunOutput(
+                                backgroundRun.Id,
+                                FormatResult(workItem.Id, input, result));
+                            _taskRuntime.StopBackgroundRun(backgroundRun.Id, "completed");
+                            return;
+                        }
+
+                        var error = result.ErrorMessage ?? "Unknown error";
+                        _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                            item.Status = AgentWorkItemStatus.Blocked);
+                        _taskRuntime.AppendBackgroundRunOutput(
+                            backgroundRun.Id,
+                            $"Subagent {workItem.Id} failed: {error}");
+                        _taskRuntime.FailBackgroundRun(backgroundRun.Id, error);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        logger.Flush();
+                        _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                            item.Status = AgentWorkItemStatus.Cancelled);
+                        _taskRuntime.AppendBackgroundRunOutput(
+                            backgroundRun.Id,
+                            $"Subagent {workItem.Id} was cancelled.");
+                        _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.Flush();
+                        _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                            item.Status = AgentWorkItemStatus.Blocked);
+                        _taskRuntime.AppendBackgroundRunOutput(
+                            backgroundRun.Id,
+                            $"Subagent {workItem.Id} failed: {ex.Message}");
+                        _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
+                    }
+                    finally
+                    {
+                        cancellationSource.Dispose();
+                    }
+                },
+                onStarted: () =>
+                {
+                    _taskRuntime.UpdateBackgroundRun(
+                        backgroundRun.Id,
+                        run => run.Status = AgentBackgroundRunStatus.Running);
                     _taskRuntime.AppendBackgroundRunOutput(
                         backgroundRun.Id,
-                        FormatResult(workItem.Id, input, result));
-                    _taskRuntime.StopBackgroundRun(backgroundRun.Id, "completed");
-                    return;
-                }
-
-                var error = result.ErrorMessage ?? "Unknown error";
-                logger.Flush();
-                _taskRuntime.UpdateWorkItem(workItem.Id, item =>
-                    item.Status = AgentWorkItemStatus.Blocked);
-                _taskRuntime.AppendBackgroundRunOutput(
-                    backgroundRun.Id,
-                    $"Subagent {workItem.Id} failed: {error}");
-                _taskRuntime.FailBackgroundRun(backgroundRun.Id, error);
-            }
-            catch (OperationCanceledException)
-            {
-                logger.Flush();
-                _taskRuntime.UpdateWorkItem(workItem.Id, item =>
-                    item.Status = AgentWorkItemStatus.Cancelled);
-                _taskRuntime.AppendBackgroundRunOutput(
-                    backgroundRun.Id,
-                    $"Subagent {workItem.Id} was cancelled.");
-                _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
-            }
-            catch (Exception ex)
-            {
-                logger.Flush();
-                _taskRuntime.UpdateWorkItem(workItem.Id, item =>
-                    item.Status = AgentWorkItemStatus.Blocked);
-                _taskRuntime.AppendBackgroundRunOutput(
-                    backgroundRun.Id,
-                    $"Subagent {workItem.Id} failed: {ex.Message}");
-                _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
-            }
-            finally
-            {
-                cancellationSource.Dispose();
-            }
-        });
+                        "[status] Background run started.");
+                },
+                onCancelledWhileQueued: () =>
+                {
+                    logger.Flush();
+                    _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                        item.Status = AgentWorkItemStatus.Cancelled);
+                    _taskRuntime.AppendBackgroundRunOutput(
+                        backgroundRun.Id,
+                        $"Subagent {workItem.Id} was cancelled before execution started.");
+                    _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
+                    cancellationSource.Dispose();
+                });
+        }
+        catch (Exception ex)
+        {
+            cancellationSource.Dispose();
+            _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                item.Status = AgentWorkItemStatus.Blocked);
+            _taskRuntime.AppendBackgroundRunOutput(
+                backgroundRun.Id,
+                $"Subagent {workItem.Id} failed to start: {ex.Message}");
+            _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
+            return ToolResult.Error($"Subagent {workItem.Id} failed to start in the background: {ex.Message}");
+        }
 
         return ToolResult.Success(
-            $"Subagent {workItem.Id} started in the background as {backgroundRun.Id}. " +
+            $"Subagent {workItem.Id} was queued in the background as {backgroundRun.Id}. " +
             $"Use AgentStatus with id=\"{backgroundRun.Id}\" to inspect progress, or AgentStop to cancel it.");
     }
 

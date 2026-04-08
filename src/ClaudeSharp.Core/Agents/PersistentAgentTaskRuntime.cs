@@ -58,9 +58,10 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
     public AgentBackgroundRun StartBackgroundRun(
         string name,
         string? owner = null,
-        string? workItemId = null)
+        string? workItemId = null,
+        AgentBackgroundRunStatus initialStatus = AgentBackgroundRunStatus.Running)
     {
-        var run = _inner.StartBackgroundRun(name, owner, workItemId);
+        var run = _inner.StartBackgroundRun(name, owner, workItemId, initialStatus);
         Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
         return run;
     }
@@ -134,7 +135,9 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
     private async Task NormalizeRecoveredStateAsync(CancellationToken cancellationToken)
     {
         foreach (var run in _inner.ListBackgroundRuns()
-                     .Where(run => run.Status is AgentBackgroundRunStatus.Running or AgentBackgroundRunStatus.CancellationRequested)
+                     .Where(run => run.Status is AgentBackgroundRunStatus.Running or
+                         AgentBackgroundRunStatus.CancellationRequested or
+                         AgentBackgroundRunStatus.Queued)
                      .ToArray())
         {
             var originalStatus = run.Status;
@@ -144,7 +147,11 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
             }
             else
             {
-                _inner.FailBackgroundRun(run.Id, "Background run ended when the previous ClaudeSharp process exited.");
+                _inner.FailBackgroundRun(
+                    run.Id,
+                    originalStatus == AgentBackgroundRunStatus.Queued
+                        ? "Background run was still queued when the previous ClaudeSharp process exited."
+                        : "Background run ended when the previous ClaudeSharp process exited.");
             }
 
             await _journal.AppendMetadataEntryAsync(

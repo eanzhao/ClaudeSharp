@@ -75,6 +75,33 @@ public sealed class PersistentAgentTaskRuntimeTests
     }
 
     [Fact]
+    public async Task CreateAsync_NormalizesRecoveredQueuedBackgroundRuns()
+    {
+        var sourceJournal = new RecordingJournal();
+        var source = await PersistentAgentTaskRuntime.CreateAsync(sourceJournal);
+
+        var workItem = source.CreateWorkItem("Inspect runtime", owner: "subagent");
+        source.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.InProgress);
+        source.StartBackgroundRun(
+            "Inspect runtime",
+            owner: "subagent",
+            workItemId: workItem.Id,
+            initialStatus: AgentBackgroundRunStatus.Queued);
+
+        var recoveryJournal = new RecordingJournal();
+        var recovered = await PersistentAgentTaskRuntime.CreateAsync(
+            recoveryJournal,
+            sourceJournal.MetadataEntries);
+
+        var recoveredWorkItem = Assert.Single(recovered.ListWorkItems());
+        Assert.Equal(AgentWorkItemStatus.Blocked, recoveredWorkItem.Status);
+
+        var recoveredRun = Assert.Single(recovered.ListBackgroundRuns());
+        Assert.Equal(AgentBackgroundRunStatus.Failed, recoveredRun.Status);
+        Assert.Contains("still queued", recoveredRun.StopReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CreateAsync_NormalizesRecoveredCancellationRequestedRuns()
     {
         var workItem = new AgentWorkItem

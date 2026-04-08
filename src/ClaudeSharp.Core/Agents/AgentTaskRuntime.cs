@@ -31,7 +31,8 @@ public interface IAgentTaskRuntime
     AgentBackgroundRun StartBackgroundRun(
         string name,
         string? owner = null,
-        string? workItemId = null);
+        string? workItemId = null,
+        AgentBackgroundRunStatus initialStatus = AgentBackgroundRunStatus.Running);
 
     AgentBackgroundRun? GetBackgroundRun(string id);
 
@@ -138,7 +139,8 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
     public AgentBackgroundRun StartBackgroundRun(
         string name,
         string? owner = null,
-        string? workItemId = null)
+        string? workItemId = null,
+        AgentBackgroundRunStatus initialStatus = AgentBackgroundRunStatus.Running)
     {
         var run = new AgentBackgroundRun
         {
@@ -146,6 +148,7 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
             Name = name.Trim(),
             Owner = string.IsNullOrWhiteSpace(owner) ? null : owner.Trim(),
             WorkItemId = string.IsNullOrWhiteSpace(workItemId) ? null : workItemId.Trim(),
+            Status = initialStatus,
         };
 
         lock (_gate)

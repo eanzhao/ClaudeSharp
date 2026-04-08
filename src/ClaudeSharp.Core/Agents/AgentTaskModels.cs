@@ -17,11 +17,12 @@ public enum AgentWorkItemStatus
 /// </summary>
 public enum AgentBackgroundRunStatus
 {
-    Running,
-    CancellationRequested,
-    Stopped,
-    Failed,
-    Cancelled,
+    Running = 0,
+    CancellationRequested = 1,
+    Stopped = 2,
+    Failed = 3,
+    Cancelled = 4,
+    Queued = 5,
 }
 
 /// <summary>

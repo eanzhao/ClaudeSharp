@@ -257,6 +257,153 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_BackgroundSubagentsQueueWhenConcurrencyIsFull()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requestOrder = new List<string>();
+        var gate = new object();
+        var runner = new AsyncRecordingRunner(async (request, cancellationToken) =>
+        {
+            lock (gate)
+                requestOrder.Add(request.Prompt);
+
+            if (string.Equals(request.Prompt, "first task", StringComparison.Ordinal))
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task.WaitAsync(cancellationToken);
+            }
+
+            return new AgentExecutionResult(
+                Summary: $"summary for {request.Prompt}",
+                Success: true,
+                Usage: TokenUsage.Empty,
+                TurnCount: 1);
+        });
+
+        var tool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            runtime,
+            HookRuntime.Empty,
+            new BackgroundAgentRunScheduler(maxConcurrency: 1));
+
+        var firstLaunch = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "first task",
+                run_in_background = true,
+            }),
+            CreateContext());
+        var secondLaunch = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "second task",
+                run_in_background = true,
+            }),
+            CreateContext());
+
+        Assert.False(firstLaunch.IsError);
+        Assert.False(secondLaunch.IsError);
+
+        await firstStarted.Task;
+        await WaitForAsync(() =>
+            runtime.GetBackgroundRun("background-run-1")?.Status == AgentBackgroundRunStatus.Running &&
+            runtime.GetBackgroundRun("background-run-2")?.Status == AgentBackgroundRunStatus.Queued);
+
+        Assert.Equal(["first task"], runner.Requests.Select(request => request.Prompt));
+
+        releaseFirst.TrySetResult();
+
+        await WaitForAsync(() =>
+            runtime.GetBackgroundRun("background-run-1")?.Status == AgentBackgroundRunStatus.Stopped &&
+            runtime.GetBackgroundRun("background-run-2")?.Status == AgentBackgroundRunStatus.Stopped);
+
+        Assert.Equal(["first task", "second task"], runner.Requests.Select(request => request.Prompt));
+        Assert.Contains(
+            runtime.GetBackgroundRun("background-run-2")!.Output,
+            chunk => chunk.Contains("Queued prompt: second task", StringComparison.Ordinal));
+        Assert.Contains(
+            runtime.GetBackgroundRun("background-run-2")!.Output,
+            chunk => chunk.Contains("Background run started", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CancellingQueuedBackgroundSubagentPreventsExecution()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var firstStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new AsyncRecordingRunner(async (request, cancellationToken) =>
+        {
+            if (string.Equals(request.Prompt, "first task", StringComparison.Ordinal))
+            {
+                firstStarted.TrySetResult();
+                await releaseFirst.Task.WaitAsync(cancellationToken);
+            }
+
+            return new AgentExecutionResult(
+                Summary: $"summary for {request.Prompt}",
+                Success: true,
+                Usage: TokenUsage.Empty,
+                TurnCount: 1);
+        });
+
+        var tool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            runtime,
+            HookRuntime.Empty,
+            new BackgroundAgentRunScheduler(maxConcurrency: 1));
+
+        await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "first task",
+                run_in_background = true,
+            }),
+            CreateContext());
+        await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "second task",
+                run_in_background = true,
+            }),
+            CreateContext());
+
+        await firstStarted.Task;
+        await WaitForAsync(() =>
+            runtime.GetBackgroundRun("background-run-2")?.Status == AgentBackgroundRunStatus.Queued);
+
+        var stopTool = new AgentStopTool(runtime);
+        var stop = await stopTool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                id = "background-run-2",
+                reason = "queue no longer needed",
+            }),
+            CreateContext());
+
+        Assert.False(stop.IsError);
+
+        await WaitForAsync(() =>
+            runtime.GetBackgroundRun("background-run-2")?.Status == AgentBackgroundRunStatus.Cancelled);
+
+        releaseFirst.TrySetResult();
+        await WaitForAsync(() =>
+            runtime.GetBackgroundRun("background-run-1")?.Status == AgentBackgroundRunStatus.Stopped);
+
+        Assert.Equal(["first task"], runner.Requests.Select(request => request.Prompt));
+        Assert.Equal(
+            AgentWorkItemStatus.Cancelled,
+            runtime.GetWorkItem("work-item-2")?.Status);
+        Assert.Contains(
+            runtime.GetBackgroundRun("background-run-2")!.Output,
+            chunk => chunk.Contains("before execution started", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AgentStatusTool_ReturnsOverviewAndDetails()
     {
         var runtime = new InMemoryAgentTaskRuntime();

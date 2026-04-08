@@ -111,7 +111,8 @@ public static class AgentStatusFormatter
         if (!string.IsNullOrWhiteSpace(run.WorkItemId))
             builder.AppendLine($"Work item: {run.WorkItemId}");
         builder.AppendLine($"Status: {run.Status}");
-        builder.AppendLine($"Started: {run.StartedAt:O}");
+        builder.AppendLine(
+            $"{(run.Status == AgentBackgroundRunStatus.Queued ? "Queued" : "Started")}: {run.StartedAt:O}");
         builder.AppendLine($"Updated: {run.UpdatedAt:O}");
         if (run.StoppedAt is not null)
             builder.AppendLine($"Stopped: {run.StoppedAt:O}");

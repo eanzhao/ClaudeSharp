@@ -67,7 +67,9 @@ public sealed class AgentTaskRuntimeTests
     public void UpdateBackgroundRunAndFailTrackLatestState()
     {
         var runtime = new InMemoryAgentTaskRuntime();
-        var run = runtime.StartBackgroundRun("research");
+        var run = runtime.StartBackgroundRun(
+            "research",
+            initialStatus: AgentBackgroundRunStatus.Queued);
 
         Assert.True(runtime.UpdateBackgroundRun(run.Id, item => item.Owner = "subagent"));
         Assert.True(runtime.FailBackgroundRun(run.Id, "network timeout"));
@@ -77,6 +79,20 @@ public sealed class AgentTaskRuntimeTests
         Assert.Equal(AgentBackgroundRunStatus.Failed, stored.Status);
         Assert.Equal("network timeout", stored.StopReason);
         Assert.NotNull(stored.StoppedAt);
+    }
+
+    [Fact]
+    public void StartBackgroundRun_CanRecordQueuedInitialStatus()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+
+        var run = runtime.StartBackgroundRun(
+            "queued research",
+            initialStatus: AgentBackgroundRunStatus.Queued);
+
+        var stored = Assert.Single(runtime.ListBackgroundRuns());
+        Assert.Equal(run.Id, stored.Id);
+        Assert.Equal(AgentBackgroundRunStatus.Queued, stored.Status);
     }
 
     [Fact]
