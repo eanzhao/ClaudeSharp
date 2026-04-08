@@ -146,6 +146,20 @@ public class AgentsCommand : ICommand
             return Task.CompletedTask;
         }
 
+        if (trimmed.StartsWith("--", StringComparison.Ordinal) ||
+            parts[0].Equals("list", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryParseOverviewOptions(trimmed, out var options, out var error))
+            {
+                context.WriteLine(error ?? "  Invalid /agents arguments.");
+                context.WriteLine("  Usage: /agents, /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                return Task.CompletedTask;
+            }
+
+            context.WriteLine(AgentStatusFormatter.FormatOverview(context.AgentTaskRuntime, options));
+            return Task.CompletedTask;
+        }
+
         if (AgentStatusFormatter.TryFormatDetails(
                 context.AgentTaskRuntime,
                 trimmed,
@@ -159,8 +173,102 @@ public class AgentsCommand : ICommand
         }
 
         context.WriteLine(details);
-        context.WriteLine("  Usage: /agents, /agents <id>, /agents stop <background-run-id> [reason]");
+        context.WriteLine("  Usage: /agents, /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
         return Task.CompletedTask;
+    }
+
+    private static bool TryParseOverviewOptions(
+        string args,
+        out AgentStatusOverviewOptions options,
+        out string? error)
+    {
+        options = new AgentStatusOverviewOptions();
+        error = null;
+
+        var tokens = args
+            .Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+        if (tokens.Count > 0 &&
+            tokens[0].Equals("list", StringComparison.OrdinalIgnoreCase))
+        {
+            tokens.RemoveAt(0);
+        }
+
+        AgentStatusOverviewKind kind = AgentStatusOverviewKind.All;
+        string? status = null;
+        string? owner = null;
+        int offset = 0;
+        int? limit = null;
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (!token.StartsWith("--", StringComparison.Ordinal))
+            {
+                error = $"  Unknown argument: {token}";
+                return false;
+            }
+
+            if (i + 1 >= tokens.Count)
+            {
+                error = $"  Missing value for {token}.";
+                return false;
+            }
+
+            var value = tokens[++i];
+            switch (token)
+            {
+                case "--kind":
+                    if (!AgentStatusFormatter.TryParseOverviewKind(value, out kind))
+                    {
+                        error = "  --kind must be all, work_items, or background_runs.";
+                        return false;
+                    }
+
+                    break;
+
+                case "--status":
+                    status = value;
+                    break;
+
+                case "--owner":
+                    owner = value;
+                    break;
+
+                case "--offset":
+                    if (!int.TryParse(value, out offset) || offset < 0)
+                    {
+                        error = "  --offset must be a non-negative integer.";
+                        return false;
+                    }
+
+                    break;
+
+                case "--limit":
+                    if (!int.TryParse(value, out var parsedLimit) || parsedLimit <= 0)
+                    {
+                        error = "  --limit must be a positive integer.";
+                        return false;
+                    }
+
+                    limit = parsedLimit;
+                    break;
+
+                default:
+                    error = $"  Unknown option: {token}";
+                    return false;
+            }
+        }
+
+        options = new AgentStatusOverviewOptions
+        {
+            Kind = kind,
+            Status = status,
+            Owner = owner,
+            Offset = offset,
+            Limit = limit,
+        };
+        return true;
     }
 }
 

@@ -104,6 +104,9 @@ internal static class Program
             ? new AnthropicClient()
             : new AnthropicClient { ApiKey = apiKey };
         var providerRouter = new DefaultProviderCapabilityRouter();
+        var agentSettings = AgentSettingsLoader.Load(
+            workingDirectory,
+            options.SettingsPath);
         var hookBuild = HookRuntimeBuilder.Build(
             workingDirectory,
             options.SettingsPath);
@@ -144,7 +147,8 @@ internal static class Program
             () => config.Model,
             client,
             hooks,
-            agentTaskRuntime);
+            agentTaskRuntime,
+            agentSettings.Settings.BackgroundRunConcurrency);
         var commandRegistry = BuildCommandRegistry();
         await using var mcpRuntime = await McpRuntime.CreateAsync(
             toolRegistry,
@@ -182,6 +186,8 @@ internal static class Program
             startupParts.Add(mcpRuntime.StartupSummary);
         if (!string.IsNullOrWhiteSpace(hookBuild.StartupSummary))
             startupParts.Add(hookBuild.StartupSummary);
+        if (!string.IsNullOrWhiteSpace(agentSettings.StartupSummary))
+            startupParts.Add(agentSettings.StartupSummary);
 
         var startupNote = startupParts.Count == 0
             ? null
@@ -205,10 +211,12 @@ internal static class Program
         Func<string?> currentModelAccessor,
         AnthropicClient client,
         IHookRuntime hooks,
-        IAgentTaskRuntime agentTaskRuntime)
+        IAgentTaskRuntime agentTaskRuntime,
+        int backgroundRunConcurrency)
     {
         var registry = new ToolRegistry();
-        var backgroundRunScheduler = new BackgroundAgentRunScheduler(maxConcurrency: 1);
+        var backgroundRunScheduler = new BackgroundAgentRunScheduler(
+            maxConcurrency: backgroundRunConcurrency);
         registry.Register(new BashTool());
         registry.Register(new FileReadTool());
         registry.Register(new FileWriteTool());

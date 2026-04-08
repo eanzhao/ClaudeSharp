@@ -492,6 +492,40 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task AgentStatusTool_CanFilterAndPaginateOverview()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        runtime.CreateWorkItem("Inspect tools", owner: "alice");
+        runtime.StartBackgroundRun(
+            "Queued run one",
+            owner: "subagent",
+            initialStatus: AgentBackgroundRunStatus.Queued);
+        runtime.StartBackgroundRun(
+            "Queued run two",
+            owner: "subagent",
+            initialStatus: AgentBackgroundRunStatus.Queued);
+
+        var tool = new AgentStatusTool(runtime);
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                kind = "background_runs",
+                status = "queued",
+                owner = "subagent",
+                offset = 1,
+                limit = 1,
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("Background runs:", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Showing background runs 2-2 of 2.", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Queued run one", result.Data, StringComparison.Ordinal);
+        Assert.DoesNotContain("Queued run two", result.Data, StringComparison.Ordinal);
+        Assert.DoesNotContain("Work items:", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CanDisableWorkspaceIsolation()
     {
         var runtime = new InMemoryAgentTaskRuntime();

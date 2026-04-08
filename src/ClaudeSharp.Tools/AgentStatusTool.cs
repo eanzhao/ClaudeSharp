@@ -13,6 +13,21 @@ public sealed class AgentStatusToolInput
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 
+    [JsonPropertyName("kind")]
+    public string? Kind { get; set; }
+
+    [JsonPropertyName("status")]
+    public string? Status { get; set; }
+
+    [JsonPropertyName("owner")]
+    public string? Owner { get; set; }
+
+    [JsonPropertyName("offset")]
+    public int? Offset { get; set; }
+
+    [JsonPropertyName("limit")]
+    public int? Limit { get; set; }
+
     [JsonPropertyName("include_output")]
     public bool IncludeOutput { get; set; } = true;
 
@@ -51,6 +66,26 @@ public sealed class AgentStatusTool : ITool
               "type": "string",
               "description": "Optional work-item or background-run id to inspect in detail"
             },
+            "kind": {
+              "type": "string",
+              "description": "For overview listings only: all, work_items, or background_runs"
+            },
+            "status": {
+              "type": "string",
+              "description": "For overview listings only: filter by a status like queued, running, completed, or blocked"
+            },
+            "owner": {
+              "type": "string",
+              "description": "For overview listings only: filter by owner"
+            },
+            "offset": {
+              "type": "integer",
+              "description": "For overview listings only: skip this many matching entries before listing results"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "For overview listings only: return at most this many matching entries per section"
+            },
             "include_output": {
               "type": "boolean",
               "description": "When inspecting a background run, include any captured output"
@@ -75,6 +110,7 @@ public sealed class AgentStatusTool : ITool
             Check the state of subagent work items and background runs.
 
             Use this after Agent with run_in_background=true, or whenever you need to see whether a subagent has finished.
+            For overview listings, you can filter by kind, status, owner, offset, and limit.
             When polling a long-running background run, use output_offset and output_limit to fetch only new output entries.
             """);
     }
@@ -83,7 +119,17 @@ public sealed class AgentStatusTool : ITool
     {
         try
         {
-            JsonSerializer.Deserialize<AgentStatusToolInput>(input);
+            var parsed = JsonSerializer.Deserialize<AgentStatusToolInput>(input) ?? new AgentStatusToolInput();
+            if (!AgentStatusFormatter.TryParseOverviewKind(parsed.Kind, out _))
+                return Task.FromResult(ValidationResult.Invalid("kind must be all, work_items, or background_runs."));
+            if (parsed.Offset is < 0)
+                return Task.FromResult(ValidationResult.Invalid("offset must be 0 or greater."));
+            if (parsed.Limit is <= 0)
+                return Task.FromResult(ValidationResult.Invalid("limit must be greater than 0."));
+            if (parsed.OutputOffset is < 0)
+                return Task.FromResult(ValidationResult.Invalid("output_offset must be 0 or greater."));
+            if (parsed.OutputLimit is <= 0)
+                return Task.FromResult(ValidationResult.Invalid("output_limit must be greater than 0."));
             return Task.FromResult(ValidationResult.Valid());
         }
         catch (JsonException ex)
@@ -108,7 +154,20 @@ public sealed class AgentStatusTool : ITool
     {
         var parsed = JsonSerializer.Deserialize<AgentStatusToolInput>(input) ?? new AgentStatusToolInput();
         if (string.IsNullOrWhiteSpace(parsed.Id))
-            return Task.FromResult(ToolResult.Success(AgentStatusFormatter.FormatOverview(_taskRuntime)));
+        {
+            AgentStatusFormatter.TryParseOverviewKind(parsed.Kind, out var kind);
+            return Task.FromResult(ToolResult.Success(
+                AgentStatusFormatter.FormatOverview(
+                    _taskRuntime,
+                    new AgentStatusOverviewOptions
+                    {
+                        Kind = kind,
+                        Status = parsed.Status,
+                        Owner = parsed.Owner,
+                        Offset = Math.Max(0, parsed.Offset ?? 0),
+                        Limit = parsed.Limit,
+                    })));
+        }
 
         var found = AgentStatusFormatter.TryFormatDetails(
             _taskRuntime,
