@@ -98,9 +98,133 @@ public sealed class AgentsCommandTests
         Assert.Contains(stopped.Id, output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_CanTailRecentBackgroundRunOutput()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var run = runtime.StartBackgroundRun("Inspect runtime", owner: "subagent");
+        runtime.AppendBackgroundRunOutput(run.Id, "line 1");
+        runtime.AppendBackgroundRunOutput(run.Id, "line 2");
+        runtime.AppendBackgroundRunOutput(run.Id, "line 3");
+        runtime.StopBackgroundRun(run.Id, "completed");
+
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            $"tail {run.Id} --last 2",
+            CreateContext(runtime, lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains($"Background run output: {run.Id}", output, StringComparison.Ordinal);
+        Assert.Contains("Showing output entries 2-3 of 3.", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("line 1", output, StringComparison.Ordinal);
+        Assert.Contains("line 2", output, StringComparison.Ordinal);
+        Assert.Contains("line 3", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CanFollowBackgroundRunUntilCompletion()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var run = runtime.StartBackgroundRun("Inspect runtime", owner: "subagent");
+        runtime.AppendBackgroundRunOutput(run.Id, "line 1");
+
+        var delayCalls = 0;
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            $"tail {run.Id} --last 1 --follow --poll-ms 1",
+            CreateContext(
+                runtime,
+                lines,
+                async (_, _) =>
+                {
+                    delayCalls++;
+                    if (delayCalls == 1)
+                    {
+                        runtime.AppendBackgroundRunOutput(run.Id, "line 2");
+                        runtime.StopBackgroundRun(run.Id, "completed");
+                    }
+
+                    await Task.CompletedTask;
+                }));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("line 1", output, StringComparison.Ordinal);
+        Assert.Contains("[tail] Following", output, StringComparison.Ordinal);
+        Assert.Contains("line 2", output, StringComparison.Ordinal);
+        Assert.Contains($"[tail] {run.Id} finished with status Stopped.", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReportsInvalidTailArguments()
+    {
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "tail background-run-1 --last 0",
+            CreateContext(new InMemoryAgentTaskRuntime(), lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("--last must be a positive integer", output, StringComparison.Ordinal);
+        Assert.Contains("Usage: /agents tail", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CanPruneOldTerminalHistory()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var oldItem = runtime.CreateWorkItem("old item");
+        runtime.UpdateWorkItem(oldItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var oldRun = runtime.StartBackgroundRun(
+            "old run",
+            workItemId: oldItem.Id,
+            initialStatus: AgentBackgroundRunStatus.Stopped);
+
+        var newItem = runtime.CreateWorkItem("new item");
+        runtime.UpdateWorkItem(newItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var newRun = runtime.StartBackgroundRun(
+            "new run",
+            workItemId: newItem.Id,
+            initialStatus: AgentBackgroundRunStatus.Stopped);
+
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "prune --keep-runs 1 --keep-work-items 0",
+            CreateContext(runtime, lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Pruned 1 background run(s) and 1 work item(s).", output, StringComparison.Ordinal);
+        Assert.Null(runtime.GetBackgroundRun(oldRun.Id));
+        Assert.Null(runtime.GetWorkItem(oldItem.Id));
+        Assert.NotNull(runtime.GetBackgroundRun(newRun.Id));
+        Assert.NotNull(runtime.GetWorkItem(newItem.Id));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReportsInvalidPruneArguments()
+    {
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "prune --keep-runs -1",
+            CreateContext(new InMemoryAgentTaskRuntime(), lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("--keep-runs must be a non-negative integer", output, StringComparison.Ordinal);
+        Assert.Contains("Usage: /agents prune", output, StringComparison.Ordinal);
+    }
+
     private static CommandContext CreateContext(
         IAgentTaskRuntime runtime,
-        List<string> lines) =>
+        List<string> lines,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null) =>
         new()
         {
             WriteLine = lines.Add,
@@ -109,5 +233,7 @@ public sealed class AgentsCommandTests
             PermissionContext = new PermissionContext(),
             AgentTaskRuntime = runtime,
             Commands = [],
+            DelayAsync = delayAsync,
+            CancellationToken = CancellationToken.None,
         };
 }

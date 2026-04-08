@@ -141,4 +141,46 @@ public sealed class AgentTaskRuntimeTests
         Assert.Equal([later.Id, earlier.Id], runtime.ListWorkItems().Select(item => item.Id));
         Assert.Equal(2, runtime.ListBackgroundRuns().Count);
     }
+
+    [Fact]
+    public void PruneHistory_RemovesOldTerminalRunsAndUnprotectedWorkItems()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+
+        var oldItem = runtime.CreateWorkItem("old item");
+        runtime.UpdateWorkItem(oldItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var oldRun = runtime.StartBackgroundRun(
+            "old run",
+            workItemId: oldItem.Id,
+            initialStatus: AgentBackgroundRunStatus.Stopped);
+
+        var newItem = runtime.CreateWorkItem("new item");
+        runtime.UpdateWorkItem(newItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var newRun = runtime.StartBackgroundRun(
+            "new run",
+            workItemId: newItem.Id,
+            initialStatus: AgentBackgroundRunStatus.Stopped);
+
+        var activeItem = runtime.CreateWorkItem("active item");
+        runtime.UpdateWorkItem(activeItem.Id, item => item.Status = AgentWorkItemStatus.InProgress);
+        var activeRun = runtime.StartBackgroundRun(
+            "active run",
+            workItemId: activeItem.Id,
+            initialStatus: AgentBackgroundRunStatus.Running);
+
+        var result = runtime.PruneHistory(new AgentRetentionPolicy
+        {
+            RetainTerminalBackgroundRuns = 1,
+            RetainTerminalWorkItems = 0,
+        });
+
+        Assert.Equal([oldRun.Id], result.RemovedBackgroundRunIds);
+        Assert.Equal([oldItem.Id], result.RemovedWorkItemIds);
+        Assert.Null(runtime.GetBackgroundRun(oldRun.Id));
+        Assert.Null(runtime.GetWorkItem(oldItem.Id));
+        Assert.NotNull(runtime.GetBackgroundRun(newRun.Id));
+        Assert.NotNull(runtime.GetWorkItem(newItem.Id));
+        Assert.NotNull(runtime.GetBackgroundRun(activeRun.Id));
+        Assert.NotNull(runtime.GetWorkItem(activeItem.Id));
+    }
 }

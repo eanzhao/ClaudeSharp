@@ -15,7 +15,8 @@ public sealed class AgentSettingsLoaderTests
         var globalConfig = temp.WriteFile("global/settings.json", """
 {
   "agents": {
-    "backgroundConcurrency": 2
+    "backgroundConcurrency": 2,
+    "retainCompletedBackgroundRuns": 12
   }
 }
 """);
@@ -23,7 +24,9 @@ public sealed class AgentSettingsLoaderTests
         var projectConfig = temp.WriteFile("project/.claude/settings.json", """
 {
   "agents": {
-    "background_run_concurrency": 4
+    "background_run_concurrency": 4,
+    "retain_completed_background_runs": 6,
+    "retain_completed_work_items": 8
   }
 }
 """);
@@ -33,6 +36,8 @@ public sealed class AgentSettingsLoaderTests
             temp.FullPath("project"));
 
         Assert.Equal(4, result.Settings.BackgroundRunConcurrency);
+        Assert.Equal(6, result.Settings.RetainCompletedBackgroundRuns);
+        Assert.Equal(8, result.Settings.RetainCompletedWorkItems);
         Assert.Equal(
             [Path.GetFullPath(globalConfig), Path.GetFullPath(projectConfig)],
             result.SourcePaths);
@@ -45,7 +50,8 @@ public sealed class AgentSettingsLoaderTests
         var globalConfig = temp.WriteFile("global/settings.json", """
 {
   "agents": {
-    "backgroundConcurrency": 3
+    "backgroundConcurrency": 3,
+    "retainCompletedWorkItems": 5
   }
 }
 """);
@@ -53,7 +59,8 @@ public sealed class AgentSettingsLoaderTests
         var projectConfig = temp.WriteFile("project/.claude/settings.json", """
 {
   "agents": {
-    "backgroundConcurrency": 0
+    "backgroundConcurrency": 0,
+    "retainCompletedWorkItems": -1
   }
 }
 """);
@@ -63,8 +70,12 @@ public sealed class AgentSettingsLoaderTests
             temp.FullPath("project"));
 
         Assert.Equal(3, result.Settings.BackgroundRunConcurrency);
+        Assert.Equal(5, result.Settings.RetainCompletedWorkItems);
         Assert.Contains(
             result.Diagnostics,
             diagnostic => diagnostic.Contains("invalid background concurrency", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("invalid completed work-item retention", StringComparison.OrdinalIgnoreCase));
     }
 }

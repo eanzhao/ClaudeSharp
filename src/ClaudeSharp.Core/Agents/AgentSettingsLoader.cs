@@ -64,6 +64,8 @@ public static class AgentSettingsLoader
         }
 
         var backgroundRunConcurrency = current.BackgroundRunConcurrency;
+        var retainCompletedBackgroundRuns = current.RetainCompletedBackgroundRuns;
+        var retainCompletedWorkItems = current.RetainCompletedWorkItems;
         if (TryGetProperty(agentsElement, "backgroundRunConcurrency", out var concurrencyElement) ||
             TryGetProperty(agentsElement, "background_run_concurrency", out concurrencyElement) ||
             TryGetProperty(agentsElement, "backgroundConcurrency", out concurrencyElement) ||
@@ -82,10 +84,52 @@ public static class AgentSettingsLoader
             }
         }
 
+        if (TryGetProperty(agentsElement, "retainCompletedBackgroundRuns", out var retainRunsElement) ||
+            TryGetProperty(agentsElement, "retain_completed_background_runs", out retainRunsElement) ||
+            TryGetProperty(agentsElement, "completedBackgroundRunRetention", out retainRunsElement) ||
+            TryGetProperty(agentsElement, "completed_background_run_retention", out retainRunsElement))
+        {
+            if (TryParseNonNegativeInt(retainRunsElement, out var parsed))
+            {
+                retainCompletedBackgroundRuns = parsed;
+            }
+            else
+            {
+                diagnostics.Add(
+                    $"Agent settings: invalid completed background-run retention in {configPath}; using {retainCompletedBackgroundRuns}.");
+            }
+        }
+
+        if (TryGetProperty(agentsElement, "retainCompletedWorkItems", out var retainItemsElement) ||
+            TryGetProperty(agentsElement, "retain_completed_work_items", out retainItemsElement) ||
+            TryGetProperty(agentsElement, "completedWorkItemRetention", out retainItemsElement) ||
+            TryGetProperty(agentsElement, "completed_work_item_retention", out retainItemsElement))
+        {
+            if (TryParseNonNegativeInt(retainItemsElement, out var parsed))
+            {
+                retainCompletedWorkItems = parsed;
+            }
+            else
+            {
+                diagnostics.Add(
+                    $"Agent settings: invalid completed work-item retention in {configPath}; using {retainCompletedWorkItems}.");
+            }
+        }
+
         return current with
         {
             BackgroundRunConcurrency = backgroundRunConcurrency,
+            RetainCompletedBackgroundRuns = retainCompletedBackgroundRuns,
+            RetainCompletedWorkItems = retainCompletedWorkItems,
         };
+    }
+
+    private static bool TryParseNonNegativeInt(JsonElement element, out int value)
+    {
+        value = default;
+        return element.ValueKind == JsonValueKind.Number &&
+               element.TryGetInt32(out value) &&
+               value >= 0;
     }
 
     private static bool TryGetProperty(

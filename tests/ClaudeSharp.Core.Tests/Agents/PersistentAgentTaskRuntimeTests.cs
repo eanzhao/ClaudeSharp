@@ -177,4 +177,81 @@ public sealed class PersistentAgentTaskRuntimeTests
         Assert.Equal(AgentBackgroundRunStatus.Stopped, restoredRun.Status);
         Assert.Equal(["Summary: all good"], restoredRun.Output);
     }
+
+    [Fact]
+    public async Task PruneHistory_PersistsDeletedEntriesAcrossRestore()
+    {
+        var journal = new RecordingJournal();
+        var runtime = await PersistentAgentTaskRuntime.CreateAsync(journal);
+
+        var oldItem = runtime.CreateWorkItem("old item", owner: "subagent");
+        runtime.UpdateWorkItem(oldItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var oldRun = runtime.StartBackgroundRun(
+            "old run",
+            owner: "subagent",
+            workItemId: oldItem.Id);
+        runtime.StopBackgroundRun(oldRun.Id, "completed");
+
+        var newItem = runtime.CreateWorkItem("new item", owner: "subagent");
+        runtime.UpdateWorkItem(newItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var newRun = runtime.StartBackgroundRun(
+            "new run",
+            owner: "subagent",
+            workItemId: newItem.Id);
+        runtime.StopBackgroundRun(newRun.Id, "completed");
+
+        var pruneResult = runtime.PruneHistory(new AgentRetentionPolicy
+        {
+            RetainTerminalBackgroundRuns = 1,
+            RetainTerminalWorkItems = 0,
+        });
+
+        Assert.Equal([oldRun.Id], pruneResult.RemovedBackgroundRunIds);
+        Assert.Equal([oldItem.Id], pruneResult.RemovedWorkItemIds);
+        Assert.Contains(journal.MetadataEntries, entry => entry.EventType == AgentTaskPersistence.BackgroundRunDeletedEventType);
+        Assert.Contains(journal.MetadataEntries, entry => entry.EventType == AgentTaskPersistence.WorkItemDeletedEventType);
+
+        var restored = await PersistentAgentTaskRuntime.CreateAsync(
+            new RecordingJournal(),
+            journal.MetadataEntries);
+
+        var restoredItem = Assert.Single(restored.ListWorkItems());
+        var restoredRun = Assert.Single(restored.ListBackgroundRuns());
+        Assert.Equal(newItem.Id, restoredItem.Id);
+        Assert.Equal(newRun.Id, restoredRun.Id);
+    }
+
+    [Fact]
+    public async Task CreateAsync_AppliesAutoPrunePolicyAndPersistsDeletes()
+    {
+        var journal = new RecordingJournal();
+        var runtime = await PersistentAgentTaskRuntime.CreateAsync(
+            journal,
+            autoPrunePolicy: new AgentRetentionPolicy
+            {
+                RetainTerminalBackgroundRuns = 1,
+                RetainTerminalWorkItems = 0,
+            });
+
+        var oldItem = runtime.CreateWorkItem("old item", owner: "subagent");
+        runtime.UpdateWorkItem(oldItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var oldRun = runtime.StartBackgroundRun(
+            "old run",
+            owner: "subagent",
+            workItemId: oldItem.Id);
+        runtime.StopBackgroundRun(oldRun.Id, "completed");
+
+        var newItem = runtime.CreateWorkItem("new item", owner: "subagent");
+        runtime.UpdateWorkItem(newItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var newRun = runtime.StartBackgroundRun(
+            "new run",
+            owner: "subagent",
+            workItemId: newItem.Id);
+        runtime.StopBackgroundRun(newRun.Id, "completed");
+
+        Assert.Equal([newItem.Id], runtime.ListWorkItems().Select(item => item.Id));
+        Assert.Equal([newRun.Id], runtime.ListBackgroundRuns().Select(run => run.Id));
+        Assert.Contains(journal.MetadataEntries, entry => entry.EventType == AgentTaskPersistence.BackgroundRunDeletedEventType);
+        Assert.Contains(journal.MetadataEntries, entry => entry.EventType == AgentTaskPersistence.WorkItemDeletedEventType);
+    }
 }

@@ -13,6 +13,27 @@ public enum AgentBackgroundRunCancellationResult
 }
 
 /// <summary>
+/// Defines retention settings for terminal subagent history.
+/// </summary>
+public sealed record AgentRetentionPolicy
+{
+    public int RetainTerminalBackgroundRuns { get; init; } = 100;
+    public int RetainTerminalWorkItems { get; init; } = 100;
+}
+
+/// <summary>
+/// Represents the result of pruning terminal subagent history.
+/// </summary>
+public sealed record AgentPruneResult(
+    IReadOnlyList<string> RemovedWorkItemIds,
+    IReadOnlyList<string> RemovedBackgroundRunIds)
+{
+    public int RemovedWorkItemCount => RemovedWorkItemIds.Count;
+    public int RemovedBackgroundRunCount => RemovedBackgroundRunIds.Count;
+    public bool HasChanges => RemovedWorkItemCount > 0 || RemovedBackgroundRunCount > 0;
+}
+
+/// <summary>
 /// Defines the contract for agent task runtime.
 /// </summary>
 public interface IAgentTaskRuntime
@@ -53,6 +74,8 @@ public interface IAgentTaskRuntime
     bool FailBackgroundRun(string id, string? reason = null);
 
     bool CancelBackgroundRun(string id, string? reason = null);
+
+    AgentPruneResult PruneHistory(AgentRetentionPolicy? policy = null);
 }
 
 /// <summary>
@@ -283,6 +306,23 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
         }
     }
 
+    public AgentPruneResult PruneHistory(AgentRetentionPolicy? policy = null)
+    {
+        var resolvedPolicy = policy ?? new AgentRetentionPolicy();
+        var removedWorkItemIds = new List<string>();
+        var removedBackgroundRunIds = new List<string>();
+
+        lock (_gate)
+        {
+            removedBackgroundRunIds.AddRange(PruneBackgroundRunsNoLock(resolvedPolicy));
+            removedWorkItemIds.AddRange(PruneWorkItemsNoLock(resolvedPolicy));
+        }
+
+        return new AgentPruneResult(
+            removedWorkItemIds,
+            removedBackgroundRunIds);
+    }
+
     private IReadOnlyList<AgentWorkItem> SnapshotWorkItems()
     {
         lock (_gate)
@@ -295,6 +335,50 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
             return _backgroundRuns.Values.ToArray();
     }
 
+    private IReadOnlyList<string> PruneBackgroundRunsNoLock(AgentRetentionPolicy policy)
+    {
+        var keepCount = Math.Max(0, policy.RetainTerminalBackgroundRuns);
+        var removedIds = _backgroundRuns.Values
+            .Where(run => IsTerminal(run.Status))
+            .OrderByDescending(run => run.UpdatedAt)
+            .ThenByDescending(run => run.StartedAt)
+            .ThenByDescending(run => run.Id, StringComparer.OrdinalIgnoreCase)
+            .Skip(keepCount)
+            .Select(run => run.Id)
+            .ToArray();
+
+        foreach (var id in removedIds)
+        {
+            _backgroundRuns.Remove(id);
+            _backgroundRunCancellers.Remove(id);
+        }
+
+        return removedIds;
+    }
+
+    private IReadOnlyList<string> PruneWorkItemsNoLock(AgentRetentionPolicy policy)
+    {
+        var protectedWorkItemIds = _backgroundRuns.Values
+            .Where(run => !string.IsNullOrWhiteSpace(run.WorkItemId))
+            .Select(run => run.WorkItemId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var keepCount = Math.Max(0, policy.RetainTerminalWorkItems);
+        var removedIds = _workItems.Values
+            .Where(item => IsTerminal(item.Status))
+            .Where(item => !protectedWorkItemIds.Contains(item.Id))
+            .OrderByDescending(item => item.UpdatedAt)
+            .ThenByDescending(item => item.CreatedAt)
+            .ThenByDescending(item => item.Id, StringComparer.OrdinalIgnoreCase)
+            .Skip(keepCount)
+            .Select(item => item.Id)
+            .ToArray();
+
+        foreach (var id in removedIds)
+            _workItems.Remove(id);
+
+        return removedIds;
+    }
+
     private static int ParseSequence(string id, string prefix)
     {
         if (!id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -304,4 +388,14 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
             ? parsed
             : 0;
     }
+
+    private static bool IsTerminal(AgentBackgroundRunStatus status) =>
+        status is AgentBackgroundRunStatus.Stopped or
+            AgentBackgroundRunStatus.Failed or
+            AgentBackgroundRunStatus.Cancelled;
+
+    private static bool IsTerminal(AgentWorkItemStatus status) =>
+        status is AgentWorkItemStatus.Blocked or
+            AgentWorkItemStatus.Completed or
+            AgentWorkItemStatus.Cancelled;
 }

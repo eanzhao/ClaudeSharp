@@ -9,24 +9,29 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
 {
     private readonly InMemoryAgentTaskRuntime _inner;
     private readonly IConversationJournal _journal;
+    private readonly AgentRetentionPolicy? _autoPrunePolicy;
 
     private PersistentAgentTaskRuntime(
         InMemoryAgentTaskRuntime inner,
-        IConversationJournal journal)
+        IConversationJournal journal,
+        AgentRetentionPolicy? autoPrunePolicy)
     {
         _inner = inner;
         _journal = journal;
+        _autoPrunePolicy = autoPrunePolicy;
     }
 
     public static async Task<PersistentAgentTaskRuntime> CreateAsync(
         IConversationJournal journal,
         IReadOnlyList<TranscriptMetadataEntry>? metadataEntries = null,
+        AgentRetentionPolicy? autoPrunePolicy = null,
         CancellationToken cancellationToken = default)
     {
         var restored = AgentTaskPersistence.Restore(metadataEntries ?? []);
         var runtime = new PersistentAgentTaskRuntime(
             new InMemoryAgentTaskRuntime(restored.WorkItems, restored.BackgroundRuns),
-            journal);
+            journal,
+            autoPrunePolicy);
 
         await runtime.NormalizeRecoveredStateAsync(cancellationToken);
         return runtime;
@@ -109,7 +114,10 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
     {
         var updated = _inner.StopBackgroundRun(id, reason);
         if (updated && _inner.GetBackgroundRun(id) is { } run)
+        {
             Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
+            ApplyAutoPrune();
+        }
 
         return updated;
     }
@@ -118,7 +126,10 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
     {
         var updated = _inner.FailBackgroundRun(id, reason);
         if (updated && _inner.GetBackgroundRun(id) is { } run)
+        {
             Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
+            ApplyAutoPrune();
+        }
 
         return updated;
     }
@@ -127,9 +138,19 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
     {
         var updated = _inner.CancelBackgroundRun(id, reason);
         if (updated && _inner.GetBackgroundRun(id) is { } run)
+        {
             Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
+            ApplyAutoPrune();
+        }
 
         return updated;
+    }
+
+    public AgentPruneResult PruneHistory(AgentRetentionPolicy? policy = null)
+    {
+        var result = _inner.PruneHistory(policy);
+        PersistPruneResult(result);
+        return result;
     }
 
     private async Task NormalizeRecoveredStateAsync(CancellationToken cancellationToken)
@@ -176,6 +197,10 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
                     cancellationToken);
             }
         }
+
+        await PersistPruneResultAsync(
+            _inner.PruneHistory(_autoPrunePolicy),
+            cancellationToken);
     }
 
     private void Persist(TranscriptMetadataEntry entry)
@@ -187,6 +212,42 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
         catch
         {
             // Agent runtime state persistence is best-effort; in-memory state still updates.
+        }
+    }
+
+    private void ApplyAutoPrune()
+    {
+        if (_autoPrunePolicy == null)
+            return;
+
+        PersistPruneResult(_inner.PruneHistory(_autoPrunePolicy));
+    }
+
+    private void PersistPruneResult(AgentPruneResult result)
+    {
+        foreach (var workItemId in result.RemovedWorkItemIds)
+            Persist(AgentTaskPersistence.CreateWorkItemDeletedEntry(workItemId));
+
+        foreach (var backgroundRunId in result.RemovedBackgroundRunIds)
+            Persist(AgentTaskPersistence.CreateBackgroundRunDeletedEntry(backgroundRunId));
+    }
+
+    private async Task PersistPruneResultAsync(
+        AgentPruneResult result,
+        CancellationToken cancellationToken)
+    {
+        foreach (var workItemId in result.RemovedWorkItemIds)
+        {
+            await _journal.AppendMetadataEntryAsync(
+                AgentTaskPersistence.CreateWorkItemDeletedEntry(workItemId),
+                cancellationToken);
+        }
+
+        foreach (var backgroundRunId in result.RemovedBackgroundRunIds)
+        {
+            await _journal.AppendMetadataEntryAsync(
+                AgentTaskPersistence.CreateBackgroundRunDeletedEntry(backgroundRunId),
+                cancellationToken);
         }
     }
 }

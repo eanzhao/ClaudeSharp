@@ -141,7 +141,8 @@ internal static class Program
             : [];
         var agentTaskRuntime = await PersistentAgentTaskRuntime.CreateAsync(
             journal,
-            agentMetadataEntries);
+            agentMetadataEntries,
+            autoPrunePolicy: agentSettings.Settings.BuildRetentionPolicy());
         var toolRegistry = BuildToolRegistry(
             providerRouter,
             () => config.Model,
@@ -331,6 +332,8 @@ Options:
                 PermissionContext = _permissionContext,
                 AgentTaskRuntime = _agentTaskRuntime,
                 Commands = _commandRegistry.GetAll(),
+                DelayAsync = static (delay, cancellationToken) => Task.Delay(delay, cancellationToken),
+                CancellationToken = CancellationToken.None,
                 RequestExit = () => _exitRequested = true,
                 RequestClear = () =>
                 {

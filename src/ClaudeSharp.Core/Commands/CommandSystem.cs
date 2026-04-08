@@ -33,6 +33,8 @@ public class CommandContext
     public required Permissions.PermissionContext PermissionContext { get; init; }
     public required IAgentTaskRuntime AgentTaskRuntime { get; init; }
     public required IReadOnlyList<ICommand> Commands { get; init; }
+    public Func<TimeSpan, CancellationToken, Task>? DelayAsync { get; init; }
+    public CancellationToken CancellationToken { get; init; }
     public Action? RequestExit { get; init; }
     public Action? RequestClear { get; init; }
 }

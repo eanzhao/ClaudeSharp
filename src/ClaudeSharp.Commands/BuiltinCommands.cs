@@ -147,12 +147,36 @@ public class AgentsCommand : ICommand
         }
 
         if (parts.Length > 0 &&
+            parts[0] is "prune" or "archive")
+        {
+            if (!TryParsePruneOptions(trimmed, out var options, out var error))
+            {
+                context.WriteLine(error ?? "  Invalid /agents prune arguments.");
+                context.WriteLine("  Usage: /agents prune [--keep-runs <n>] [--keep-work-items <n>]");
+                return Task.CompletedTask;
+            }
+
+            var result = context.AgentTaskRuntime.PruneHistory(options);
+            var message = result.HasChanges
+                ? $"  Pruned {result.RemovedBackgroundRunCount} background run(s) and {result.RemovedWorkItemCount} work item(s)."
+                : "  Nothing to prune.";
+            context.WriteLine(message);
+            return Task.CompletedTask;
+        }
+
+        if (parts.Length > 0 &&
+            parts[0].Equals("tail", StringComparison.OrdinalIgnoreCase))
+        {
+            return TailBackgroundRunAsync(trimmed, context);
+        }
+
+        if (parts.Length > 0 &&
             parts[0].Equals("summary", StringComparison.OrdinalIgnoreCase))
         {
             if (!TryParseSummaryOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents summary arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -166,7 +190,7 @@ public class AgentsCommand : ICommand
             if (!TryParseOverviewOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -187,8 +211,81 @@ public class AgentsCommand : ICommand
         }
 
         context.WriteLine(details);
-        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
         return Task.CompletedTask;
+    }
+
+    private static async Task TailBackgroundRunAsync(
+        string args,
+        CommandContext context)
+    {
+        if (!TryParseTailOptions(args, out var options, out var error))
+        {
+            context.WriteLine(error ?? "  Invalid /agents tail arguments.");
+            context.WriteLine("  Usage: /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>]");
+            return;
+        }
+
+        if (!AgentStatusFormatter.TryGetOutputPage(
+                context.AgentTaskRuntime,
+                options.BackgroundRunId,
+                offset: 0,
+                limit: null,
+                out var initialRun,
+                out var initialPage,
+                out var lookupError))
+        {
+            context.WriteLine($"  {lookupError}");
+            return;
+        }
+
+        var initialOffset = Math.Max(0, initialPage.TotalCount - options.Last);
+        AgentStatusFormatter.TryGetOutputPage(
+            context.AgentTaskRuntime,
+            options.BackgroundRunId,
+            initialOffset,
+            options.Last,
+            out var run,
+            out var page,
+            out _);
+        context.WriteLine(AgentStatusFormatter.FormatOutputPage(run!, page, includeRunHeader: true));
+
+        if (!options.Follow)
+            return;
+
+        var nextOffset = page.NextOffset;
+        context.WriteLine(
+            $"[tail] Following {options.BackgroundRunId} every {options.PollInterval.TotalMilliseconds:0}ms until it finishes.");
+
+        while (true)
+        {
+            await DelayAsync(context, options.PollInterval);
+
+            if (!AgentStatusFormatter.TryGetOutputPage(
+                    context.AgentTaskRuntime,
+                    options.BackgroundRunId,
+                    nextOffset,
+                    limit: null,
+                    out run,
+                    out page,
+                    out lookupError))
+            {
+                context.WriteLine($"[tail] {lookupError}");
+                return;
+            }
+
+            if (page.Entries.Count > 0)
+            {
+                context.WriteLine(AgentStatusFormatter.FormatOutputPage(run!, page, includeRunHeader: false));
+                nextOffset = page.NextOffset;
+            }
+
+            if (IsTerminal(run!.Status) && nextOffset >= page.TotalCount)
+            {
+                context.WriteLine($"[tail] {run.Id} finished with status {run.Status}.");
+                return;
+            }
+        }
     }
 
     private static bool TryParseOverviewOptions(
@@ -349,6 +446,169 @@ public class AgentsCommand : ICommand
         };
         return true;
     }
+
+    private static bool TryParseTailOptions(
+        string args,
+        out AgentTailOptions options,
+        out string? error)
+    {
+        options = new AgentTailOptions("", 20, false, TimeSpan.FromMilliseconds(500));
+        error = null;
+
+        var tokens = args
+            .Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+        if (tokens.Count > 0 &&
+            tokens[0].Equals("tail", StringComparison.OrdinalIgnoreCase))
+        {
+            tokens.RemoveAt(0);
+        }
+
+        if (tokens.Count == 0)
+        {
+            error = "  Missing background-run id.";
+            return false;
+        }
+
+        var backgroundRunId = tokens[0];
+        tokens.RemoveAt(0);
+
+        var last = 20;
+        var follow = false;
+        var pollMs = 500;
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            switch (token)
+            {
+                case "--follow":
+                    follow = true;
+                    break;
+
+                case "--last":
+                    if (i + 1 >= tokens.Count)
+                    {
+                        error = "  Missing value for --last.";
+                        return false;
+                    }
+
+                    if (!int.TryParse(tokens[++i], out last) || last <= 0)
+                    {
+                        error = "  --last must be a positive integer.";
+                        return false;
+                    }
+
+                    break;
+
+                case "--poll-ms":
+                    if (i + 1 >= tokens.Count)
+                    {
+                        error = "  Missing value for --poll-ms.";
+                        return false;
+                    }
+
+                    if (!int.TryParse(tokens[++i], out pollMs) || pollMs <= 0)
+                    {
+                        error = "  --poll-ms must be a positive integer.";
+                        return false;
+                    }
+
+                    break;
+
+                default:
+                    error = $"  Unknown option: {token}";
+                    return false;
+            }
+        }
+
+        options = new AgentTailOptions(
+            backgroundRunId,
+            last,
+            follow,
+            TimeSpan.FromMilliseconds(pollMs));
+        return true;
+    }
+
+    private static bool TryParsePruneOptions(
+        string args,
+        out AgentRetentionPolicy options,
+        out string? error)
+    {
+        options = new AgentRetentionPolicy();
+        error = null;
+
+        var tokens = args
+            .Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+        if (tokens.Count > 0 &&
+            tokens[0] is "prune" or "archive")
+        {
+            tokens.RemoveAt(0);
+        }
+
+        var keepRuns = options.RetainTerminalBackgroundRuns;
+        var keepWorkItems = options.RetainTerminalWorkItems;
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (i + 1 >= tokens.Count)
+            {
+                error = $"  Missing value for {token}.";
+                return false;
+            }
+
+            if (!int.TryParse(tokens[++i], out var value) || value < 0)
+            {
+                error = token switch
+                {
+                    "--keep-runs" => "  --keep-runs must be a non-negative integer.",
+                    "--keep-work-items" or "--keep-items" => "  --keep-work-items must be a non-negative integer.",
+                    _ => $"  Unknown option: {token}",
+                };
+                return false;
+            }
+
+            switch (token)
+            {
+                case "--keep-runs":
+                    keepRuns = value;
+                    break;
+
+                case "--keep-work-items":
+                case "--keep-items":
+                    keepWorkItems = value;
+                    break;
+
+                default:
+                    error = $"  Unknown option: {token}";
+                    return false;
+            }
+        }
+
+        options = new AgentRetentionPolicy
+        {
+            RetainTerminalBackgroundRuns = keepRuns,
+            RetainTerminalWorkItems = keepWorkItems,
+        };
+        return true;
+    }
+
+    private static Task DelayAsync(CommandContext context, TimeSpan delay) =>
+        context.DelayAsync?.Invoke(delay, context.CancellationToken) ??
+        Task.Delay(delay, context.CancellationToken);
+
+    private static bool IsTerminal(AgentBackgroundRunStatus status) =>
+        status is AgentBackgroundRunStatus.Stopped or
+            AgentBackgroundRunStatus.Failed or
+            AgentBackgroundRunStatus.Cancelled;
+
+    private sealed record AgentTailOptions(
+        string BackgroundRunId,
+        int Last,
+        bool Follow,
+        TimeSpan PollInterval);
 }
 
 /// <summary>

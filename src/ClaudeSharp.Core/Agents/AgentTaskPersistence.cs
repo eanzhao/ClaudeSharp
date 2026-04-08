@@ -20,6 +20,8 @@ public static class AgentTaskPersistence
     public const string WorkItemEventType = "agent-work-item";
     public const string BackgroundRunEventType = "agent-background-run";
     public const string BackgroundOutputEventType = "agent-background-output";
+    public const string WorkItemDeletedEventType = "agent-work-item-deleted";
+    public const string BackgroundRunDeletedEventType = "agent-background-run-deleted";
 
     public static TranscriptMetadataEntry CreateWorkItemEntry(
         AgentWorkItem item,
@@ -69,6 +71,28 @@ public static class AgentTaskPersistence
             {
                 Id = backgroundRunId,
                 Chunk = chunk,
+            }),
+            recordedAt ?? DateTimeOffset.UtcNow);
+
+    public static TranscriptMetadataEntry CreateWorkItemDeletedEntry(
+        string workItemId,
+        DateTimeOffset? recordedAt = null) =>
+        new(
+            WorkItemDeletedEventType,
+            JsonSerializer.SerializeToElement(new DeletedEntityPayload
+            {
+                Id = workItemId,
+            }),
+            recordedAt ?? DateTimeOffset.UtcNow);
+
+    public static TranscriptMetadataEntry CreateBackgroundRunDeletedEntry(
+        string backgroundRunId,
+        DateTimeOffset? recordedAt = null) =>
+        new(
+            BackgroundRunDeletedEventType,
+            JsonSerializer.SerializeToElement(new DeletedEntityPayload
+            {
+                Id = backgroundRunId,
             }),
             recordedAt ?? DateTimeOffset.UtcNow);
 
@@ -122,6 +146,26 @@ public static class AgentTaskPersistence
                         run.AppendOutput(outputPayload.Chunk);
                         if (entry.RecordedAt is { } recordedAt)
                             run.UpdatedAt = recordedAt;
+                    }
+
+                    break;
+
+                case WorkItemDeletedEventType:
+                    if (TryReadPayload(entry.Payload, out DeletedEntityPayload? deletedWorkItem) &&
+                        deletedWorkItem != null &&
+                        !string.IsNullOrWhiteSpace(deletedWorkItem.Id))
+                    {
+                        workItems.Remove(deletedWorkItem.Id);
+                    }
+
+                    break;
+
+                case BackgroundRunDeletedEventType:
+                    if (TryReadPayload(entry.Payload, out DeletedEntityPayload? deletedBackgroundRun) &&
+                        deletedBackgroundRun != null &&
+                        !string.IsNullOrWhiteSpace(deletedBackgroundRun.Id))
+                    {
+                        backgroundRuns.Remove(deletedBackgroundRun.Id);
                     }
 
                     break;
@@ -226,5 +270,10 @@ public static class AgentTaskPersistence
     {
         public required string Id { get; init; }
         public required string Chunk { get; init; }
+    }
+
+    private sealed class DeletedEntityPayload
+    {
+        public required string Id { get; init; }
     }
 }

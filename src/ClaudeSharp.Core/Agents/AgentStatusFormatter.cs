@@ -34,6 +34,17 @@ public sealed record AgentStatusSummaryOptions
 }
 
 /// <summary>
+/// Represents a page of background-run output entries.
+/// </summary>
+public sealed record AgentBackgroundRunOutputPage(
+    int Offset,
+    int TotalCount,
+    IReadOnlyList<string> Entries)
+{
+    public int NextOffset => Offset + Entries.Count;
+}
+
+/// <summary>
 /// Formats agent work item and background run state for tools and commands.
 /// </summary>
 public static class AgentStatusFormatter
@@ -172,6 +183,76 @@ public static class AgentStatusFormatter
         return builder.ToString().TrimEnd();
     }
 
+    public static bool TryGetOutputPage(
+        IAgentTaskRuntime runtime,
+        string backgroundRunId,
+        int offset,
+        int? limit,
+        out AgentBackgroundRun? run,
+        out AgentBackgroundRunOutputPage page,
+        out string? error)
+    {
+        run = runtime.GetBackgroundRun(backgroundRunId);
+        if (run == null)
+        {
+            page = new AgentBackgroundRunOutputPage(0, 0, []);
+            error = $"No background run matched id '{backgroundRunId}'.";
+            return false;
+        }
+
+        var normalizedOffset = Math.Max(0, offset);
+        var normalizedLimit = limit.HasValue
+            ? Math.Max(1, limit.Value)
+            : int.MaxValue;
+        var entries = run.Output
+            .Skip(normalizedOffset)
+            .Take(normalizedLimit)
+            .ToArray();
+
+        page = new AgentBackgroundRunOutputPage(
+            normalizedOffset,
+            run.Output.Count,
+            entries);
+        error = null;
+        return true;
+    }
+
+    public static string FormatOutputPage(
+        AgentBackgroundRun run,
+        AgentBackgroundRunOutputPage page,
+        bool includeRunHeader)
+    {
+        var builder = new StringBuilder();
+        if (includeRunHeader)
+        {
+            builder.AppendLine($"Background run output: {run.Id}");
+            builder.AppendLine($"Name: {run.Name}");
+            builder.AppendLine($"Status: {run.Status}");
+        }
+
+        if (page.Entries.Count == 0)
+        {
+            builder.AppendLine(
+                $"No output entries at or after offset {page.Offset}. Total output entries: {page.TotalCount}.");
+            return builder.ToString().TrimEnd();
+        }
+
+        var start = page.Offset + 1;
+        var end = page.Offset + page.Entries.Count;
+        builder.AppendLine(
+            page.Entries.Count == page.TotalCount && page.Offset == 0
+                ? $"Showing all {page.TotalCount} output entr{(page.TotalCount == 1 ? "y" : "ies")}."
+                : $"Showing output entries {start}-{end} of {page.TotalCount}.");
+
+        foreach (var chunk in page.Entries)
+        {
+            builder.AppendLine("---");
+            builder.AppendLine(chunk);
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
     public static bool TryFormatDetails(
         IAgentTaskRuntime runtime,
         string id,
@@ -245,34 +326,18 @@ public static class AgentStatusFormatter
 
         if (includeOutput && run.Output.Count > 0)
         {
-            var offset = Math.Max(0, outputOffset ?? 0);
-            var limit = outputLimit.HasValue
-                ? Math.Max(1, outputLimit.Value)
-                : int.MaxValue;
-            var page = run.Output.Skip(offset).Take(limit).ToArray();
-            var start = page.Length == 0 ? 0 : offset + 1;
-            var end = page.Length == 0 ? 0 : offset + page.Length;
-
             builder.AppendLine();
             builder.AppendLine("Output:");
-            if (page.Length == 0)
-            {
-                builder.AppendLine(
-                    $"No output entries at or after offset {offset}. Total output entries: {run.Output.Count}.");
-            }
-            else
-            {
-                builder.AppendLine(
-                    page.Length == run.Output.Count && offset == 0
-                        ? $"Showing all {run.Output.Count} output entr{(run.Output.Count == 1 ? "y" : "ies")}."
-                        : $"Showing output entries {start}-{end} of {run.Output.Count}.");
-            }
-
-            foreach (var chunk in page)
-            {
-                builder.AppendLine("---");
-                builder.AppendLine(chunk);
-            }
+            builder.AppendLine(FormatOutputPage(
+                run,
+                new AgentBackgroundRunOutputPage(
+                    Math.Max(0, outputOffset ?? 0),
+                    run.Output.Count,
+                    run.Output
+                        .Skip(Math.Max(0, outputOffset ?? 0))
+                        .Take(outputLimit.HasValue ? Math.Max(1, outputLimit.Value) : int.MaxValue)
+                        .ToArray()),
+                includeRunHeader: false));
         }
 
         return builder.ToString().TrimEnd();
