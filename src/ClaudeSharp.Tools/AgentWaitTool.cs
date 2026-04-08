@@ -54,25 +54,17 @@ public sealed class AgentWaitTool : ITool
         {
           "type": "object",
           "properties": {
-            "id": {
-              "type": "string",
-              "description": "The background-run id to wait for"
-            },
             "ids": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "Multiple background-run ids to wait for"
+              "description": "One or more background-run ids to wait for"
             },
             "wait_mode": {
               "type": "string",
               "enum": ["all", "any"],
               "description": "Whether to wait for all runs or return when any run finishes"
-            },
-            "poll_ms": {
-              "type": "integer",
-              "description": "How often to poll the run status while waiting"
             },
             "timeout_ms": {
               "type": "integer",
@@ -83,6 +75,7 @@ public sealed class AgentWaitTool : ITool
               "description": "When true, include the captured background-run output in the final result"
             }
           },
+          "required": ["ids"],
           "additionalProperties": false
         }
         """).RootElement.Clone();
@@ -94,7 +87,7 @@ public sealed class AgentWaitTool : ITool
             Wait for one or more background subagents to finish.
 
             Use this after launching Agent with run_in_background=true when you need a final status before continuing.
-            Provide id for a single run, or ids plus wait_mode=all/any for batch waits.
+            Always pass ids. For a single run, pass an array with one id.
             Set include_output=true if you also need the captured run output in the response.
             """);
     }

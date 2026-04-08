@@ -3,8 +3,11 @@ using ClaudeSharp.Core.Agents;
 using ClaudeSharp.Core.Configuration;
 using ClaudeSharp.Core.Hooks;
 using ClaudeSharp.Core.Permissions;
-using ClaudeSharp.Core.Tests.Runtime;
+using ClaudeSharp.Core.Providers;
 using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Core.Query;
+using ClaudeSharp.Core.Tests.Runtime;
+using ClaudeSharp.Tools;
 
 namespace ClaudeSharp.Core.Tests.Foundations;
 
@@ -125,6 +128,54 @@ public sealed class CoreUtilityCoverageTests
         Assert.Contains("loaded 1 command(s)", result.StartupSummary, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void DefaultToolSchemas_StayWithinAnthropicOptionalParameterBudget()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var tools = new ITool[]
+        {
+            new BashTool(),
+            new FileReadTool(),
+            new FileWriteTool(),
+            new FileEditTool(),
+            new GlobTool(),
+            new GrepTool(),
+            new WebFetchTool(),
+            new WebSearchTool(new DefaultProviderCapabilityRouter(), () => ClaudeModels.DefaultMainModel),
+            new AgentTool(new NoOpAgentRunner(), new DefaultProviderCapabilityRouter(), runtime, HookRuntime.Empty),
+            new AgentStatusTool(runtime),
+            new AgentStopTool(runtime),
+            new AgentWaitTool(runtime),
+        };
+
+        var totalOptionalParameters = tools.Sum(CountOptionalParameters);
+
+        Assert.True(
+            totalOptionalParameters <= 24,
+            $"Expected total optional schema parameters to stay at or below Anthropic's limit of 24, but found {totalOptionalParameters}.");
+    }
+
+    private static int CountOptionalParameters(ITool tool)
+    {
+        var schema = tool.GetInputSchema();
+        if (!schema.TryGetProperty("properties", out var properties) ||
+            properties.ValueKind != JsonValueKind.Object)
+        {
+            return 0;
+        }
+
+        var required = schema.TryGetProperty("required", out var requiredArray) &&
+            requiredArray.ValueKind == JsonValueKind.Array
+            ? requiredArray.EnumerateArray()
+                .Where(item => item.ValueKind == JsonValueKind.String)
+                .Select(item => item.GetString()!)
+                .ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+
+        return properties.EnumerateObject()
+            .Count(property => !required.Contains(property.Name));
+    }
+
     private sealed class MinimalTool : ITool
     {
         public string Name => "minimal";
@@ -143,5 +194,17 @@ public sealed class CoreUtilityCoverageTests
             IProgress<ToolProgress>? progress = null,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(ToolResult.Success("ok"));
+    }
+
+    private sealed class NoOpAgentRunner : IAgentExecutionRunner
+    {
+        public Task<AgentExecutionResult> RunAsync(
+            AgentExecutionRequest request,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new AgentExecutionResult(
+                Summary: "ok",
+                Success: true,
+                Usage: TokenUsage.Empty,
+                TurnCount: 1));
     }
 }

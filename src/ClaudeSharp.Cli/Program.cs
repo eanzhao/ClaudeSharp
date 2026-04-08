@@ -6,6 +6,7 @@ using ClaudeSharp.Core.Agents;
 using ClaudeSharp.Core.Hooks;
 using ClaudeSharp.Core.Memory;
 using ClaudeSharp.Core.Commands;
+using ClaudeSharp.Core.Configuration;
 using ClaudeSharp.Core.Context;
 using ClaudeSharp.Core.Mcp;
 using ClaudeSharp.Core.Permissions;
@@ -99,10 +100,10 @@ internal static class Program
             Model = model,
             UseStreamingApi = true,
         };
-        var apiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
-        using var client = string.IsNullOrWhiteSpace(apiKey)
-            ? new AnthropicClient()
-            : new AnthropicClient { ApiKey = apiKey };
+        var anthropicSettings = AnthropicClientSettingsLoader.Load(
+            workingDirectory,
+            appBaseDirectory: AppContext.BaseDirectory);
+        using var client = CreateAnthropicClient(anthropicSettings);
         var providerRouter = new DefaultProviderCapabilityRouter();
         var agentSettings = AgentSettingsLoader.Load(
             workingDirectory,
@@ -189,6 +190,8 @@ internal static class Program
             startupParts.Add(hookBuild.StartupSummary);
         if (!string.IsNullOrWhiteSpace(agentSettings.StartupSummary))
             startupParts.Add(agentSettings.StartupSummary);
+        if (!string.IsNullOrWhiteSpace(anthropicSettings.StartupSummary))
+            startupParts.Add(anthropicSettings.StartupSummary);
 
         var startupNote = startupParts.Count == 0
             ? null
@@ -196,7 +199,7 @@ internal static class Program
 
         var shell = new ClaudeSharpShell(
             workingDirectory,
-            apiKey,
+            anthropicSettings.HasApiKey,
             toolRegistry,
             commandRegistry,
             queryEngine,
@@ -205,6 +208,20 @@ internal static class Program
             startupNote);
 
         return await shell.RunAsync(options.InitialPrompt);
+    }
+
+    private static AnthropicClient CreateAnthropicClient(AnthropicClientSettings settings)
+    {
+        if (settings.HasApiKey && !string.IsNullOrWhiteSpace(settings.BaseUrl))
+            return new AnthropicClient { ApiKey = settings.ApiKey!, BaseUrl = settings.BaseUrl };
+
+        if (settings.HasApiKey)
+            return new AnthropicClient { ApiKey = settings.ApiKey! };
+
+        if (!string.IsNullOrWhiteSpace(settings.BaseUrl))
+            return new AnthropicClient { BaseUrl = settings.BaseUrl };
+
+        return new AnthropicClient();
     }
 
     private static ToolRegistry BuildToolRegistry(
@@ -290,7 +307,7 @@ Options:
     private sealed class ClaudeSharpShell
     {
         private readonly string _workingDirectory;
-        private readonly string? _apiKey;
+        private readonly bool _hasApiKey;
         private readonly ToolRegistry _toolRegistry;
         private readonly CommandRegistry _commandRegistry;
         private readonly QueryEngine _queryEngine;
@@ -301,7 +318,7 @@ Options:
 
         public ClaudeSharpShell(
             string workingDirectory,
-            string? apiKey,
+            bool hasApiKey,
             ToolRegistry toolRegistry,
             CommandRegistry commandRegistry,
             QueryEngine queryEngine,
@@ -310,7 +327,7 @@ Options:
             string? startupNote)
         {
             _workingDirectory = workingDirectory;
-            _apiKey = apiKey;
+            _hasApiKey = hasApiKey;
             _toolRegistry = toolRegistry;
             _commandRegistry = commandRegistry;
             _queryEngine = queryEngine;
@@ -486,10 +503,10 @@ Options:
                 Console.WriteLine(_startupNote);
             Console.WriteLine("输入 /help 查看内置命令，/exit 退出。");
 
-            if (string.IsNullOrWhiteSpace(_apiKey))
+            if (!_hasApiKey)
             {
                 Console.WriteLine(
-                    "未检测到 ANTHROPIC_API_KEY。你仍然可以使用本地斜杠命令，但真正发起 Claude 请求会失败。");
+                    "未检测到可用的 Anthropic API Key。你仍然可以使用本地斜杠命令，但真正发起 Claude 请求会失败。");
             }
         }
     }

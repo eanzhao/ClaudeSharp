@@ -16,6 +16,9 @@ public sealed class AgentStatusToolInput
     [JsonPropertyName("view")]
     public string? View { get; set; }
 
+    [JsonPropertyName("filters")]
+    public string? Filters { get; set; }
+
     [JsonPropertyName("kind")]
     public string? Kind { get; set; }
 
@@ -36,6 +39,9 @@ public sealed class AgentStatusToolInput
 
     [JsonPropertyName("include_output")]
     public bool IncludeOutput { get; set; } = true;
+
+    [JsonPropertyName("output_window")]
+    public string? OutputWindow { get; set; }
 
     [JsonPropertyName("output_offset")]
     public int? OutputOffset { get; set; }
@@ -76,41 +82,17 @@ public sealed class AgentStatusTool : ITool
               "type": "string",
               "description": "For listings only: overview (default) or summary"
             },
-            "kind": {
+            "filters": {
               "type": "string",
-              "description": "For overview listings only: all, work_items, or background_runs"
-            },
-            "status": {
-              "type": "string",
-              "description": "For overview listings only: filter by a status like queued, running, completed, or blocked"
-            },
-            "owner": {
-              "type": "string",
-              "description": "For overview listings only: filter by owner"
-            },
-            "offset": {
-              "type": "integer",
-              "description": "For overview listings only: skip this many matching entries before listing results"
-            },
-            "limit": {
-              "type": "integer",
-              "description": "For overview listings only: return at most this many matching entries per section"
-            },
-            "recent_limit": {
-              "type": "integer",
-              "description": "For summary listings only: return at most this many recent work items and background runs"
+              "description": "Optional compact filters such as kind=background_runs status=queued owner=subagent offset=0 limit=5 recent_limit=3"
             },
             "include_output": {
               "type": "boolean",
               "description": "When inspecting a background run, include any captured output"
             },
-            "output_offset": {
-              "type": "integer",
-              "description": "Skip this many output entries before formatting background-run output"
-            },
-            "output_limit": {
-              "type": "integer",
-              "description": "Return at most this many output entries from a background run"
+            "output_window": {
+              "type": "string",
+              "description": "For detailed background-run output only: offset and limit as offset:limit, for example 10:20"
             }
           },
           "additionalProperties": false
@@ -124,9 +106,9 @@ public sealed class AgentStatusTool : ITool
             Check the state of subagent work items and background runs.
 
             Use this after Agent with run_in_background=true, or whenever you need to see whether a subagent has finished.
-            For overview listings, you can filter by kind, status, owner, offset, and limit.
+            For overview listings, filters can be packed into one string like "kind=background_runs status=queued owner=subagent offset=0 limit=5".
             Set view=summary when you want a concise rollup of queue state, recent runs, and recent work items.
-            When polling a long-running background run, use output_offset and output_limit to fetch only new output entries.
+            When polling a long-running background run, use output_window like "10:20" to fetch only new output entries.
             """);
     }
 
@@ -135,20 +117,9 @@ public sealed class AgentStatusTool : ITool
         try
         {
             var parsed = JsonSerializer.Deserialize<AgentStatusToolInput>(input) ?? new AgentStatusToolInput();
-            if (!AgentStatusFormatter.TryParseView(parsed.View, out _))
-                return Task.FromResult(ValidationResult.Invalid("view must be overview or summary."));
-            if (!AgentStatusFormatter.TryParseOverviewKind(parsed.Kind, out _))
-                return Task.FromResult(ValidationResult.Invalid("kind must be all, work_items, or background_runs."));
-            if (parsed.Offset is < 0)
-                return Task.FromResult(ValidationResult.Invalid("offset must be 0 or greater."));
-            if (parsed.Limit is <= 0)
-                return Task.FromResult(ValidationResult.Invalid("limit must be greater than 0."));
-            if (parsed.RecentLimit is <= 0)
-                return Task.FromResult(ValidationResult.Invalid("recent_limit must be greater than 0."));
-            if (parsed.OutputOffset is < 0)
-                return Task.FromResult(ValidationResult.Invalid("output_offset must be 0 or greater."));
-            if (parsed.OutputLimit is <= 0)
-                return Task.FromResult(ValidationResult.Invalid("output_limit must be greater than 0."));
+            if (!TryNormalizeRequest(parsed, out _, out var error))
+                return Task.FromResult(ValidationResult.Invalid(error!));
+
             return Task.FromResult(ValidationResult.Valid());
         }
         catch (JsonException ex)
@@ -172,41 +143,275 @@ public sealed class AgentStatusTool : ITool
         CancellationToken cancellationToken = default)
     {
         var parsed = JsonSerializer.Deserialize<AgentStatusToolInput>(input) ?? new AgentStatusToolInput();
-        if (string.IsNullOrWhiteSpace(parsed.Id))
+        if (!TryNormalizeRequest(parsed, out var request, out var error))
+            return Task.FromResult(ToolResult.Error(error!));
+
+        if (string.IsNullOrWhiteSpace(request.Id))
         {
-            AgentStatusFormatter.TryParseView(parsed.View, out var view);
-            AgentStatusFormatter.TryParseOverviewKind(parsed.Kind, out var kind);
-            var data = view == AgentStatusView.Summary
+            var data = request.View == AgentStatusView.Summary
                 ? AgentStatusFormatter.FormatSummary(
                     _taskRuntime,
                     new AgentStatusSummaryOptions
                     {
-                        Owner = parsed.Owner,
-                        RecentLimit = parsed.RecentLimit ?? 3,
+                        Owner = request.Owner,
+                        RecentLimit = request.RecentLimit,
                     })
                 : AgentStatusFormatter.FormatOverview(
                     _taskRuntime,
                     new AgentStatusOverviewOptions
                     {
-                        Kind = kind,
-                        Status = parsed.Status,
-                        Owner = parsed.Owner,
-                        Offset = Math.Max(0, parsed.Offset ?? 0),
-                        Limit = parsed.Limit,
+                        Kind = request.Kind,
+                        Status = request.Status,
+                        Owner = request.Owner,
+                        Offset = request.Offset,
+                        Limit = request.Limit,
                     });
             return Task.FromResult(ToolResult.Success(data));
         }
 
         var found = AgentStatusFormatter.TryFormatDetails(
             _taskRuntime,
-            parsed.Id.Trim(),
-            parsed.IncludeOutput,
-            parsed.OutputOffset,
-            parsed.OutputLimit,
+            request.Id.Trim(),
+            request.IncludeOutput,
+            request.OutputOffset,
+            request.OutputLimit,
             out var details);
 
         return Task.FromResult(found
             ? ToolResult.Success(details)
             : ToolResult.Error(details));
     }
+
+    private static bool TryNormalizeRequest(
+        AgentStatusToolInput input,
+        out NormalizedAgentStatusRequest request,
+        out string? error)
+    {
+        error = null;
+        AgentStatusFormatter.TryParseView(input.View, out var view);
+        AgentStatusFormatter.TryParseOverviewKind(input.Kind, out var kind);
+
+        if (!string.IsNullOrWhiteSpace(input.View) &&
+            !AgentStatusFormatter.TryParseView(input.View, out view))
+        {
+            request = default;
+            error = "view must be overview or summary.";
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(input.Kind) &&
+            !AgentStatusFormatter.TryParseOverviewKind(input.Kind, out kind))
+        {
+            request = default;
+            error = "kind must be all, work_items, or background_runs.";
+            return false;
+        }
+
+        var status = input.Status;
+        var owner = input.Owner;
+        var offset = input.Offset ?? 0;
+        var limit = input.Limit;
+        var recentLimit = input.RecentLimit ?? 3;
+        var outputOffset = input.OutputOffset;
+        var outputLimit = input.OutputLimit;
+
+        if (!TryApplyFilters(
+                input.Filters,
+                ref kind,
+                ref status,
+                ref owner,
+                ref offset,
+                ref limit,
+                ref recentLimit,
+                out error))
+        {
+            request = default;
+            return false;
+        }
+
+        if (!TryApplyOutputWindow(
+                input.OutputWindow,
+                ref outputOffset,
+                ref outputLimit,
+                out error))
+        {
+            request = default;
+            return false;
+        }
+
+        if (offset < 0)
+        {
+            request = default;
+            error = "offset must be 0 or greater.";
+            return false;
+        }
+
+        if (limit is <= 0)
+        {
+            request = default;
+            error = "limit must be greater than 0.";
+            return false;
+        }
+
+        if (recentLimit <= 0)
+        {
+            request = default;
+            error = "recent_limit must be greater than 0.";
+            return false;
+        }
+
+        if (outputOffset is < 0)
+        {
+            request = default;
+            error = "output_offset must be 0 or greater.";
+            return false;
+        }
+
+        if (outputLimit is <= 0)
+        {
+            request = default;
+            error = "output_limit must be greater than 0.";
+            return false;
+        }
+
+        request = new NormalizedAgentStatusRequest(
+            input.Id?.Trim(),
+            view,
+            kind,
+            status,
+            owner,
+            offset,
+            limit,
+            recentLimit,
+            input.IncludeOutput,
+            outputOffset,
+            outputLimit);
+        return true;
+    }
+
+    private static bool TryApplyFilters(
+        string? filters,
+        ref AgentStatusOverviewKind kind,
+        ref string? status,
+        ref string? owner,
+        ref int offset,
+        ref int? limit,
+        ref int recentLimit,
+        out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(filters))
+            return true;
+
+        foreach (var token in filters.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separatorIndex = token.IndexOf('=');
+            if (separatorIndex <= 0 || separatorIndex == token.Length - 1)
+            {
+                error = $"filters contains an invalid token: {token}";
+                return false;
+            }
+
+            var key = token[..separatorIndex];
+            var value = token[(separatorIndex + 1)..];
+
+            switch (key)
+            {
+                case "kind":
+                    if (!AgentStatusFormatter.TryParseOverviewKind(value, out kind))
+                    {
+                        error = "kind must be all, work_items, or background_runs.";
+                        return false;
+                    }
+
+                    break;
+
+                case "status":
+                    status = value;
+                    break;
+
+                case "owner":
+                    owner = value;
+                    break;
+
+                case "offset":
+                    if (!int.TryParse(value, out offset))
+                    {
+                        error = "offset must be an integer.";
+                        return false;
+                    }
+
+                    break;
+
+                case "limit":
+                    if (!int.TryParse(value, out var parsedLimit))
+                    {
+                        error = "limit must be an integer.";
+                        return false;
+                    }
+
+                    limit = parsedLimit;
+                    break;
+
+                case "recent_limit":
+                    if (!int.TryParse(value, out recentLimit))
+                    {
+                        error = "recent_limit must be an integer.";
+                        return false;
+                    }
+
+                    break;
+
+                default:
+                    error = $"filters contains an unknown key: {key}";
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryApplyOutputWindow(
+        string? outputWindow,
+        ref int? outputOffset,
+        ref int? outputLimit,
+        out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(outputWindow))
+            return true;
+
+        var separators = new[] { ':', ',' };
+        var parts = outputWindow
+            .Split(separators, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+        {
+            error = "output_window must look like offset:limit.";
+            return false;
+        }
+
+        if (!int.TryParse(parts[0], out var parsedOffset) ||
+            !int.TryParse(parts[1], out var parsedLimit))
+        {
+            error = "output_window must contain integer offset and limit values.";
+            return false;
+        }
+
+        outputOffset ??= parsedOffset;
+        outputLimit ??= parsedLimit;
+        return true;
+    }
+
+    private sealed record NormalizedAgentStatusRequest(
+        string? Id,
+        AgentStatusView View,
+        AgentStatusOverviewKind Kind,
+        string? Status,
+        string? Owner,
+        int Offset,
+        int? Limit,
+        int RecentLimit,
+        bool IncludeOutput,
+        int? OutputOffset,
+        int? OutputLimit);
 }
