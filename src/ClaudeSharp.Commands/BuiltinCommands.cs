@@ -165,6 +165,12 @@ public class AgentsCommand : ICommand
         }
 
         if (parts.Length > 0 &&
+            parts[0].Equals("wait", StringComparison.OrdinalIgnoreCase))
+        {
+            return WaitForBackgroundRunAsync(trimmed, context);
+        }
+
+        if (parts.Length > 0 &&
             parts[0].Equals("tail", StringComparison.OrdinalIgnoreCase))
         {
             return TailBackgroundRunAsync(trimmed, context);
@@ -176,7 +182,7 @@ public class AgentsCommand : ICommand
             if (!TryParseSummaryOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents summary arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait <background-run-id> [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -190,7 +196,7 @@ public class AgentsCommand : ICommand
             if (!TryParseOverviewOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait <background-run-id> [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -211,8 +217,53 @@ public class AgentsCommand : ICommand
         }
 
         context.WriteLine(details);
-        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait <background-run-id> [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
         return Task.CompletedTask;
+    }
+
+    private static async Task WaitForBackgroundRunAsync(
+        string args,
+        CommandContext context)
+    {
+        if (!TryParseWaitOptions(args, out var options, out var error))
+        {
+            context.WriteLine(error ?? "  Invalid /agents wait arguments.");
+            context.WriteLine("  Usage: /agents wait <background-run-id> [--timeout-ms <n>] [--poll-ms <n>] [--include-output]");
+            return;
+        }
+
+        var waitResult = await AgentBackgroundRunWaiter.WaitAsync(
+            context.AgentTaskRuntime,
+            options.BackgroundRunId,
+            options.PollInterval,
+            options.Timeout,
+            context.DelayAsync,
+            context.CancellationToken);
+
+        switch (waitResult.Outcome)
+        {
+            case AgentBackgroundRunWaitOutcome.NotFound:
+                context.WriteLine($"  No background run matched id '{options.BackgroundRunId}'.");
+                return;
+
+            case AgentBackgroundRunWaitOutcome.TimedOut:
+                context.WriteLine(
+                    $"  Timed out after {Math.Round(waitResult.Elapsed.TotalMilliseconds)}ms while waiting for {options.BackgroundRunId}. Current status: {waitResult.Run?.Status ?? AgentBackgroundRunStatus.Queued}.");
+                return;
+        }
+
+        context.WriteLine(
+            $"  {options.BackgroundRunId} finished with status {waitResult.Run!.Status} after {Math.Round(waitResult.Elapsed.TotalMilliseconds)}ms.");
+        if (AgentStatusFormatter.TryFormatDetails(
+                context.AgentTaskRuntime,
+                options.BackgroundRunId,
+                options.IncludeOutput,
+                outputOffset: null,
+                outputLimit: null,
+                out var details))
+        {
+            context.WriteLine(details);
+        }
     }
 
     private static async Task TailBackgroundRunAsync(
@@ -280,7 +331,7 @@ public class AgentsCommand : ICommand
                 nextOffset = page.NextOffset;
             }
 
-            if (IsTerminal(run!.Status) && nextOffset >= page.TotalCount)
+            if (AgentBackgroundRunWaiter.IsTerminal(run!.Status) && nextOffset >= page.TotalCount)
             {
                 context.WriteLine($"[tail] {run.Id} finished with status {run.Status}.");
                 return;
@@ -530,6 +581,90 @@ public class AgentsCommand : ICommand
         return true;
     }
 
+    private static bool TryParseWaitOptions(
+        string args,
+        out AgentWaitOptions options,
+        out string? error)
+    {
+        options = new AgentWaitOptions("", TimeSpan.FromMilliseconds(500), null, false);
+        error = null;
+
+        var tokens = args
+            .Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+        if (tokens.Count > 0 &&
+            tokens[0].Equals("wait", StringComparison.OrdinalIgnoreCase))
+        {
+            tokens.RemoveAt(0);
+        }
+
+        if (tokens.Count == 0)
+        {
+            error = "  Missing background-run id.";
+            return false;
+        }
+
+        var backgroundRunId = tokens[0];
+        tokens.RemoveAt(0);
+
+        var pollMs = 500;
+        int? timeoutMs = null;
+        var includeOutput = false;
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            switch (token)
+            {
+                case "--include-output":
+                    includeOutput = true;
+                    break;
+
+                case "--poll-ms":
+                    if (i + 1 >= tokens.Count)
+                    {
+                        error = "  Missing value for --poll-ms.";
+                        return false;
+                    }
+
+                    if (!int.TryParse(tokens[++i], out pollMs) || pollMs <= 0)
+                    {
+                        error = "  --poll-ms must be a positive integer.";
+                        return false;
+                    }
+
+                    break;
+
+                case "--timeout-ms":
+                    if (i + 1 >= tokens.Count)
+                    {
+                        error = "  Missing value for --timeout-ms.";
+                        return false;
+                    }
+
+                    if (!int.TryParse(tokens[++i], out var parsedTimeout) || parsedTimeout <= 0)
+                    {
+                        error = "  --timeout-ms must be a positive integer.";
+                        return false;
+                    }
+
+                    timeoutMs = parsedTimeout;
+                    break;
+
+                default:
+                    error = $"  Unknown option: {token}";
+                    return false;
+            }
+        }
+
+        options = new AgentWaitOptions(
+            backgroundRunId,
+            TimeSpan.FromMilliseconds(pollMs),
+            timeoutMs.HasValue ? TimeSpan.FromMilliseconds(timeoutMs.Value) : null,
+            includeOutput);
+        return true;
+    }
+
     private static bool TryParsePruneOptions(
         string args,
         out AgentRetentionPolicy options,
@@ -599,16 +734,17 @@ public class AgentsCommand : ICommand
         context.DelayAsync?.Invoke(delay, context.CancellationToken) ??
         Task.Delay(delay, context.CancellationToken);
 
-    private static bool IsTerminal(AgentBackgroundRunStatus status) =>
-        status is AgentBackgroundRunStatus.Stopped or
-            AgentBackgroundRunStatus.Failed or
-            AgentBackgroundRunStatus.Cancelled;
-
     private sealed record AgentTailOptions(
         string BackgroundRunId,
         int Last,
         bool Follow,
         TimeSpan PollInterval);
+
+    private sealed record AgentWaitOptions(
+        string BackgroundRunId,
+        TimeSpan PollInterval,
+        TimeSpan? Timeout,
+        bool IncludeOutput);
 }
 
 /// <summary>

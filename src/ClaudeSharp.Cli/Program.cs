@@ -234,6 +234,7 @@ internal static class Program
             backgroundRunScheduler));
         registry.Register(new AgentStatusTool(agentTaskRuntime));
         registry.Register(new AgentStopTool(agentTaskRuntime));
+        registry.Register(new AgentWaitTool(agentTaskRuntime));
         return registry;
     }
 

@@ -464,6 +464,59 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task AgentWaitTool_WaitsForBackgroundRunToFinish()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var run = runtime.StartBackgroundRun("Inspect tools", "subagent");
+        runtime.AppendBackgroundRunOutput(run.Id, "line 1");
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(25);
+            runtime.AppendBackgroundRunOutput(run.Id, "line 2");
+            runtime.StopBackgroundRun(run.Id, "completed");
+        });
+
+        var tool = new AgentWaitTool(runtime);
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                id = run.Id,
+                poll_ms = 10,
+                include_output = true,
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("Wait finished after", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Background run:", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Stopped", result.Data, StringComparison.Ordinal);
+        Assert.Contains("line 1", result.Data, StringComparison.Ordinal);
+        Assert.Contains("line 2", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentWaitTool_CanTimeOut()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var run = runtime.StartBackgroundRun("Inspect tools", "subagent");
+
+        var tool = new AgentWaitTool(runtime);
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                id = run.Id,
+                poll_ms = 5,
+                timeout_ms = 10,
+            }),
+            CreateContext());
+
+        Assert.True(result.IsError);
+        Assert.Contains("Timed out after", result.Data, StringComparison.Ordinal);
+        Assert.Contains(run.Id, result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AgentStatusTool_CanReturnOutputWindow()
     {
         var runtime = new InMemoryAgentTaskRuntime();
@@ -504,6 +557,7 @@ public sealed class AgentToolTests
             "Queued run two",
             owner: "subagent",
             initialStatus: AgentBackgroundRunStatus.Queued);
+        runtime.UpdateBackgroundRun("background-run-2", _ => { });
 
         var tool = new AgentStatusTool(runtime);
         var result = await tool.ExecuteAsync(

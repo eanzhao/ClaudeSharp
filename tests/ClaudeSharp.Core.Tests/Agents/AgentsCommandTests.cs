@@ -221,6 +221,76 @@ public sealed class AgentsCommandTests
         Assert.Contains("Usage: /agents prune", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_CanWaitForBackgroundRunCompletion()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var run = runtime.StartBackgroundRun("Inspect runtime", owner: "subagent");
+        runtime.AppendBackgroundRunOutput(run.Id, "line 1");
+
+        var delayCalls = 0;
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            $"wait {run.Id} --poll-ms 1 --include-output",
+            CreateContext(
+                runtime,
+                lines,
+                async (_, _) =>
+                {
+                    delayCalls++;
+                    if (delayCalls == 1)
+                    {
+                        runtime.AppendBackgroundRunOutput(run.Id, "line 2");
+                        runtime.StopBackgroundRun(run.Id, "completed");
+                    }
+
+                    await Task.CompletedTask;
+                }));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains($"  {run.Id} finished with status Stopped", output, StringComparison.Ordinal);
+        Assert.Contains("Background run:", output, StringComparison.Ordinal);
+        Assert.Contains("line 1", output, StringComparison.Ordinal);
+        Assert.Contains("line 2", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CanTimeOutWhileWaiting()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var run = runtime.StartBackgroundRun("Inspect runtime", owner: "subagent");
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            $"wait {run.Id} --poll-ms 1 --timeout-ms 2",
+            CreateContext(
+                runtime,
+                lines,
+                (_, _) => Task.CompletedTask));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Timed out after", output, StringComparison.Ordinal);
+        Assert.Contains(run.Id, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReportsInvalidWaitArguments()
+    {
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "wait background-run-1 --timeout-ms 0",
+            CreateContext(new InMemoryAgentTaskRuntime(), lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("--timeout-ms must be a positive integer", output, StringComparison.Ordinal);
+        Assert.Contains("Usage: /agents wait", output, StringComparison.Ordinal);
+    }
+
     private static CommandContext CreateContext(
         IAgentTaskRuntime runtime,
         List<string> lines,
