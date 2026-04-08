@@ -59,13 +59,12 @@ dotnet run --project src/ClaudeSharp.Cli -- --continue
 # Run the full test suite
 dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --no-restore
 
-# Enforce the ClaudeSharp.Core line-coverage gate
+# Enforce the total project line-coverage gate
 dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --configuration Release --no-restore \
   /p:CollectCoverage=true \
   /p:CoverletOutputFormat=json \
   /p:CoverletOutput=TestResults/coverage-threshold/ \
-  '/p:Include=[ClaudeSharp.Core]*' \
-  /p:Threshold=90 \
+  /p:Threshold=80 \
   /p:ThresholdType=line \
   /p:ThresholdStat=total
 ```

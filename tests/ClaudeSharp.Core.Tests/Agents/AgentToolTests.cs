@@ -517,6 +517,71 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task AgentWaitTool_CanWaitForAnyOfMultipleRuns()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var firstRun = runtime.StartBackgroundRun("Inspect tools A", "subagent");
+        var secondRun = runtime.StartBackgroundRun("Inspect tools B", "subagent");
+        runtime.AppendBackgroundRunOutput(secondRun.Id, "second run output");
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(25);
+            runtime.StopBackgroundRun(secondRun.Id, "completed");
+        });
+
+        var tool = new AgentWaitTool(runtime);
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                ids = new[] { firstRun.Id, secondRun.Id },
+                wait_mode = "any",
+                poll_ms = 10,
+                include_output = true,
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("Wait finished after", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Completed runs:", result.Data, StringComparison.Ordinal);
+        Assert.Contains($"{secondRun.Id}: Stopped", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Still running:", result.Data, StringComparison.Ordinal);
+        Assert.Contains($"{firstRun.Id}: Running", result.Data, StringComparison.Ordinal);
+        Assert.Contains("second run output", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentWaitTool_CanWaitForAllOfMultipleRuns()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var firstRun = runtime.StartBackgroundRun("Inspect tools A", "subagent");
+        var secondRun = runtime.StartBackgroundRun("Inspect tools B", "subagent");
+
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(10);
+            runtime.StopBackgroundRun(firstRun.Id, "completed");
+            await Task.Delay(20);
+            runtime.StopBackgroundRun(secondRun.Id, "completed");
+        });
+
+        var tool = new AgentWaitTool(runtime);
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                ids = new[] { firstRun.Id, secondRun.Id },
+                wait_mode = "all",
+                poll_ms = 10,
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("All 2 background run(s) reached terminal states.", result.Data, StringComparison.Ordinal);
+        Assert.Contains($"{firstRun.Id}: Stopped", result.Data, StringComparison.Ordinal);
+        Assert.Contains($"{secondRun.Id}: Stopped", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AgentStatusTool_CanReturnOutputWindow()
     {
         var runtime = new InMemoryAgentTaskRuntime();

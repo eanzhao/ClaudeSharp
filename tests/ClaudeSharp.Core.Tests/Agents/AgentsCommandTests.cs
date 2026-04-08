@@ -291,6 +291,75 @@ public sealed class AgentsCommandTests
         Assert.Contains("Usage: /agents wait", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_CanWaitForAnyOfMultipleRuns()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var firstRun = runtime.StartBackgroundRun("Inspect runtime A", owner: "subagent");
+        var secondRun = runtime.StartBackgroundRun("Inspect runtime B", owner: "subagent");
+        runtime.AppendBackgroundRunOutput(secondRun.Id, "line 2");
+
+        var delayCalls = 0;
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            $"wait any {firstRun.Id} {secondRun.Id} --poll-ms 1 --include-output",
+            CreateContext(
+                runtime,
+                lines,
+                async (_, _) =>
+                {
+                    delayCalls++;
+                    if (delayCalls == 1)
+                        runtime.StopBackgroundRun(secondRun.Id, "completed");
+
+                    await Task.CompletedTask;
+                }));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Wait finished after", output, StringComparison.Ordinal);
+        Assert.Contains("Completed runs:", output, StringComparison.Ordinal);
+        Assert.Contains($"{secondRun.Id}: Stopped", output, StringComparison.Ordinal);
+        Assert.Contains("Still running:", output, StringComparison.Ordinal);
+        Assert.Contains($"{firstRun.Id}: Running", output, StringComparison.Ordinal);
+        Assert.Contains("Background run:", output, StringComparison.Ordinal);
+        Assert.Contains("line 2", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CanWaitForAllOfMultipleRuns()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var firstRun = runtime.StartBackgroundRun("Inspect runtime A", owner: "subagent");
+        var secondRun = runtime.StartBackgroundRun("Inspect runtime B", owner: "subagent");
+
+        var delayCalls = 0;
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            $"wait all {firstRun.Id} {secondRun.Id} --poll-ms 1",
+            CreateContext(
+                runtime,
+                lines,
+                async (_, _) =>
+                {
+                    delayCalls++;
+                    if (delayCalls == 1)
+                        runtime.StopBackgroundRun(firstRun.Id, "completed");
+                    else if (delayCalls == 2)
+                        runtime.StopBackgroundRun(secondRun.Id, "completed");
+
+                    await Task.CompletedTask;
+                }));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("All 2 background run(s) finished", output, StringComparison.Ordinal);
+        Assert.Contains($"{firstRun.Id}: Stopped", output, StringComparison.Ordinal);
+        Assert.Contains($"{secondRun.Id}: Stopped", output, StringComparison.Ordinal);
+    }
+
     private static CommandContext CreateContext(
         IAgentTaskRuntime runtime,
         List<string> lines,

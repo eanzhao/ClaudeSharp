@@ -14,6 +14,12 @@ public sealed class AgentWaitToolInput
     [JsonPropertyName("id")]
     public string Id { get; set; } = "";
 
+    [JsonPropertyName("ids")]
+    public string[]? Ids { get; set; }
+
+    [JsonPropertyName("wait_mode")]
+    public string? WaitMode { get; set; }
+
     [JsonPropertyName("poll_ms")]
     public int? PollMs { get; set; }
 
@@ -40,7 +46,7 @@ public sealed class AgentWaitTool : ITool
 
     public Task<string> GetDescriptionAsync() =>
         Task.FromResult(
-            "Wait for a background subagent to reach a terminal state and then return its final status.");
+            "Wait for one or more background subagents to reach terminal states and then return their final statuses.");
 
     public JsonElement GetInputSchema()
     {
@@ -51,6 +57,18 @@ public sealed class AgentWaitTool : ITool
             "id": {
               "type": "string",
               "description": "The background-run id to wait for"
+            },
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Multiple background-run ids to wait for"
+            },
+            "wait_mode": {
+              "type": "string",
+              "enum": ["all", "any"],
+              "description": "Whether to wait for all runs or return when any run finishes"
             },
             "poll_ms": {
               "type": "integer",
@@ -65,7 +83,6 @@ public sealed class AgentWaitTool : ITool
               "description": "When true, include the captured background-run output in the final result"
             }
           },
-          "required": ["id"],
           "additionalProperties": false
         }
         """).RootElement.Clone();
@@ -74,9 +91,10 @@ public sealed class AgentWaitTool : ITool
     public Task<string> GetPromptAsync(ToolPromptContext context)
     {
         return Task.FromResult("""
-            Wait for a background subagent to finish.
+            Wait for one or more background subagents to finish.
 
-            Use this after launching Agent with run_in_background=true when you need the final status before continuing.
+            Use this after launching Agent with run_in_background=true when you need a final status before continuing.
+            Provide id for a single run, or ids plus wait_mode=all/any for batch waits.
             Set include_output=true if you also need the captured run output in the response.
             """);
     }
@@ -86,12 +104,18 @@ public sealed class AgentWaitTool : ITool
         try
         {
             var parsed = JsonSerializer.Deserialize<AgentWaitToolInput>(input);
-            if (parsed == null || string.IsNullOrWhiteSpace(parsed.Id))
-                return Task.FromResult(ValidationResult.Invalid("id is required."));
+            if (parsed == null)
+                return Task.FromResult(ValidationResult.Invalid("id or ids is required."));
+
+            if (!TryCollectRunIds(parsed, out _, out var error))
+                return Task.FromResult(ValidationResult.Invalid(error!));
+
             if (parsed.PollMs is <= 0)
                 return Task.FromResult(ValidationResult.Invalid("poll_ms must be greater than 0."));
             if (parsed.TimeoutMs is <= 0)
                 return Task.FromResult(ValidationResult.Invalid("timeout_ms must be greater than 0."));
+            if (!TryParseWaitMode(parsed.WaitMode, out _, out error))
+                return Task.FromResult(ValidationResult.Invalid(error!));
 
             return Task.FromResult(ValidationResult.Valid());
         }
@@ -119,13 +143,19 @@ public sealed class AgentWaitTool : ITool
         CancellationToken cancellationToken = default)
     {
         var parsed = JsonSerializer.Deserialize<AgentWaitToolInput>(input);
-        if (parsed == null || string.IsNullOrWhiteSpace(parsed.Id))
-            return ToolResult.Error("id is required.");
+        if (parsed == null)
+            return ToolResult.Error("id or ids is required.");
 
-        var id = parsed.Id.Trim();
-        var waitResult = await AgentBackgroundRunWaiter.WaitAsync(
+        if (!TryCollectRunIds(parsed, out var runIds, out var error))
+            return ToolResult.Error(error!);
+
+        if (!TryParseWaitMode(parsed.WaitMode, out var waitMode, out error))
+            return ToolResult.Error(error!);
+
+        var waitResult = await AgentBackgroundRunWaiter.WaitManyAsync(
             _taskRuntime,
-            id,
+            runIds,
+            waitMode,
             TimeSpan.FromMilliseconds(parsed.PollMs ?? 500),
             parsed.TimeoutMs.HasValue
                 ? TimeSpan.FromMilliseconds(parsed.TimeoutMs.Value)
@@ -135,7 +165,7 @@ public sealed class AgentWaitTool : ITool
         return waitResult.Outcome switch
         {
             AgentBackgroundRunWaitOutcome.NotFound =>
-                ToolResult.Error($"No background run matched id '{id}'."),
+                ToolResult.Error(BuildNotFoundMessage(waitResult)),
             AgentBackgroundRunWaitOutcome.TimedOut =>
                 ToolResult.Error(BuildTimedOutMessage(waitResult)),
             _ =>
@@ -144,27 +174,137 @@ public sealed class AgentWaitTool : ITool
     }
 
     private string BuildCompletedMessage(
-        AgentBackgroundRunWaitResult waitResult,
+        AgentBackgroundRunWaitBatchResult waitResult,
         bool includeOutput)
     {
-        AgentStatusFormatter.TryFormatDetails(
-            _taskRuntime,
-            waitResult.BackgroundRunId,
-            includeOutput,
-            outputOffset: null,
-            outputLimit: null,
-            out var details);
+        var lines = new List<string>
+        {
+            $"Wait finished after {Math.Round(waitResult.Elapsed.TotalMilliseconds)}ms.",
+        };
 
-        return $"""
-            Wait finished after {Math.Round(waitResult.Elapsed.TotalMilliseconds)}ms.
+        if (waitResult.Mode == AgentBackgroundRunWaitMode.Any && waitResult.PendingRuns.Count > 0)
+            lines.Add($"At least one background run finished. {waitResult.PendingRuns.Count} run(s) are still active.");
+        else
+            lines.Add($"All {waitResult.CompletedRuns.Count} background run(s) reached terminal states.");
 
-            {details}
-            """.TrimEnd();
+        if (waitResult.CompletedRuns.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("Completed runs:");
+            foreach (var snapshot in waitResult.CompletedRuns)
+                lines.Add($"- {snapshot.BackgroundRunId}: {snapshot.Run!.Status}");
+        }
+
+        if (waitResult.PendingRuns.Count > 0)
+        {
+            lines.Add(string.Empty);
+            lines.Add("Still running:");
+            foreach (var snapshot in waitResult.PendingRuns)
+                lines.Add($"- {snapshot.BackgroundRunId}: {snapshot.Run!.Status}");
+        }
+
+        if (includeOutput && waitResult.CompletedRuns.Count > 0)
+        {
+            foreach (var snapshot in waitResult.CompletedRuns)
+            {
+                if (!AgentStatusFormatter.TryFormatDetails(
+                        _taskRuntime,
+                        snapshot.BackgroundRunId,
+                        includeOutput: true,
+                        outputOffset: null,
+                        outputLimit: null,
+                        out var details))
+                {
+                    continue;
+                }
+
+                lines.Add(string.Empty);
+                lines.Add(details);
+            }
+        }
+
+        return string.Join(Environment.NewLine, lines);
     }
 
-    private static string BuildTimedOutMessage(AgentBackgroundRunWaitResult waitResult)
+    private static string BuildTimedOutMessage(AgentBackgroundRunWaitBatchResult waitResult)
     {
-        var status = waitResult.Run?.Status.ToString() ?? "Unknown";
-        return $"Timed out after {Math.Round(waitResult.Elapsed.TotalMilliseconds)}ms while waiting for {waitResult.BackgroundRunId}. Current status: {status}.";
+        if (waitResult.PendingRuns.Count == 0 && waitResult.CompletedRuns.Count == 0)
+            return $"Timed out after {Math.Round(waitResult.Elapsed.TotalMilliseconds)}ms while waiting for background runs.";
+
+        var statuses = waitResult.CompletedRuns
+            .Concat(waitResult.PendingRuns)
+            .Select(snapshot => $"{snapshot.BackgroundRunId}={snapshot.Run?.Status ?? AgentBackgroundRunStatus.Queued}");
+        var target = waitResult.Mode == AgentBackgroundRunWaitMode.Any ? "any of the requested runs" : "all requested runs";
+        return $"Timed out after {Math.Round(waitResult.Elapsed.TotalMilliseconds)}ms while waiting for {target}. Current statuses: {string.Join(", ", statuses)}.";
+    }
+
+    private static string BuildNotFoundMessage(AgentBackgroundRunWaitBatchResult waitResult) =>
+        waitResult.MissingRunIds.Count == 1
+            ? $"No background run matched id '{waitResult.MissingRunIds[0]}'."
+            : $"No background runs matched these ids: {string.Join(", ", waitResult.MissingRunIds)}.";
+
+    private static bool TryCollectRunIds(
+        AgentWaitToolInput parsed,
+        out List<string> runIds,
+        out string? error)
+    {
+        runIds = [];
+        error = null;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(parsed.Id))
+        {
+            var normalized = parsed.Id.Trim();
+            if (seen.Add(normalized))
+                runIds.Add(normalized);
+        }
+
+        if (parsed.Ids != null)
+        {
+            foreach (var id in parsed.Ids)
+            {
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    error = "ids cannot contain empty values.";
+                    return false;
+                }
+
+                var normalized = id.Trim();
+                if (seen.Add(normalized))
+                    runIds.Add(normalized);
+            }
+        }
+
+        if (runIds.Count == 0)
+        {
+            error = "id or ids is required.";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool TryParseWaitMode(
+        string? rawMode,
+        out AgentBackgroundRunWaitMode waitMode,
+        out string? error)
+    {
+        error = null;
+        waitMode = AgentBackgroundRunWaitMode.All;
+
+        if (string.IsNullOrWhiteSpace(rawMode))
+            return true;
+
+        if (string.Equals(rawMode, "all", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        if (string.Equals(rawMode, "any", StringComparison.OrdinalIgnoreCase))
+        {
+            waitMode = AgentBackgroundRunWaitMode.Any;
+            return true;
+        }
+
+        error = "wait_mode must be either 'all' or 'any'.";
+        return false;
     }
 }

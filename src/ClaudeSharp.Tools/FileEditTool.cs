@@ -69,6 +69,8 @@ public class FileEditTool : ITool
             return ToolResult.Error("file_path is required.");
         if (oldString == null)
             return ToolResult.Error("old_string is required.");
+        if (oldString.Length == 0)
+            return ToolResult.Error("old_string must not be empty.");
         if (newString == null)
             return ToolResult.Error("new_string is required.");
 

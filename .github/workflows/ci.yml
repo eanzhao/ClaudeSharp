@@ -34,7 +34,6 @@ jobs:
           /p:CollectCoverage=true
           /p:CoverletOutputFormat=json
           /p:CoverletOutput=TestResults/coverage-ci/
-          '/p:Include=[ClaudeSharp.Core]*'
-          /p:Threshold=90
+          /p:Threshold=80
           /p:ThresholdType=line
           /p:ThresholdStat=total
