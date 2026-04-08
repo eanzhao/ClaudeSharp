@@ -186,6 +186,7 @@ internal static class Program
             commandRegistry,
             queryEngine,
             contextProvider.GetPermissionContext(),
+            agentTaskRuntime,
             startupNote);
 
         return await shell.RunAsync(options.InitialPrompt);
@@ -212,6 +213,7 @@ internal static class Program
             providerRouter,
             agentTaskRuntime,
             hooks));
+        registry.Register(new AgentStatusTool(agentTaskRuntime));
         return registry;
     }
 
@@ -234,6 +236,7 @@ internal static class Program
         registry.Register(new CompactCommand());
         registry.Register(new CostCommand());
         registry.Register(new ExitCommand());
+        registry.Register(new AgentsCommand());
         registry.Register(new ModelCommand());
         registry.Register(new MicrocompactCommand());
         registry.Register(new ModeCommand());
@@ -271,6 +274,7 @@ Options:
         private readonly CommandRegistry _commandRegistry;
         private readonly QueryEngine _queryEngine;
         private readonly PermissionContext _permissionContext;
+        private readonly IAgentTaskRuntime _agentTaskRuntime;
         private readonly string? _startupNote;
         private bool _exitRequested;
 
@@ -281,6 +285,7 @@ Options:
             CommandRegistry commandRegistry,
             QueryEngine queryEngine,
             PermissionContext permissionContext,
+            IAgentTaskRuntime agentTaskRuntime,
             string? startupNote)
         {
             _workingDirectory = workingDirectory;
@@ -289,6 +294,7 @@ Options:
             _commandRegistry = commandRegistry;
             _queryEngine = queryEngine;
             _permissionContext = permissionContext;
+            _agentTaskRuntime = agentTaskRuntime;
             _startupNote = startupNote;
         }
 
@@ -304,6 +310,7 @@ Options:
                 Tools = _toolRegistry,
                 QueryEngine = _queryEngine,
                 PermissionContext = _permissionContext,
+                AgentTaskRuntime = _agentTaskRuntime,
                 Commands = _commandRegistry.GetAll(),
                 RequestExit = () => _exitRequested = true,
                 RequestClear = () =>

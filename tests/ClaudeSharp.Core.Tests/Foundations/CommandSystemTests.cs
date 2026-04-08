@@ -1,5 +1,6 @@
 using ClaudeSharp.Core.Commands;
 using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Core.Agents;
 
 namespace ClaudeSharp.Core.Tests.Foundations;
 
@@ -64,12 +65,14 @@ public sealed class CommandSystemTests
             Tools = registry,
             QueryEngine = null!,
             PermissionContext = new ClaudeSharp.Core.Permissions.PermissionContext(),
+            AgentTaskRuntime = new InMemoryAgentTaskRuntime(),
             Commands = [new TestCommand("alpha")],
             RequestExit = () => { },
             RequestClear = () => { },
         };
         Assert.NotNull(context.Tools.Get("alpha"));
         Assert.Single(context.Commands);
+        Assert.NotNull(context.AgentTaskRuntime);
         Assert.NotNull(context.RequestExit);
         Assert.NotNull(context.RequestClear);
     }

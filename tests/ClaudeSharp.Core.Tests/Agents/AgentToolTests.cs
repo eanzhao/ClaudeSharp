@@ -90,6 +90,100 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CanLaunchBackgroundSubagent()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var runner = new AsyncRecordingRunner(async (_, cancellationToken) =>
+        {
+            await Task.Delay(25, cancellationToken);
+            return new AgentExecutionResult(
+                Summary: "background summary",
+                Success: true,
+                Usage: new TokenUsage
+                {
+                    InputTokens = 11,
+                    OutputTokens = 13,
+                },
+                TurnCount: 3);
+        });
+
+        var tool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            runtime,
+            HookRuntime.Empty);
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "Inspect the runtime",
+                run_in_background = true,
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("background-run-1", result.Data, StringComparison.Ordinal);
+
+        await WaitForAsync(() =>
+            runtime.GetBackgroundRun("background-run-1")?.Status == AgentBackgroundRunStatus.Stopped);
+
+        var workItem = Assert.Single(runtime.ListWorkItems());
+        Assert.Equal(AgentWorkItemStatus.Completed, workItem.Status);
+
+        var backgroundRun = Assert.Single(runtime.ListBackgroundRuns());
+        Assert.Equal(AgentBackgroundRunStatus.Stopped, backgroundRun.Status);
+        Assert.Contains(backgroundRun.Output, chunk =>
+            chunk.Contains("background summary", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AgentStatusTool_ReturnsOverviewAndDetails()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var workItem = runtime.CreateWorkItem("Inspect tools", owner: "subagent");
+        runtime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+
+        var backgroundRun = runtime.StartBackgroundRun("Inspect tools", "subagent");
+        runtime.AppendBackgroundRunOutput(backgroundRun.Id, "Summary: all good");
+        runtime.StopBackgroundRun(backgroundRun.Id, "completed");
+
+        var tool = new AgentStatusTool(runtime);
+
+        var overview = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new { }),
+            CreateContext());
+        var details = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                id = backgroundRun.Id,
+                include_output = true,
+            }),
+            CreateContext());
+
+        Assert.False(overview.IsError);
+        Assert.Contains(workItem.Id, overview.Data, StringComparison.Ordinal);
+        Assert.Contains(backgroundRun.Id, overview.Data, StringComparison.Ordinal);
+
+        Assert.False(details.IsError);
+        Assert.Contains("Background run:", details.Data, StringComparison.Ordinal);
+        Assert.Contains("Summary: all good", details.Data, StringComparison.Ordinal);
+        Assert.Contains("completed", details.Data, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AgentStatusTool_ReturnsErrorForMissingId()
+    {
+        var tool = new AgentStatusTool(new InMemoryAgentTaskRuntime());
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new { id = "missing" }),
+            CreateContext());
+
+        Assert.True(result.IsError);
+        Assert.Contains("missing", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task QueryEngineAgentRunner_UsesChildQueryEngineAndReturnsSummary()
     {
         using var temp = new TempDirectory();
@@ -154,5 +248,39 @@ public sealed class AgentToolTests
             Requests.Add(request);
             return Task.FromResult(_result);
         }
+    }
+
+    private sealed class AsyncRecordingRunner : IAgentExecutionRunner
+    {
+        private readonly Func<AgentExecutionRequest, CancellationToken, Task<AgentExecutionResult>> _handler;
+
+        public AsyncRecordingRunner(
+            Func<AgentExecutionRequest, CancellationToken, Task<AgentExecutionResult>> handler)
+        {
+            _handler = handler;
+        }
+
+        public List<AgentExecutionRequest> Requests { get; } = [];
+
+        public async Task<AgentExecutionResult> RunAsync(
+            AgentExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return await _handler(request, cancellationToken);
+        }
+    }
+
+    private static async Task WaitForAsync(Func<bool> predicate)
+    {
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            if (predicate())
+                return;
+
+            await Task.Delay(25);
+        }
+
+        Assert.True(predicate(), "Condition was not met before timeout.");
     }
 }

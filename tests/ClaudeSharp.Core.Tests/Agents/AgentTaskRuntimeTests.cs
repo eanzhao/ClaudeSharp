@@ -48,12 +48,30 @@ public sealed class AgentTaskRuntimeTests
         var runtime = new InMemoryAgentTaskRuntime();
 
         Assert.False(runtime.UpdateWorkItem("missing", _ => { }));
+        Assert.False(runtime.UpdateBackgroundRun("missing", _ => { }));
         Assert.False(runtime.AppendBackgroundRunOutput("missing", "output"));
         Assert.False(runtime.StopBackgroundRun("missing"));
+        Assert.False(runtime.FailBackgroundRun("missing"));
         Assert.Null(runtime.GetWorkItem("missing"));
         Assert.Null(runtime.GetBackgroundRun("missing"));
         Assert.Empty(runtime.ListWorkItems());
         Assert.Empty(runtime.ListBackgroundRuns());
+    }
+
+    [Fact]
+    public void UpdateBackgroundRunAndFailTrackLatestState()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var run = runtime.StartBackgroundRun("research");
+
+        Assert.True(runtime.UpdateBackgroundRun(run.Id, item => item.Owner = "subagent"));
+        Assert.True(runtime.FailBackgroundRun(run.Id, "network timeout"));
+
+        var stored = Assert.Single(runtime.ListBackgroundRuns());
+        Assert.Equal("subagent", stored.Owner);
+        Assert.Equal(AgentBackgroundRunStatus.Failed, stored.Status);
+        Assert.Equal("network timeout", stored.StopReason);
+        Assert.NotNull(stored.StoppedAt);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using ClaudeSharp.Core.Commands;
 using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Core.Agents;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
@@ -42,6 +43,7 @@ public sealed class CommandSystemTests
             Tools = tools,
             QueryEngine = null!,
             PermissionContext = new ClaudeSharp.Core.Permissions.PermissionContext(),
+            AgentTaskRuntime = new InMemoryAgentTaskRuntime(),
             Commands = [new TestCommand("alpha")],
             RequestExit = () => { },
             RequestClear = () => { },
@@ -49,6 +51,7 @@ public sealed class CommandSystemTests
 
         Assert.NotNull(context.Tools.Get("alpha"));
         Assert.Single(context.Commands);
+        Assert.NotNull(context.AgentTaskRuntime);
         Assert.NotNull(context.RequestExit);
         Assert.NotNull(context.RequestClear);
     }

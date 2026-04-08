@@ -19,6 +19,9 @@ public sealed class AgentToolInput
 
     [JsonPropertyName("subagent_type")]
     public string? SubagentType { get; set; }
+
+    [JsonPropertyName("run_in_background")]
+    public bool RunInBackground { get; set; }
 }
 
 /// <summary>
@@ -62,6 +65,10 @@ public sealed class AgentTool : ITool
             "subagent_type": {
               "type": "string",
               "description": "Optional hint like research, debugging, or review"
+            },
+            "run_in_background": {
+              "type": "boolean",
+              "description": "When true, launch the subagent in the background and return immediately"
             }
           },
           "required": ["prompt"],
@@ -84,6 +91,7 @@ public sealed class AgentTool : ITool
             Important limits:
             - This ClaudeSharp implementation runs subagents in read-only mode
             - The subagent can inspect files and use web discovery tools, but it does not edit files
+            - Set run_in_background=true when the work can continue asynchronously
             - Use it for separable investigation tasks, not for the final user-facing answer
             - Give it a concrete prompt with a clear scope and expected output
             """);
@@ -123,20 +131,12 @@ public sealed class AgentTool : ITool
             owner: "subagent");
         _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.InProgress);
 
+        if (parsed.RunInBackground)
+            return LaunchInBackground(workItem, parsed, context);
+
         try
         {
-            var result = await _runner.RunAsync(
-                new AgentExecutionRequest
-                {
-                    Prompt = parsed.Prompt.Trim(),
-                    WorkingDirectory = context.WorkingDirectory,
-                    Model = context.MainLoopModel,
-                    Tools = BuildReadOnlyToolRegistry(context.MainLoopModel),
-                    PermissionContext = context.PermissionContext,
-                    SystemPromptAppendix = BuildSubagentSystemPrompt(parsed.SubagentType),
-                    Hooks = _hooks,
-                },
-                cancellationToken);
+            var result = await RunSubagentAsync(parsed, context, cancellationToken);
 
             _taskRuntime.UpdateWorkItem(workItem.Id, item =>
             {
@@ -163,6 +163,86 @@ public sealed class AgentTool : ITool
             _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.Blocked);
             return ToolResult.Error($"Subagent {workItem.Id} failed: {ex.Message}");
         }
+    }
+
+    private ToolResult LaunchInBackground(
+        AgentWorkItem workItem,
+        AgentToolInput input,
+        ToolExecutionContext context)
+    {
+        var backgroundRun = _taskRuntime.StartBackgroundRun(
+            BuildTitle(input.Prompt),
+            owner: "subagent");
+        _taskRuntime.AppendBackgroundRunOutput(
+            backgroundRun.Id,
+            $"Queued prompt: {input.Prompt.Trim()}");
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var result = await RunSubagentAsync(input, context, CancellationToken.None);
+                if (result.Success)
+                {
+                    _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                        item.Status = AgentWorkItemStatus.Completed);
+                    _taskRuntime.AppendBackgroundRunOutput(
+                        backgroundRun.Id,
+                        FormatResult(workItem.Id, input, result));
+                    _taskRuntime.StopBackgroundRun(backgroundRun.Id, "completed");
+                    return;
+                }
+
+                var error = result.ErrorMessage ?? "Unknown error";
+                _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                    item.Status = AgentWorkItemStatus.Blocked);
+                _taskRuntime.AppendBackgroundRunOutput(
+                    backgroundRun.Id,
+                    $"Subagent {workItem.Id} failed: {error}");
+                _taskRuntime.FailBackgroundRun(backgroundRun.Id, error);
+            }
+            catch (OperationCanceledException)
+            {
+                _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                    item.Status = AgentWorkItemStatus.Cancelled);
+                _taskRuntime.AppendBackgroundRunOutput(
+                    backgroundRun.Id,
+                    $"Subagent {workItem.Id} was cancelled.");
+                _taskRuntime.StopBackgroundRun(backgroundRun.Id, "cancelled");
+            }
+            catch (Exception ex)
+            {
+                _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                    item.Status = AgentWorkItemStatus.Blocked);
+                _taskRuntime.AppendBackgroundRunOutput(
+                    backgroundRun.Id,
+                    $"Subagent {workItem.Id} failed: {ex.Message}");
+                _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
+            }
+        });
+
+        return ToolResult.Success(
+            $"Subagent {workItem.Id} started in the background as {backgroundRun.Id}. " +
+            $"Use AgentStatus with id=\"{backgroundRun.Id}\" to inspect progress.");
+    }
+
+    private Task<AgentExecutionResult> RunSubagentAsync(
+        AgentToolInput input,
+        ToolExecutionContext context,
+        CancellationToken cancellationToken)
+    {
+        return _runner.RunAsync(
+            new AgentExecutionRequest
+            {
+                Prompt = input.Prompt.Trim(),
+                WorkingDirectory = context.WorkingDirectory,
+                Model = context.MainLoopModel,
+                Tools = BuildReadOnlyToolRegistry(context.MainLoopModel),
+                PermissionContext = context.PermissionContext,
+                SystemPromptAppendix = BuildSubagentSystemPrompt(input.SubagentType),
+                Hooks = _hooks,
+            },
+            cancellationToken);
     }
 
     private ToolRegistry BuildReadOnlyToolRegistry(string model)

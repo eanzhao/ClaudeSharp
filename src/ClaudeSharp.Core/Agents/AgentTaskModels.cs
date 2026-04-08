@@ -67,6 +67,7 @@ public sealed class AgentBackgroundRun
     public AgentBackgroundRunStatus Status { get; set; } = AgentBackgroundRunStatus.Running;
     public string? StopReason { get; set; }
     public DateTimeOffset StartedAt { get; init; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? StoppedAt { get; set; }
 
     public IReadOnlyList<string> Output => _output;
@@ -74,13 +75,25 @@ public sealed class AgentBackgroundRun
     public void AppendOutput(string chunk)
     {
         if (!string.IsNullOrWhiteSpace(chunk))
+        {
             _output.Add(chunk);
+            UpdatedAt = DateTimeOffset.UtcNow;
+        }
     }
 
     public void Stop(string? reason = null)
     {
         Status = AgentBackgroundRunStatus.Stopped;
         StopReason = reason;
+        UpdatedAt = DateTimeOffset.UtcNow;
+        StoppedAt = DateTimeOffset.UtcNow;
+    }
+
+    public void Fail(string? reason = null)
+    {
+        Status = AgentBackgroundRunStatus.Failed;
+        StopReason = reason;
+        UpdatedAt = DateTimeOffset.UtcNow;
         StoppedAt = DateTimeOffset.UtcNow;
     }
 }

@@ -24,9 +24,13 @@ public interface IAgentTaskRuntime
 
     IReadOnlyList<AgentBackgroundRun> ListBackgroundRuns();
 
+    bool UpdateBackgroundRun(string id, Action<AgentBackgroundRun> update);
+
     bool AppendBackgroundRunOutput(string id, string chunk);
 
     bool StopBackgroundRun(string id, string? reason = null);
+
+    bool FailBackgroundRun(string id, string? reason = null);
 }
 
 /// <summary>
@@ -34,6 +38,7 @@ public interface IAgentTaskRuntime
 /// </summary>
 public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
 {
+    private readonly object _gate = new();
     private readonly Dictionary<string, AgentWorkItem> _workItems =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AgentBackgroundRun> _backgroundRuns =
@@ -54,27 +59,34 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
             Owner = string.IsNullOrWhiteSpace(owner) ? null : owner.Trim(),
         };
 
-        _workItems[item.Id] = item;
+        lock (_gate)
+            _workItems[item.Id] = item;
         return item;
     }
 
-    public AgentWorkItem? GetWorkItem(string id) =>
-        _workItems.TryGetValue(id, out var item) ? item : null;
+    public AgentWorkItem? GetWorkItem(string id)
+    {
+        lock (_gate)
+            return _workItems.TryGetValue(id, out var item) ? item : null;
+    }
 
     public IReadOnlyList<AgentWorkItem> ListWorkItems() =>
-        _workItems.Values
+        SnapshotWorkItems()
             .OrderBy(item => item.CreatedAt)
             .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
     public bool UpdateWorkItem(string id, Action<AgentWorkItem> update)
     {
-        if (!_workItems.TryGetValue(id, out var item))
-            return false;
+        lock (_gate)
+        {
+            if (!_workItems.TryGetValue(id, out var item))
+                return false;
 
-        update(item);
-        item.UpdatedAt = DateTimeOffset.UtcNow;
-        return true;
+            update(item);
+            item.UpdatedAt = DateTimeOffset.UtcNow;
+            return true;
+        }
     }
 
     public AgentBackgroundRun StartBackgroundRun(
@@ -88,34 +100,81 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
             Owner = string.IsNullOrWhiteSpace(owner) ? null : owner.Trim(),
         };
 
-        _backgroundRuns[run.Id] = run;
+        lock (_gate)
+            _backgroundRuns[run.Id] = run;
         return run;
     }
 
-    public AgentBackgroundRun? GetBackgroundRun(string id) =>
-        _backgroundRuns.TryGetValue(id, out var run) ? run : null;
+    public AgentBackgroundRun? GetBackgroundRun(string id)
+    {
+        lock (_gate)
+            return _backgroundRuns.TryGetValue(id, out var run) ? run : null;
+    }
 
     public IReadOnlyList<AgentBackgroundRun> ListBackgroundRuns() =>
-        _backgroundRuns.Values
+        SnapshotBackgroundRuns()
             .OrderBy(run => run.StartedAt)
             .ThenBy(run => run.Id, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
+    public bool UpdateBackgroundRun(string id, Action<AgentBackgroundRun> update)
+    {
+        lock (_gate)
+        {
+            if (!_backgroundRuns.TryGetValue(id, out var run))
+                return false;
+
+            update(run);
+            run.UpdatedAt = DateTimeOffset.UtcNow;
+            return true;
+        }
+    }
+
     public bool AppendBackgroundRunOutput(string id, string chunk)
     {
-        if (!_backgroundRuns.TryGetValue(id, out var run))
-            return false;
+        lock (_gate)
+        {
+            if (!_backgroundRuns.TryGetValue(id, out var run))
+                return false;
 
-        run.AppendOutput(chunk);
-        return true;
+            run.AppendOutput(chunk);
+            return true;
+        }
     }
 
     public bool StopBackgroundRun(string id, string? reason = null)
     {
-        if (!_backgroundRuns.TryGetValue(id, out var run))
-            return false;
+        lock (_gate)
+        {
+            if (!_backgroundRuns.TryGetValue(id, out var run))
+                return false;
 
-        run.Stop(reason);
-        return true;
+            run.Stop(reason);
+            return true;
+        }
+    }
+
+    public bool FailBackgroundRun(string id, string? reason = null)
+    {
+        lock (_gate)
+        {
+            if (!_backgroundRuns.TryGetValue(id, out var run))
+                return false;
+
+            run.Fail(reason);
+            return true;
+        }
+    }
+
+    private IReadOnlyList<AgentWorkItem> SnapshotWorkItems()
+    {
+        lock (_gate)
+            return _workItems.Values.ToArray();
+    }
+
+    private IReadOnlyList<AgentBackgroundRun> SnapshotBackgroundRuns()
+    {
+        lock (_gate)
+            return _backgroundRuns.Values.ToArray();
     }
 }

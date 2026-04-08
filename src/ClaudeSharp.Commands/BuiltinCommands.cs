@@ -1,3 +1,4 @@
+using ClaudeSharp.Core.Agents;
 using ClaudeSharp.Core.Commands;
 using ClaudeSharp.Core.Compaction;
 using ClaudeSharp.Core.Permissions;
@@ -89,6 +90,38 @@ public class ExitCommand : ICommand
     public Task ExecuteAsync(string args, CommandContext context)
     {
         context.RequestExit?.Invoke();
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Represents agents command.
+/// </summary>
+public class AgentsCommand : ICommand
+{
+    public string Name => "agents";
+    public string Description => "Show subagent work items and background runs";
+
+    public Task ExecuteAsync(string args, CommandContext context)
+    {
+        var trimmed = args.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            context.WriteLine(AgentStatusFormatter.FormatOverview(context.AgentTaskRuntime));
+            return Task.CompletedTask;
+        }
+
+        if (AgentStatusFormatter.TryFormatDetails(
+                context.AgentTaskRuntime,
+                trimmed,
+                includeOutput: true,
+                out var details))
+        {
+            context.WriteLine(details);
+            return Task.CompletedTask;
+        }
+
+        context.WriteLine(details);
         return Task.CompletedTask;
     }
 }

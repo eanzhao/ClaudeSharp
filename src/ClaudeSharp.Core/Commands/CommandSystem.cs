@@ -1,3 +1,5 @@
+using ClaudeSharp.Core.Agents;
+
 namespace ClaudeSharp.Core.Commands;
 
 /// <summary>
@@ -29,6 +31,7 @@ public class CommandContext
     public required Tools.ToolRegistry Tools { get; init; }
     public required Query.QueryEngine QueryEngine { get; init; }
     public required Permissions.PermissionContext PermissionContext { get; init; }
+    public required IAgentTaskRuntime AgentTaskRuntime { get; init; }
     public required IReadOnlyList<ICommand> Commands { get; init; }
     public Action? RequestExit { get; init; }
     public Action? RequestClear { get; init; }
