@@ -47,6 +47,8 @@ public static class AgentStatusFormatter
         IAgentTaskRuntime runtime,
         string id,
         bool includeOutput,
+        int? outputOffset,
+        int? outputLimit,
         out string details)
     {
         if (runtime.GetWorkItem(id) is { } workItem)
@@ -57,7 +59,11 @@ public static class AgentStatusFormatter
 
         if (runtime.GetBackgroundRun(id) is { } backgroundRun)
         {
-            details = FormatBackgroundRun(backgroundRun, includeOutput);
+            details = FormatBackgroundRun(
+                backgroundRun,
+                includeOutput,
+                outputOffset,
+                outputLimit);
             return true;
         }
 
@@ -86,7 +92,11 @@ public static class AgentStatusFormatter
         return builder.ToString().TrimEnd();
     }
 
-    private static string FormatBackgroundRun(AgentBackgroundRun run, bool includeOutput)
+    private static string FormatBackgroundRun(
+        AgentBackgroundRun run,
+        bool includeOutput,
+        int? outputOffset,
+        int? outputLimit)
     {
         var builder = new StringBuilder();
         builder.AppendLine($"Background run: {run.Id}");
@@ -103,9 +113,30 @@ public static class AgentStatusFormatter
 
         if (includeOutput && run.Output.Count > 0)
         {
+            var offset = Math.Max(0, outputOffset ?? 0);
+            var limit = outputLimit.HasValue
+                ? Math.Max(1, outputLimit.Value)
+                : int.MaxValue;
+            var page = run.Output.Skip(offset).Take(limit).ToArray();
+            var start = page.Length == 0 ? 0 : offset + 1;
+            var end = page.Length == 0 ? 0 : offset + page.Length;
+
             builder.AppendLine();
             builder.AppendLine("Output:");
-            foreach (var chunk in run.Output)
+            if (page.Length == 0)
+            {
+                builder.AppendLine(
+                    $"No output entries at or after offset {offset}. Total output entries: {run.Output.Count}.");
+            }
+            else
+            {
+                builder.AppendLine(
+                    page.Length == run.Output.Count && offset == 0
+                        ? $"Showing all {run.Output.Count} output entr{(run.Output.Count == 1 ? "y" : "ies")}."
+                        : $"Showing output entries {start}-{end} of {run.Output.Count}.");
+            }
+
+            foreach (var chunk in page)
             {
                 builder.AppendLine("---");
                 builder.AppendLine(chunk);

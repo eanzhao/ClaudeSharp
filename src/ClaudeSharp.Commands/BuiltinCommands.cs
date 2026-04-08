@@ -115,6 +115,8 @@ public class AgentsCommand : ICommand
                 context.AgentTaskRuntime,
                 trimmed,
                 includeOutput: true,
+                outputOffset: null,
+                outputLimit: null,
                 out var details))
         {
             context.WriteLine(details);

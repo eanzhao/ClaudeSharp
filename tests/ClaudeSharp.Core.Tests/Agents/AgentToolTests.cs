@@ -138,6 +138,65 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_BackgroundSubagentStreamsProgressToRuntime()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var runner = new AsyncRecordingRunner(async (request, cancellationToken) =>
+        {
+            request.Progress?.Report(new AgentExecutionProgress("status", "Child agent started"));
+            request.Progress?.Report(new AgentExecutionProgress("text", "First line"));
+            request.Progress?.Report(new AgentExecutionProgress("text", "\nSecond line"));
+            request.Progress?.Report(new AgentExecutionProgress(
+                "tool_start",
+                "{\"file_path\":\"/tmp/example.txt\"}",
+                ToolName: "Read",
+                ToolUseId: "tool-1"));
+            request.Progress?.Report(new AgentExecutionProgress(
+                "tool_result",
+                string.Empty,
+                ToolName: "Read",
+                ToolUseId: "tool-1"));
+            await Task.Delay(25, cancellationToken);
+            return new AgentExecutionResult(
+                Summary: "background summary",
+                Success: true,
+                Usage: TokenUsage.Empty,
+                TurnCount: 2);
+        });
+
+        var tool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            runtime,
+            HookRuntime.Empty);
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "Inspect the runtime",
+                run_in_background = true,
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+
+        await WaitForAsync(() =>
+            runtime.GetBackgroundRun("background-run-1")?.Status == AgentBackgroundRunStatus.Stopped);
+
+        var backgroundRun = Assert.Single(runtime.ListBackgroundRuns());
+        Assert.Contains(backgroundRun.Output, chunk =>
+            chunk.Contains("[status] Child agent started", StringComparison.Ordinal));
+        Assert.Contains(backgroundRun.Output, chunk =>
+            chunk.Contains("First line", StringComparison.Ordinal));
+        Assert.Contains(backgroundRun.Output, chunk =>
+            chunk.Contains("Second line", StringComparison.Ordinal));
+        Assert.Contains(backgroundRun.Output, chunk =>
+            chunk.Contains("[Read] {\"file_path\":\"/tmp/example.txt\"}", StringComparison.Ordinal));
+        Assert.Contains(backgroundRun.Output, chunk =>
+            chunk.Contains("[Read] done", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AgentStatusTool_ReturnsOverviewAndDetails()
     {
         var runtime = new InMemoryAgentTaskRuntime();
@@ -182,6 +241,34 @@ public sealed class AgentToolTests
 
         Assert.True(result.IsError);
         Assert.Contains("missing", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStatusTool_CanReturnOutputWindow()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var backgroundRun = runtime.StartBackgroundRun("Inspect tools", "subagent");
+        runtime.AppendBackgroundRunOutput(backgroundRun.Id, "line 1");
+        runtime.AppendBackgroundRunOutput(backgroundRun.Id, "line 2");
+        runtime.AppendBackgroundRunOutput(backgroundRun.Id, "line 3");
+        runtime.StopBackgroundRun(backgroundRun.Id, "completed");
+
+        var tool = new AgentStatusTool(runtime);
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                id = backgroundRun.Id,
+                include_output = true,
+                output_offset = 1,
+                output_limit = 1,
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("Showing output entries 2-2 of 3.", result.Data, StringComparison.Ordinal);
+        Assert.DoesNotContain("line 1", result.Data, StringComparison.Ordinal);
+        Assert.Contains("line 2", result.Data, StringComparison.Ordinal);
+        Assert.DoesNotContain("line 3", result.Data, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -282,6 +369,34 @@ public sealed class AgentToolTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task QueryEngineAgentRunner_ReportsTextProgress()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("child answer", inputTokens: 3, outputTokens: 4));
+        var client = TestSupport.CreateAnthropicClient(handler);
+
+        var progressEvents = new List<AgentExecutionProgress>();
+        var runner = new QueryEngineAgentRunner(client);
+
+        var result = await runner.RunAsync(
+            new AgentExecutionRequest
+            {
+                Prompt = "Summarize the subsystem",
+                WorkingDirectory = temp.Root,
+                Model = "claude-sonnet-4-6",
+                Tools = new ToolRegistry(),
+                PermissionContext = new PermissionContext(),
+                Progress = new RecordingProgress(progressEvents),
+            });
+
+        Assert.True(result.Success);
+        Assert.Contains(progressEvents, evt =>
+            evt.Type == "text" &&
+            evt.Message.Contains("child answer", StringComparison.Ordinal));
+    }
+
     private static ToolExecutionContext CreateContext() =>
         new()
         {
@@ -373,5 +488,17 @@ public sealed class AgentToolTests
                         return ValueTask.CompletedTask;
                     }));
         }
+    }
+
+    private sealed class RecordingProgress : IProgress<AgentExecutionProgress>
+    {
+        private readonly List<AgentExecutionProgress> _events;
+
+        public RecordingProgress(List<AgentExecutionProgress> events)
+        {
+            _events = events;
+        }
+
+        public void Report(AgentExecutionProgress value) => _events.Add(value);
     }
 }

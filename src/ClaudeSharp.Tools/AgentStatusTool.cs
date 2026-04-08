@@ -15,6 +15,12 @@ public sealed class AgentStatusToolInput
 
     [JsonPropertyName("include_output")]
     public bool IncludeOutput { get; set; } = true;
+
+    [JsonPropertyName("output_offset")]
+    public int? OutputOffset { get; set; }
+
+    [JsonPropertyName("output_limit")]
+    public int? OutputLimit { get; set; }
 }
 
 /// <summary>
@@ -48,6 +54,14 @@ public sealed class AgentStatusTool : ITool
             "include_output": {
               "type": "boolean",
               "description": "When inspecting a background run, include any captured output"
+            },
+            "output_offset": {
+              "type": "integer",
+              "description": "Skip this many output entries before formatting background-run output"
+            },
+            "output_limit": {
+              "type": "integer",
+              "description": "Return at most this many output entries from a background run"
             }
           },
           "additionalProperties": false
@@ -61,6 +75,7 @@ public sealed class AgentStatusTool : ITool
             Check the state of subagent work items and background runs.
 
             Use this after Agent with run_in_background=true, or whenever you need to see whether a subagent has finished.
+            When polling a long-running background run, use output_offset and output_limit to fetch only new output entries.
             """);
     }
 
@@ -99,6 +114,8 @@ public sealed class AgentStatusTool : ITool
             _taskRuntime,
             parsed.Id.Trim(),
             parsed.IncludeOutput,
+            parsed.OutputOffset,
+            parsed.OutputLimit,
             out var details);
 
         return Task.FromResult(found

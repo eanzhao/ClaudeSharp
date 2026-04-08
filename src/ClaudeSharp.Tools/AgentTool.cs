@@ -184,12 +184,14 @@ public sealed class AgentTool : ITool
         _taskRuntime.AppendBackgroundRunOutput(
             backgroundRun.Id,
             $"Queued prompt: {input.Prompt.Trim()}");
+        var logger = new BackgroundRunLogger(_taskRuntime, backgroundRun.Id);
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var result = await RunSubagentAsync(input, context, CancellationToken.None);
+                var result = await RunSubagentAsync(input, context, logger, CancellationToken.None);
+                logger.Flush();
                 if (result.Success)
                 {
                     _taskRuntime.UpdateWorkItem(workItem.Id, item =>
@@ -202,6 +204,7 @@ public sealed class AgentTool : ITool
                 }
 
                 var error = result.ErrorMessage ?? "Unknown error";
+                logger.Flush();
                 _taskRuntime.UpdateWorkItem(workItem.Id, item =>
                     item.Status = AgentWorkItemStatus.Blocked);
                 _taskRuntime.AppendBackgroundRunOutput(
@@ -211,6 +214,7 @@ public sealed class AgentTool : ITool
             }
             catch (OperationCanceledException)
             {
+                logger.Flush();
                 _taskRuntime.UpdateWorkItem(workItem.Id, item =>
                     item.Status = AgentWorkItemStatus.Cancelled);
                 _taskRuntime.AppendBackgroundRunOutput(
@@ -220,6 +224,7 @@ public sealed class AgentTool : ITool
             }
             catch (Exception ex)
             {
+                logger.Flush();
                 _taskRuntime.UpdateWorkItem(workItem.Id, item =>
                     item.Status = AgentWorkItemStatus.Blocked);
                 _taskRuntime.AppendBackgroundRunOutput(
@@ -237,6 +242,7 @@ public sealed class AgentTool : ITool
     private Task<AgentExecutionResult> RunSubagentAsync(
         AgentToolInput input,
         ToolExecutionContext context,
+        IProgress<AgentExecutionProgress>? progress,
         CancellationToken cancellationToken)
     {
         return _runner.RunAsync(
@@ -248,11 +254,18 @@ public sealed class AgentTool : ITool
                 Tools = BuildReadOnlyToolRegistry(context.MainLoopModel),
                 PermissionContext = context.PermissionContext,
                 UseIsolatedWorkspace = input.UseIsolatedWorkspace,
+                Progress = progress,
                 SystemPromptAppendix = BuildSubagentSystemPrompt(input.SubagentType),
                 Hooks = _hooks,
             },
             cancellationToken);
     }
+
+    private Task<AgentExecutionResult> RunSubagentAsync(
+        AgentToolInput input,
+        ToolExecutionContext context,
+        CancellationToken cancellationToken) =>
+        RunSubagentAsync(input, context, progress: null, cancellationToken);
 
     private ToolRegistry BuildReadOnlyToolRegistry(string model)
     {
@@ -316,5 +329,100 @@ public sealed class AgentTool : ITool
         builder.AppendLine(result.Summary);
 
         return builder.ToString().TrimEnd();
+    }
+
+    private sealed class BackgroundRunLogger : IProgress<AgentExecutionProgress>
+    {
+        private readonly IAgentTaskRuntime _taskRuntime;
+        private readonly string _backgroundRunId;
+        private readonly StringBuilder _textBuffer = new();
+        private readonly object _gate = new();
+
+        public BackgroundRunLogger(IAgentTaskRuntime taskRuntime, string backgroundRunId)
+        {
+            _taskRuntime = taskRuntime;
+            _backgroundRunId = backgroundRunId;
+        }
+
+        public void Report(AgentExecutionProgress value)
+        {
+            lock (_gate)
+            {
+                if (string.Equals(value.Type, "text", StringComparison.OrdinalIgnoreCase))
+                {
+                    AppendText(value.Message);
+                    return;
+                }
+
+                FlushCore();
+                AppendChunk(FormatProgress(value));
+            }
+        }
+
+        public void Flush()
+        {
+            lock (_gate)
+                FlushCore();
+        }
+
+        private void AppendText(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return;
+
+            _textBuffer.Append(text);
+            FlushCompletedLines();
+
+            if (_textBuffer.Length >= 240)
+                FlushCore();
+        }
+
+        private void FlushCompletedLines()
+        {
+            var current = _textBuffer.ToString();
+            var newlineIndex = current.LastIndexOf('\n');
+            if (newlineIndex < 0)
+                return;
+
+            var completed = current[..(newlineIndex + 1)].TrimEnd();
+            _textBuffer.Clear();
+
+            if (newlineIndex + 1 < current.Length)
+                _textBuffer.Append(current[(newlineIndex + 1)..]);
+
+            if (!string.IsNullOrWhiteSpace(completed))
+                AppendChunk(completed);
+        }
+
+        private void FlushCore()
+        {
+            var text = _textBuffer.ToString().TrimEnd();
+            _textBuffer.Clear();
+
+            if (!string.IsNullOrWhiteSpace(text))
+                AppendChunk(text);
+        }
+
+        private void AppendChunk(string chunk)
+        {
+            if (!string.IsNullOrWhiteSpace(chunk))
+                _taskRuntime.AppendBackgroundRunOutput(_backgroundRunId, chunk);
+        }
+
+        private static string FormatProgress(AgentExecutionProgress progress)
+        {
+            return progress.Type switch
+            {
+                "tool_start" => $"[{progress.ToolName ?? "tool"}] {progress.Message}",
+                "tool_progress" => $"[{progress.ToolName ?? progress.ToolUseId ?? "tool"}] {progress.Message}",
+                "tool_result" => progress.IsError
+                    ? $"[{progress.ToolName ?? "tool"}] failed\n{progress.Message}".TrimEnd()
+                    : $"[{progress.ToolName ?? "tool"}] done",
+                "status" => progress.IsError
+                    ? $"[error] {progress.Message}"
+                    : $"[status] {progress.Message}",
+                _ => progress.Message,
+            };
+        }
     }
 }

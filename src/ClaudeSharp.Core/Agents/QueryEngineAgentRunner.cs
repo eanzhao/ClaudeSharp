@@ -82,6 +82,35 @@ public sealed class QueryEngineAgentRunner : IAgentExecutionRunner
             {
                 case TextDeltaEvent delta:
                     text.Append(delta.Text);
+                    request.Progress?.Report(new AgentExecutionProgress("text", delta.Text));
+                    break;
+
+                case ToolUseStartEvent toolUse:
+                    request.Progress?.Report(new AgentExecutionProgress(
+                        "tool_start",
+                        SummarizeToolInput(toolUse.Input),
+                        toolUse.ToolName,
+                        toolUse.ToolUseId));
+                    break;
+
+                case ToolProgressEvent toolProgress:
+                    request.Progress?.Report(new AgentExecutionProgress(
+                        "tool_progress",
+                        toolProgress.Message,
+                        ToolUseId: toolProgress.ToolUseId));
+                    break;
+
+                case ToolResultEvent toolResult:
+                    request.Progress?.Report(new AgentExecutionProgress(
+                        "tool_result",
+                        toolResult.Result,
+                        toolResult.ToolName,
+                        toolResult.ToolUseId,
+                        toolResult.IsError));
+                    break;
+
+                case StatusEvent status:
+                    request.Progress?.Report(new AgentExecutionProgress("status", status.Status));
                     break;
 
                 case QueryCompleteEvent complete:
@@ -90,6 +119,10 @@ public sealed class QueryEngineAgentRunner : IAgentExecutionRunner
                     {
                         sawError = true;
                         errorMessage = complete.ErrorMessage;
+                        request.Progress?.Report(new AgentExecutionProgress(
+                            "status",
+                            complete.ErrorMessage ?? "Subagent failed.",
+                            IsError: true));
                     }
 
                     break;
@@ -119,6 +152,12 @@ public sealed class QueryEngineAgentRunner : IAgentExecutionRunner
             Usage: engine.TotalUsage,
             TurnCount: turnCount == 0 ? 1 : turnCount,
             ErrorMessage: errorMessage);
+    }
+
+    private static string SummarizeToolInput(System.Text.Json.JsonElement input)
+    {
+        var raw = input.GetRawText();
+        return raw.Length <= 120 ? raw : $"{raw[..117]}...";
     }
 
     private static PermissionContext ClonePermissionContext(
