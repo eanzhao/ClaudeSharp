@@ -13,6 +13,9 @@ public sealed class AgentStatusToolInput
     [JsonPropertyName("id")]
     public string? Id { get; set; }
 
+    [JsonPropertyName("view")]
+    public string? View { get; set; }
+
     [JsonPropertyName("kind")]
     public string? Kind { get; set; }
 
@@ -27,6 +30,9 @@ public sealed class AgentStatusToolInput
 
     [JsonPropertyName("limit")]
     public int? Limit { get; set; }
+
+    [JsonPropertyName("recent_limit")]
+    public int? RecentLimit { get; set; }
 
     [JsonPropertyName("include_output")]
     public bool IncludeOutput { get; set; } = true;
@@ -66,6 +72,10 @@ public sealed class AgentStatusTool : ITool
               "type": "string",
               "description": "Optional work-item or background-run id to inspect in detail"
             },
+            "view": {
+              "type": "string",
+              "description": "For listings only: overview (default) or summary"
+            },
             "kind": {
               "type": "string",
               "description": "For overview listings only: all, work_items, or background_runs"
@@ -85,6 +95,10 @@ public sealed class AgentStatusTool : ITool
             "limit": {
               "type": "integer",
               "description": "For overview listings only: return at most this many matching entries per section"
+            },
+            "recent_limit": {
+              "type": "integer",
+              "description": "For summary listings only: return at most this many recent work items and background runs"
             },
             "include_output": {
               "type": "boolean",
@@ -111,6 +125,7 @@ public sealed class AgentStatusTool : ITool
 
             Use this after Agent with run_in_background=true, or whenever you need to see whether a subagent has finished.
             For overview listings, you can filter by kind, status, owner, offset, and limit.
+            Set view=summary when you want a concise rollup of queue state, recent runs, and recent work items.
             When polling a long-running background run, use output_offset and output_limit to fetch only new output entries.
             """);
     }
@@ -120,12 +135,16 @@ public sealed class AgentStatusTool : ITool
         try
         {
             var parsed = JsonSerializer.Deserialize<AgentStatusToolInput>(input) ?? new AgentStatusToolInput();
+            if (!AgentStatusFormatter.TryParseView(parsed.View, out _))
+                return Task.FromResult(ValidationResult.Invalid("view must be overview or summary."));
             if (!AgentStatusFormatter.TryParseOverviewKind(parsed.Kind, out _))
                 return Task.FromResult(ValidationResult.Invalid("kind must be all, work_items, or background_runs."));
             if (parsed.Offset is < 0)
                 return Task.FromResult(ValidationResult.Invalid("offset must be 0 or greater."));
             if (parsed.Limit is <= 0)
                 return Task.FromResult(ValidationResult.Invalid("limit must be greater than 0."));
+            if (parsed.RecentLimit is <= 0)
+                return Task.FromResult(ValidationResult.Invalid("recent_limit must be greater than 0."));
             if (parsed.OutputOffset is < 0)
                 return Task.FromResult(ValidationResult.Invalid("output_offset must be 0 or greater."));
             if (parsed.OutputLimit is <= 0)
@@ -155,9 +174,17 @@ public sealed class AgentStatusTool : ITool
         var parsed = JsonSerializer.Deserialize<AgentStatusToolInput>(input) ?? new AgentStatusToolInput();
         if (string.IsNullOrWhiteSpace(parsed.Id))
         {
+            AgentStatusFormatter.TryParseView(parsed.View, out var view);
             AgentStatusFormatter.TryParseOverviewKind(parsed.Kind, out var kind);
-            return Task.FromResult(ToolResult.Success(
-                AgentStatusFormatter.FormatOverview(
+            var data = view == AgentStatusView.Summary
+                ? AgentStatusFormatter.FormatSummary(
+                    _taskRuntime,
+                    new AgentStatusSummaryOptions
+                    {
+                        Owner = parsed.Owner,
+                        RecentLimit = parsed.RecentLimit ?? 3,
+                    })
+                : AgentStatusFormatter.FormatOverview(
                     _taskRuntime,
                     new AgentStatusOverviewOptions
                     {
@@ -166,7 +193,8 @@ public sealed class AgentStatusTool : ITool
                         Owner = parsed.Owner,
                         Offset = Math.Max(0, parsed.Offset ?? 0),
                         Limit = parsed.Limit,
-                    })));
+                    });
+            return Task.FromResult(ToolResult.Success(data));
         }
 
         var found = AgentStatusFormatter.TryFormatDetails(

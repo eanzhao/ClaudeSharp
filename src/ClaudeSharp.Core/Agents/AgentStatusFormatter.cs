@@ -25,6 +25,15 @@ public sealed record AgentStatusOverviewOptions
 }
 
 /// <summary>
+/// Represents summary filtering options for agent status reports.
+/// </summary>
+public sealed record AgentStatusSummaryOptions
+{
+    public string? Owner { get; init; }
+    public int RecentLimit { get; init; } = 3;
+}
+
+/// <summary>
 /// Formats agent work item and background run state for tools and commands.
 /// </summary>
 public static class AgentStatusFormatter
@@ -72,6 +81,92 @@ public static class AgentStatusFormatter
                 AgentStatusOverviewKind.BackgroundRuns => "No background runs matched the requested filters.",
                 _ => "No agent work items or background runs matched the requested filters.",
             };
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    public static string FormatSummary(
+        IAgentTaskRuntime runtime,
+        AgentStatusSummaryOptions? options = null)
+    {
+        var resolvedOptions = options ?? new AgentStatusSummaryOptions();
+        var recentLimit = Math.Max(1, resolvedOptions.RecentLimit);
+        var workItems = runtime.ListWorkItems()
+            .OrderByDescending(item => item.UpdatedAt)
+            .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
+            .Where(item => MatchesOwner(item.Owner, resolvedOptions.Owner))
+            .ToArray();
+        var backgroundRuns = runtime.ListBackgroundRuns()
+            .OrderByDescending(run => run.UpdatedAt)
+            .ThenBy(run => run.Id, StringComparer.OrdinalIgnoreCase)
+            .Where(run => MatchesOwner(run.Owner, resolvedOptions.Owner))
+            .ToArray();
+
+        if (workItems.Length == 0 && backgroundRuns.Length == 0)
+            return "No agent work items or background runs matched the requested filters.";
+
+        var builder = new StringBuilder();
+        builder.AppendLine(string.IsNullOrWhiteSpace(resolvedOptions.Owner)
+            ? "Agent summary:"
+            : $"Agent summary (owner: {resolvedOptions.Owner.Trim()}):");
+
+        AppendStatusSummary(
+            builder,
+            "Work items",
+            workItems.Select(item => item.Status));
+        builder.AppendLine();
+        AppendStatusSummary(
+            builder,
+            "Background runs",
+            backgroundRuns.Select(run => run.Status));
+
+        var activeRuns = backgroundRuns
+            .Where(run => run.Status is AgentBackgroundRunStatus.Queued or
+                AgentBackgroundRunStatus.Running or
+                AgentBackgroundRunStatus.CancellationRequested)
+            .Take(recentLimit)
+            .ToArray();
+        if (activeRuns.Length > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Active background runs:");
+            foreach (var run in activeRuns)
+            {
+                builder.AppendLine(
+                    $"- {run.Id} [{run.Status}] {run.Name}{FormatWorkItemNote(run.WorkItemId)}");
+            }
+        }
+
+        var finishedRuns = backgroundRuns
+            .Where(run => run.Status is AgentBackgroundRunStatus.Stopped or
+                AgentBackgroundRunStatus.Failed or
+                AgentBackgroundRunStatus.Cancelled)
+            .Take(recentLimit)
+            .ToArray();
+        if (finishedRuns.Length > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Recent finished background runs:");
+            foreach (var run in finishedRuns)
+            {
+                var reason = string.IsNullOrWhiteSpace(run.StopReason)
+                    ? string.Empty
+                    : $" ({run.StopReason})";
+                builder.AppendLine(
+                    $"- {run.Id} [{run.Status}] {run.Name}{FormatWorkItemNote(run.WorkItemId)}{reason}");
+            }
+        }
+
+        var recentWorkItems = workItems
+            .Take(recentLimit)
+            .ToArray();
+        if (recentWorkItems.Length > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Recent work items:");
+            foreach (var item in recentWorkItems)
+                builder.AppendLine($"- {item.Id} [{item.Status}] {item.Title}");
         }
 
         return builder.ToString().TrimEnd();
@@ -206,6 +301,25 @@ public static class AgentStatusFormatter
             "backgroundruns" or "backgroundrun" or "runs" or "run";
     }
 
+    public static bool TryParseView(
+        string? value,
+        out AgentStatusView view)
+    {
+        view = AgentStatusView.Overview;
+        if (string.IsNullOrWhiteSpace(value))
+            return true;
+
+        var normalized = Normalize(value);
+        view = normalized switch
+        {
+            "overview" or "list" => AgentStatusView.Overview,
+            "summary" => AgentStatusView.Summary,
+            _ => default,
+        };
+
+        return normalized is "overview" or "list" or "summary";
+    }
+
     private static void AppendWorkItems(
         StringBuilder builder,
         IReadOnlyList<AgentWorkItem> items,
@@ -241,6 +355,25 @@ public static class AgentStatusFormatter
         }
     }
 
+    private static void AppendStatusSummary<TStatus>(
+        StringBuilder builder,
+        string label,
+        IEnumerable<TStatus> statuses)
+        where TStatus : struct, Enum
+    {
+        var counts = statuses
+            .GroupBy(status => status)
+            .ToDictionary(group => group.Key, group => group.Count());
+        var total = counts.Values.Sum();
+
+        builder.AppendLine($"{label}: {total}");
+        foreach (var status in Enum.GetValues<TStatus>())
+        {
+            if (counts.TryGetValue(status, out var count))
+                builder.AppendLine($"- {status}: {count}");
+        }
+    }
+
     private static IReadOnlyList<T> ApplyPagination<T>(
         IReadOnlyList<T> source,
         int offset,
@@ -272,6 +405,11 @@ public static class AgentStatusFormatter
         return $"Showing {Pluralize(itemLabel, totalCount)} {start}-{end} of {totalCount}.";
     }
 
+    private static string FormatWorkItemNote(string? workItemId) =>
+        string.IsNullOrWhiteSpace(workItemId)
+            ? string.Empty
+            : $" -> {workItemId}";
+
     private static bool MatchesOwner(string? owner, string? filterOwner) =>
         string.IsNullOrWhiteSpace(filterOwner) ||
         string.Equals(owner, filterOwner.Trim(), StringComparison.OrdinalIgnoreCase);
@@ -297,4 +435,13 @@ public static class AgentStatusFormatter
 
     private static string Pluralize(string label, int count) =>
         count == 1 ? label : $"{label}s";
+}
+
+/// <summary>
+/// Defines high-level agent status views.
+/// </summary>
+public enum AgentStatusView
+{
+    Overview,
+    Summary,
 }

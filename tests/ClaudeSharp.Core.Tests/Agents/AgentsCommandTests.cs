@@ -56,6 +56,48 @@ public sealed class AgentsCommandTests
         Assert.Contains("Usage: /agents", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_CanRenderSummary()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var completed = runtime.CreateWorkItem("Completed task", owner: "subagent");
+        runtime.UpdateWorkItem(completed.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var blocked = runtime.CreateWorkItem("Blocked task", owner: "subagent");
+        runtime.UpdateWorkItem(blocked.Id, item => item.Status = AgentWorkItemStatus.Blocked);
+
+        var running = runtime.StartBackgroundRun(
+            "Running run",
+            owner: "subagent",
+            workItemId: blocked.Id,
+            initialStatus: AgentBackgroundRunStatus.Running);
+        var stopped = runtime.StartBackgroundRun(
+            "Stopped run",
+            owner: "subagent",
+            workItemId: completed.Id,
+            initialStatus: AgentBackgroundRunStatus.Stopped);
+        runtime.UpdateBackgroundRun(stopped.Id, run => run.StopReason = "completed");
+
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "summary --owner subagent --recent-limit 2",
+            CreateContext(runtime, lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Agent summary (owner: subagent):", output, StringComparison.Ordinal);
+        Assert.Contains("Work items: 2", output, StringComparison.Ordinal);
+        Assert.Contains("- Completed: 1", output, StringComparison.Ordinal);
+        Assert.Contains("- Blocked: 1", output, StringComparison.Ordinal);
+        Assert.Contains("Background runs: 2", output, StringComparison.Ordinal);
+        Assert.Contains("- Running: 1", output, StringComparison.Ordinal);
+        Assert.Contains("- Stopped: 1", output, StringComparison.Ordinal);
+        Assert.Contains("Active background runs:", output, StringComparison.Ordinal);
+        Assert.Contains(running.Id, output, StringComparison.Ordinal);
+        Assert.Contains("Recent finished background runs:", output, StringComparison.Ordinal);
+        Assert.Contains(stopped.Id, output, StringComparison.Ordinal);
+    }
+
     private static CommandContext CreateContext(
         IAgentTaskRuntime runtime,
         List<string> lines) =>

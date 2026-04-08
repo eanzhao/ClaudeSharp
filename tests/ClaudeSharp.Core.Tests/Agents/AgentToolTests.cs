@@ -526,6 +526,47 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task AgentStatusTool_CanRenderSummaryView()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var completed = runtime.CreateWorkItem("Completed task", owner: "subagent");
+        runtime.UpdateWorkItem(completed.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var queued = runtime.StartBackgroundRun(
+            "Queued run",
+            owner: "subagent",
+            workItemId: completed.Id,
+            initialStatus: AgentBackgroundRunStatus.Queued);
+        var failed = runtime.StartBackgroundRun(
+            "Failed run",
+            owner: "subagent",
+            initialStatus: AgentBackgroundRunStatus.Failed);
+        runtime.UpdateBackgroundRun(failed.Id, run => run.StopReason = "network timeout");
+
+        var tool = new AgentStatusTool(runtime);
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                view = "summary",
+                owner = "subagent",
+                recent_limit = 2,
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("Agent summary (owner: subagent):", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Work items: 1", result.Data, StringComparison.Ordinal);
+        Assert.Contains("- Completed: 1", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Background runs: 2", result.Data, StringComparison.Ordinal);
+        Assert.Contains("- Queued: 1", result.Data, StringComparison.Ordinal);
+        Assert.Contains("- Failed: 1", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Active background runs:", result.Data, StringComparison.Ordinal);
+        Assert.Contains(queued.Id, result.Data, StringComparison.Ordinal);
+        Assert.Contains("Recent finished background runs:", result.Data, StringComparison.Ordinal);
+        Assert.Contains(failed.Id, result.Data, StringComparison.Ordinal);
+        Assert.Contains("network timeout", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_CanDisableWorkspaceIsolation()
     {
         var runtime = new InMemoryAgentTaskRuntime();

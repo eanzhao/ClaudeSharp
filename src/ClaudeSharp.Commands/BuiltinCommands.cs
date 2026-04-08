@@ -146,13 +146,27 @@ public class AgentsCommand : ICommand
             return Task.CompletedTask;
         }
 
+        if (parts.Length > 0 &&
+            parts[0].Equals("summary", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryParseSummaryOptions(trimmed, out var options, out var error))
+            {
+                context.WriteLine(error ?? "  Invalid /agents summary arguments.");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                return Task.CompletedTask;
+            }
+
+            context.WriteLine(AgentStatusFormatter.FormatSummary(context.AgentTaskRuntime, options));
+            return Task.CompletedTask;
+        }
+
         if (trimmed.StartsWith("--", StringComparison.Ordinal) ||
             parts[0].Equals("list", StringComparison.OrdinalIgnoreCase))
         {
             if (!TryParseOverviewOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents arguments.");
-                context.WriteLine("  Usage: /agents, /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -173,7 +187,7 @@ public class AgentsCommand : ICommand
         }
 
         context.WriteLine(details);
-        context.WriteLine("  Usage: /agents, /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
         return Task.CompletedTask;
     }
 
@@ -267,6 +281,71 @@ public class AgentsCommand : ICommand
             Owner = owner,
             Offset = offset,
             Limit = limit,
+        };
+        return true;
+    }
+
+    private static bool TryParseSummaryOptions(
+        string args,
+        out AgentStatusSummaryOptions options,
+        out string? error)
+    {
+        options = new AgentStatusSummaryOptions();
+        error = null;
+
+        var tokens = args
+            .Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+        if (tokens.Count > 0 &&
+            tokens[0].Equals("summary", StringComparison.OrdinalIgnoreCase))
+        {
+            tokens.RemoveAt(0);
+        }
+
+        string? owner = null;
+        var recentLimit = 3;
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (!token.StartsWith("--", StringComparison.Ordinal))
+            {
+                error = $"  Unknown argument: {token}";
+                return false;
+            }
+
+            if (i + 1 >= tokens.Count)
+            {
+                error = $"  Missing value for {token}.";
+                return false;
+            }
+
+            var value = tokens[++i];
+            switch (token)
+            {
+                case "--owner":
+                    owner = value;
+                    break;
+
+                case "--recent-limit":
+                    if (!int.TryParse(value, out recentLimit) || recentLimit <= 0)
+                    {
+                        error = "  --recent-limit must be a positive integer.";
+                        return false;
+                    }
+
+                    break;
+
+                default:
+                    error = $"  Unknown option: {token}";
+                    return false;
+            }
+        }
+
+        options = new AgentStatusSummaryOptions
+        {
+            Owner = owner,
+            RecentLimit = recentLimit,
         };
         return true;
     }
