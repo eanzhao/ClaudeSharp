@@ -230,6 +230,14 @@ internal sealed class RecordingJournal : IConversationJournal
         return Task.CompletedTask;
     }
 
+    public Task AppendMetadataEntryAsync(
+        TranscriptMetadataEntry entry,
+        CancellationToken cancellationToken = default)
+    {
+        MetadataEntries.Add(entry);
+        return Task.CompletedTask;
+    }
+
     public Task SeedAsync(
         IReadOnlyList<ConversationMessage> messages,
         ConversationSessionMetadata metadata,

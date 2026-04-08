@@ -114,6 +114,10 @@ public interface IConversationJournal
         Action<ConversationSessionMetadata> update,
         CancellationToken cancellationToken = default);
 
+    Task AppendMetadataEntryAsync(
+        TranscriptMetadataEntry entry,
+        CancellationToken cancellationToken = default);
+
     Task SeedAsync(
         IReadOnlyList<ConversationMessage> messages,
         ConversationSessionMetadata metadata,
@@ -235,6 +239,21 @@ public sealed class ConversationJournal : IConversationJournal
                 await _store.AppendMetadataAsync(_session, entry, cancellationToken);
 
             await _store.UpdateSessionAsync(_session, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task AppendMetadataEntryAsync(
+        TranscriptMetadataEntry entry,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await _store.AppendMetadataAsync(_session, entry, cancellationToken);
         }
         finally
         {

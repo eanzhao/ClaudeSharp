@@ -37,7 +37,12 @@ public static class AgentStatusFormatter
 
             builder.AppendLine("Background runs:");
             foreach (var run in backgroundRuns)
-                builder.AppendLine($"- {run.Id} [{run.Status}] {run.Name}");
+            {
+                var workItemNote = string.IsNullOrWhiteSpace(run.WorkItemId)
+                    ? string.Empty
+                    : $" -> {run.WorkItemId}";
+                builder.AppendLine($"- {run.Id} [{run.Status}] {run.Name}{workItemNote}");
+            }
         }
 
         return builder.ToString().TrimEnd();
@@ -103,6 +108,8 @@ public static class AgentStatusFormatter
         builder.AppendLine($"Name: {run.Name}");
         if (!string.IsNullOrWhiteSpace(run.Owner))
             builder.AppendLine($"Owner: {run.Owner}");
+        if (!string.IsNullOrWhiteSpace(run.WorkItemId))
+            builder.AppendLine($"Work item: {run.WorkItemId}");
         builder.AppendLine($"Status: {run.Status}");
         builder.AppendLine($"Started: {run.StartedAt:O}");
         builder.AppendLine($"Updated: {run.UpdatedAt:O}");

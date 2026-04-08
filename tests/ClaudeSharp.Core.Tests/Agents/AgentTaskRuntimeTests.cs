@@ -50,8 +50,13 @@ public sealed class AgentTaskRuntimeTests
         Assert.False(runtime.UpdateWorkItem("missing", _ => { }));
         Assert.False(runtime.UpdateBackgroundRun("missing", _ => { }));
         Assert.False(runtime.AppendBackgroundRunOutput("missing", "output"));
+        Assert.False(runtime.RegisterBackgroundRunCancellation("missing", () => { }));
+        Assert.Equal(
+            AgentBackgroundRunCancellationResult.NotFound,
+            runtime.RequestBackgroundRunCancellation("missing"));
         Assert.False(runtime.StopBackgroundRun("missing"));
         Assert.False(runtime.FailBackgroundRun("missing"));
+        Assert.False(runtime.CancelBackgroundRun("missing"));
         Assert.Null(runtime.GetWorkItem("missing"));
         Assert.Null(runtime.GetBackgroundRun("missing"));
         Assert.Empty(runtime.ListWorkItems());
@@ -71,6 +76,39 @@ public sealed class AgentTaskRuntimeTests
         Assert.Equal("subagent", stored.Owner);
         Assert.Equal(AgentBackgroundRunStatus.Failed, stored.Status);
         Assert.Equal("network timeout", stored.StopReason);
+        Assert.NotNull(stored.StoppedAt);
+    }
+
+    [Fact]
+    public void RequestBackgroundRunCancellation_UpdatesStateAndInvokesController()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var run = runtime.StartBackgroundRun("research");
+        var cancelled = false;
+
+        Assert.True(runtime.RegisterBackgroundRunCancellation(run.Id, () => cancelled = true));
+
+        var result = runtime.RequestBackgroundRunCancellation(run.Id, "user requested");
+
+        Assert.Equal(AgentBackgroundRunCancellationResult.Requested, result);
+        Assert.True(cancelled);
+
+        var stored = Assert.Single(runtime.ListBackgroundRuns());
+        Assert.Equal(AgentBackgroundRunStatus.CancellationRequested, stored.Status);
+        Assert.Equal("user requested", stored.StopReason);
+    }
+
+    [Fact]
+    public void CancelBackgroundRun_MarksTerminalState()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var run = runtime.StartBackgroundRun("research");
+
+        Assert.True(runtime.CancelBackgroundRun(run.Id, "cancelled"));
+
+        var stored = Assert.Single(runtime.ListBackgroundRuns());
+        Assert.Equal(AgentBackgroundRunStatus.Cancelled, stored.Status);
+        Assert.Equal("cancelled", stored.StopReason);
         Assert.NotNull(stored.StoppedAt);
     }
 

@@ -1,6 +1,18 @@
 namespace ClaudeSharp.Core.Agents;
 
 /// <summary>
+/// Defines background run cancellation outcomes.
+/// </summary>
+public enum AgentBackgroundRunCancellationResult
+{
+    Requested,
+    AlreadyRequested,
+    AlreadyCompleted,
+    NotFound,
+    Unsupported,
+}
+
+/// <summary>
 /// Defines the contract for agent task runtime.
 /// </summary>
 public interface IAgentTaskRuntime
@@ -18,7 +30,8 @@ public interface IAgentTaskRuntime
 
     AgentBackgroundRun StartBackgroundRun(
         string name,
-        string? owner = null);
+        string? owner = null,
+        string? workItemId = null);
 
     AgentBackgroundRun? GetBackgroundRun(string id);
 
@@ -28,9 +41,17 @@ public interface IAgentTaskRuntime
 
     bool AppendBackgroundRunOutput(string id, string chunk);
 
+    bool RegisterBackgroundRunCancellation(string id, Action cancel);
+
+    AgentBackgroundRunCancellationResult RequestBackgroundRunCancellation(
+        string id,
+        string? reason = null);
+
     bool StopBackgroundRun(string id, string? reason = null);
 
     bool FailBackgroundRun(string id, string? reason = null);
+
+    bool CancelBackgroundRun(string id, string? reason = null);
 }
 
 /// <summary>
@@ -43,8 +64,33 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AgentBackgroundRun> _backgroundRuns =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Action> _backgroundRunCancellers =
+        new(StringComparer.OrdinalIgnoreCase);
     private int _workItemSequence;
     private int _backgroundRunSequence;
+
+    public InMemoryAgentTaskRuntime(
+        IEnumerable<AgentWorkItem>? workItems = null,
+        IEnumerable<AgentBackgroundRun>? backgroundRuns = null)
+    {
+        if (workItems != null)
+        {
+            foreach (var item in workItems)
+            {
+                _workItems[item.Id] = item.Clone();
+                _workItemSequence = Math.Max(_workItemSequence, ParseSequence(item.Id, "work-item-"));
+            }
+        }
+
+        if (backgroundRuns != null)
+        {
+            foreach (var run in backgroundRuns)
+            {
+                _backgroundRuns[run.Id] = run.Clone();
+                _backgroundRunSequence = Math.Max(_backgroundRunSequence, ParseSequence(run.Id, "background-run-"));
+            }
+        }
+    }
 
     public AgentWorkItem CreateWorkItem(
         string title,
@@ -91,13 +137,15 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
 
     public AgentBackgroundRun StartBackgroundRun(
         string name,
-        string? owner = null)
+        string? owner = null,
+        string? workItemId = null)
     {
         var run = new AgentBackgroundRun
         {
             Id = $"background-run-{Interlocked.Increment(ref _backgroundRunSequence)}",
             Name = name.Trim(),
             Owner = string.IsNullOrWhiteSpace(owner) ? null : owner.Trim(),
+            WorkItemId = string.IsNullOrWhiteSpace(workItemId) ? null : workItemId.Trim(),
         };
 
         lock (_gate)
@@ -142,6 +190,57 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
         }
     }
 
+    public bool RegisterBackgroundRunCancellation(string id, Action cancel)
+    {
+        lock (_gate)
+        {
+            if (!_backgroundRuns.ContainsKey(id))
+                return false;
+
+            _backgroundRunCancellers[id] = cancel;
+            return true;
+        }
+    }
+
+    public AgentBackgroundRunCancellationResult RequestBackgroundRunCancellation(
+        string id,
+        string? reason = null)
+    {
+        Action? cancel = null;
+
+        lock (_gate)
+        {
+            if (!_backgroundRuns.TryGetValue(id, out var run))
+                return AgentBackgroundRunCancellationResult.NotFound;
+
+            if (run.Status is AgentBackgroundRunStatus.Stopped or
+                AgentBackgroundRunStatus.Failed or
+                AgentBackgroundRunStatus.Cancelled)
+            {
+                return AgentBackgroundRunCancellationResult.AlreadyCompleted;
+            }
+
+            if (run.Status == AgentBackgroundRunStatus.CancellationRequested)
+                return AgentBackgroundRunCancellationResult.AlreadyRequested;
+
+            if (!_backgroundRunCancellers.TryGetValue(id, out cancel))
+                return AgentBackgroundRunCancellationResult.Unsupported;
+
+            run.RequestCancellation(reason);
+        }
+
+        try
+        {
+            cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The background run finished while the cancellation request was in flight.
+        }
+
+        return AgentBackgroundRunCancellationResult.Requested;
+    }
+
     public bool StopBackgroundRun(string id, string? reason = null)
     {
         lock (_gate)
@@ -150,6 +249,7 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
                 return false;
 
             run.Stop(reason);
+            _backgroundRunCancellers.Remove(id);
             return true;
         }
     }
@@ -162,6 +262,20 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
                 return false;
 
             run.Fail(reason);
+            _backgroundRunCancellers.Remove(id);
+            return true;
+        }
+    }
+
+    public bool CancelBackgroundRun(string id, string? reason = null)
+    {
+        lock (_gate)
+        {
+            if (!_backgroundRuns.TryGetValue(id, out var run))
+                return false;
+
+            run.Cancel(reason);
+            _backgroundRunCancellers.Remove(id);
             return true;
         }
     }
@@ -176,5 +290,15 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
     {
         lock (_gate)
             return _backgroundRuns.Values.ToArray();
+    }
+
+    private static int ParseSequence(string id, string prefix)
+    {
+        if (!id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            return 0;
+
+        return int.TryParse(id[prefix.Length..], out var parsed)
+            ? parsed
+            : 0;
     }
 }

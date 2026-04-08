@@ -18,8 +18,10 @@ public enum AgentWorkItemStatus
 public enum AgentBackgroundRunStatus
 {
     Running,
+    CancellationRequested,
     Stopped,
     Failed,
+    Cancelled,
 }
 
 /// <summary>
@@ -52,6 +54,27 @@ public sealed class AgentWorkItem
         if (!_blockedBy.Contains(taskId, StringComparer.OrdinalIgnoreCase))
             _blockedBy.Add(taskId);
     }
+
+    public AgentWorkItem Clone()
+    {
+        var clone = new AgentWorkItem
+        {
+            Id = Id,
+            Title = Title,
+            Description = Description,
+            Owner = Owner,
+            Status = Status,
+            CreatedAt = CreatedAt,
+            UpdatedAt = UpdatedAt,
+        };
+
+        foreach (var taskId in _blocks)
+            clone.AddBlock(taskId);
+        foreach (var taskId in _blockedBy)
+            clone.AddBlockedBy(taskId);
+
+        return clone;
+    }
 }
 
 /// <summary>
@@ -64,6 +87,7 @@ public sealed class AgentBackgroundRun
     public required string Id { get; init; }
     public required string Name { get; set; }
     public string? Owner { get; set; }
+    public string? WorkItemId { get; set; }
     public AgentBackgroundRunStatus Status { get; set; } = AgentBackgroundRunStatus.Running;
     public string? StopReason { get; set; }
     public DateTimeOffset StartedAt { get; init; } = DateTimeOffset.UtcNow;
@@ -84,7 +108,7 @@ public sealed class AgentBackgroundRun
     public void Stop(string? reason = null)
     {
         Status = AgentBackgroundRunStatus.Stopped;
-        StopReason = reason;
+        StopReason = string.IsNullOrWhiteSpace(reason) ? StopReason : reason;
         UpdatedAt = DateTimeOffset.UtcNow;
         StoppedAt = DateTimeOffset.UtcNow;
     }
@@ -92,8 +116,51 @@ public sealed class AgentBackgroundRun
     public void Fail(string? reason = null)
     {
         Status = AgentBackgroundRunStatus.Failed;
-        StopReason = reason;
+        StopReason = string.IsNullOrWhiteSpace(reason) ? StopReason : reason;
         UpdatedAt = DateTimeOffset.UtcNow;
         StoppedAt = DateTimeOffset.UtcNow;
+    }
+
+    public void RequestCancellation(string? reason = null)
+    {
+        if (Status is AgentBackgroundRunStatus.Stopped or
+            AgentBackgroundRunStatus.Failed or
+            AgentBackgroundRunStatus.Cancelled)
+            return;
+
+        Status = AgentBackgroundRunStatus.CancellationRequested;
+        StopReason = string.IsNullOrWhiteSpace(reason) ? StopReason : reason;
+        UpdatedAt = DateTimeOffset.UtcNow;
+    }
+
+    public void Cancel(string? reason = null)
+    {
+        Status = AgentBackgroundRunStatus.Cancelled;
+        StopReason = string.IsNullOrWhiteSpace(reason) ? StopReason : reason;
+        UpdatedAt = DateTimeOffset.UtcNow;
+        StoppedAt = DateTimeOffset.UtcNow;
+    }
+
+    public AgentBackgroundRun Clone()
+    {
+        var clone = new AgentBackgroundRun
+        {
+            Id = Id,
+            Name = Name,
+            Owner = Owner,
+            WorkItemId = WorkItemId,
+            Status = Status,
+            StopReason = StopReason,
+            StartedAt = StartedAt,
+            UpdatedAt = UpdatedAt,
+            StoppedAt = StoppedAt,
+        };
+
+        foreach (var chunk in _output)
+            clone.AppendOutput(chunk);
+
+        clone.UpdatedAt = UpdatedAt;
+        clone.StoppedAt = StoppedAt;
+        return clone;
     }
 }

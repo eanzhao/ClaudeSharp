@@ -180,17 +180,26 @@ public sealed class AgentTool : ITool
     {
         var backgroundRun = _taskRuntime.StartBackgroundRun(
             BuildTitle(input.Prompt),
-            owner: "subagent");
+            owner: "subagent",
+            workItemId: workItem.Id);
         _taskRuntime.AppendBackgroundRunOutput(
             backgroundRun.Id,
             $"Queued prompt: {input.Prompt.Trim()}");
+        var cancellationSource = new CancellationTokenSource();
+        _taskRuntime.RegisterBackgroundRunCancellation(
+            backgroundRun.Id,
+            cancellationSource.Cancel);
         var logger = new BackgroundRunLogger(_taskRuntime, backgroundRun.Id);
 
         _ = Task.Run(async () =>
         {
             try
             {
-                var result = await RunSubagentAsync(input, context, logger, CancellationToken.None);
+                var result = await RunSubagentAsync(
+                    input,
+                    context,
+                    logger,
+                    cancellationSource.Token);
                 logger.Flush();
                 if (result.Success)
                 {
@@ -220,7 +229,7 @@ public sealed class AgentTool : ITool
                 _taskRuntime.AppendBackgroundRunOutput(
                     backgroundRun.Id,
                     $"Subagent {workItem.Id} was cancelled.");
-                _taskRuntime.StopBackgroundRun(backgroundRun.Id, "cancelled");
+                _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
             }
             catch (Exception ex)
             {
@@ -232,11 +241,15 @@ public sealed class AgentTool : ITool
                     $"Subagent {workItem.Id} failed: {ex.Message}");
                 _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
             }
+            finally
+            {
+                cancellationSource.Dispose();
+            }
         });
 
         return ToolResult.Success(
             $"Subagent {workItem.Id} started in the background as {backgroundRun.Id}. " +
-            $"Use AgentStatus with id=\"{backgroundRun.Id}\" to inspect progress.");
+            $"Use AgentStatus with id=\"{backgroundRun.Id}\" to inspect progress, or AgentStop to cancel it.");
     }
 
     private Task<AgentExecutionResult> RunSubagentAsync(

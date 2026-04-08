@@ -108,18 +108,6 @@ internal static class Program
             workingDirectory,
             options.SettingsPath);
         var hooks = hookBuild.Runtime;
-        var agentTaskRuntime = new InMemoryAgentTaskRuntime();
-        var toolRegistry = BuildToolRegistry(
-            providerRouter,
-            () => config.Model,
-            client,
-            hooks,
-            agentTaskRuntime);
-        var commandRegistry = BuildCommandRegistry();
-        await using var mcpRuntime = await McpRuntime.CreateAsync(
-            toolRegistry,
-            workingDirectory,
-            options.SettingsPath);
 
         var session = resumed != null && resumed.ContinueExistingSession
             ? resumed.SourceSession
@@ -142,6 +130,26 @@ internal static class Program
                 workingDirectory,
                 model);
         }
+
+        var agentMetadataEntries = resumed?.ContinueExistingSession == true
+            ? (await transcriptStore.LoadProjectionAsync(
+                session,
+                new TranscriptLoadOptions())).MetadataEntries
+            : [];
+        var agentTaskRuntime = await PersistentAgentTaskRuntime.CreateAsync(
+            journal,
+            agentMetadataEntries);
+        var toolRegistry = BuildToolRegistry(
+            providerRouter,
+            () => config.Model,
+            client,
+            hooks,
+            agentTaskRuntime);
+        var commandRegistry = BuildCommandRegistry();
+        await using var mcpRuntime = await McpRuntime.CreateAsync(
+            toolRegistry,
+            workingDirectory,
+            options.SettingsPath);
 
         await using var queryEngine = new QueryEngine(
             client,
@@ -214,6 +222,7 @@ internal static class Program
             agentTaskRuntime,
             hooks));
         registry.Register(new AgentStatusTool(agentTaskRuntime));
+        registry.Register(new AgentStopTool(agentTaskRuntime));
         return registry;
     }
 

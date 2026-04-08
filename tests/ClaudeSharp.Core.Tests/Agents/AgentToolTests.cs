@@ -197,6 +197,66 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_BackgroundSubagentCanBeCancelled()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runner = new AsyncRecordingRunner(async (_, cancellationToken) =>
+        {
+            started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new AgentExecutionResult(
+                Summary: string.Empty,
+                Success: true,
+                Usage: TokenUsage.Empty,
+                TurnCount: 1);
+        });
+
+        var tool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            runtime,
+            HookRuntime.Empty);
+
+        var launch = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "Inspect the runtime",
+                run_in_background = true,
+            }),
+            CreateContext());
+        Assert.False(launch.IsError);
+
+        await started.Task;
+
+        var stopTool = new AgentStopTool(runtime);
+        var stop = await stopTool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                id = "background-run-1",
+                reason = "user requested",
+            }),
+            CreateContext());
+
+        Assert.False(stop.IsError);
+        Assert.Contains("Cancellation requested", stop.Data, StringComparison.Ordinal);
+
+        await WaitForAsync(() =>
+            runtime.GetBackgroundRun("background-run-1")?.Status == AgentBackgroundRunStatus.Cancelled);
+
+        var workItem = Assert.Single(runtime.ListWorkItems());
+        Assert.Equal(AgentWorkItemStatus.Cancelled, workItem.Status);
+
+        var backgroundRun = Assert.Single(runtime.ListBackgroundRuns());
+        Assert.Equal(AgentBackgroundRunStatus.Cancelled, backgroundRun.Status);
+        Assert.Equal("user requested", backgroundRun.StopReason);
+        Assert.Contains(backgroundRun.Output, chunk =>
+            chunk.Contains("Cancellation requested for background-run-1.", StringComparison.Ordinal));
+        Assert.Contains(backgroundRun.Output, chunk =>
+            chunk.Contains("was cancelled", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AgentStatusTool_ReturnsOverviewAndDetails()
     {
         var runtime = new InMemoryAgentTaskRuntime();
@@ -234,6 +294,19 @@ public sealed class AgentToolTests
     public async Task AgentStatusTool_ReturnsErrorForMissingId()
     {
         var tool = new AgentStatusTool(new InMemoryAgentTaskRuntime());
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new { id = "missing" }),
+            CreateContext());
+
+        Assert.True(result.IsError);
+        Assert.Contains("missing", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStopTool_ReturnsErrorForMissingId()
+    {
+        var tool = new AgentStopTool(new InMemoryAgentTaskRuntime());
 
         var result = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new { id = "missing" }),

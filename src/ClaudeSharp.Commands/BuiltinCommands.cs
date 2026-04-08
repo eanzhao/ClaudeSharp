@@ -100,7 +100,7 @@ public class ExitCommand : ICommand
 public class AgentsCommand : ICommand
 {
     public string Name => "agents";
-    public string Description => "Show subagent work items and background runs";
+    public string Description => "Show or manage subagent work items and background runs";
 
     public Task ExecuteAsync(string args, CommandContext context)
     {
@@ -108,6 +108,41 @@ public class AgentsCommand : ICommand
         if (string.IsNullOrWhiteSpace(trimmed))
         {
             context.WriteLine(AgentStatusFormatter.FormatOverview(context.AgentTaskRuntime));
+            return Task.CompletedTask;
+        }
+
+        var parts = trimmed.Split(' ', 3, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length > 0 &&
+            parts[0] is "stop" or "cancel")
+        {
+            if (parts.Length < 2)
+            {
+                context.WriteLine("  Usage: /agents stop <background-run-id> [reason]");
+                return Task.CompletedTask;
+            }
+
+            var id = parts[1];
+            var reason = parts.Length > 2 ? parts[2] : null;
+            var result = context.AgentTaskRuntime.RequestBackgroundRunCancellation(id, reason);
+
+            var message = result switch
+            {
+                AgentBackgroundRunCancellationResult.Requested =>
+                    $"  Cancellation requested for {id}.",
+                AgentBackgroundRunCancellationResult.AlreadyRequested =>
+                    $"  Cancellation was already requested for {id}.",
+                AgentBackgroundRunCancellationResult.AlreadyCompleted =>
+                    $"  {id} has already finished.",
+                AgentBackgroundRunCancellationResult.Unsupported =>
+                    $"  {id} does not support cancellation.",
+                _ =>
+                    $"  No background run matched id '{id}'.",
+            };
+
+            if (result == AgentBackgroundRunCancellationResult.Requested)
+                context.AgentTaskRuntime.AppendBackgroundRunOutput(id, $"[status] {message.Trim()}");
+
+            context.WriteLine(message);
             return Task.CompletedTask;
         }
 
@@ -124,6 +159,7 @@ public class AgentsCommand : ICommand
         }
 
         context.WriteLine(details);
+        context.WriteLine("  Usage: /agents, /agents <id>, /agents stop <background-run-id> [reason]");
         return Task.CompletedTask;
     }
 }
