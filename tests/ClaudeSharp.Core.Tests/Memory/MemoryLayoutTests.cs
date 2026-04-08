@@ -39,6 +39,9 @@ public sealed class MemoryLayoutTests
         Assert.EndsWith(
             Path.Combine("team-alpha", "TEAM_MEMORY.md"),
             layoutA.GetTeamMemoryPath("Team Alpha"));
+        Assert.Equal(
+            layoutA.GetTeamMemoryPath("Team Alpha"),
+            layoutA.CreateTeamMemoryFile("Team Alpha").Path);
         Assert.True(Directory.Exists(layoutA.ProjectMemoryDirectory));
         Assert.True(Directory.Exists(layoutA.SessionMemoryDirectory));
         Assert.True(Directory.Exists(layoutA.TeamMemoryDirectory));

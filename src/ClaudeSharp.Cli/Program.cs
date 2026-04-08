@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Anthropic;
 using ClaudeSharp.Commands;
+using ClaudeSharp.Core.AppState;
 using ClaudeSharp.Core.Agents;
 using ClaudeSharp.Core.Hooks;
 using ClaudeSharp.Core.Memory;
@@ -100,17 +101,31 @@ internal static class Program
             Model = model,
             UseStreamingApi = true,
         };
-        var anthropicSettings = AnthropicClientSettingsLoader.Load(
+        var rawAnthropicSettings = AnthropicClientSettingsLoader.Load(
             workingDirectory,
             appBaseDirectory: AppContext.BaseDirectory);
-        using var client = CreateAnthropicClient(anthropicSettings);
         var providerRouter = new DefaultProviderCapabilityRouter();
+        var managedSettings = ManagedSettingsLoader.Load(
+            workingDirectory,
+            options.SettingsPath);
+        var managedPolicy = ManagedRuntimePolicy.Resolve(
+            managedSettings.Settings,
+            rawAnthropicSettings,
+            providerRouter.Resolve(model));
+        var anthropicSettings = managedPolicy.AnthropicSettings;
+        using var client = CreateAnthropicClient(anthropicSettings);
         var agentSettings = AgentSettingsLoader.Load(
             workingDirectory,
             options.SettingsPath);
-        var hookBuild = HookRuntimeBuilder.Build(
-            workingDirectory,
-            options.SettingsPath);
+        var hookBuild = managedPolicy.AllowPlugins
+            ? HookRuntimeBuilder.Build(
+                workingDirectory,
+                options.SettingsPath)
+            : new HookRuntimeBuildResult(
+                new HookRuntime(),
+                ["Hooks: disabled by organization policy."],
+                [],
+                0);
         var hooks = hookBuild.Runtime;
 
         var session = resumed != null && resumed.ContinueExistingSession
@@ -126,6 +141,10 @@ internal static class Program
         memoryLayout.EnsureDirectories();
         var sessionMemoryFile = memoryLayout.CreateSessionMemoryFile(session.SessionId);
         contextProvider.SessionMemoryContent = await sessionMemoryFile.LoadAsync();
+        var memoryConsolidationService = new MemoryConsolidationService(
+            memoryLayout,
+            ResolveMemoryTeamName(managedSettings.Settings));
+        hooks.Register(new SessionMemoryConsolidationHookObserver(memoryConsolidationService));
         if (resumed != null && !resumed.ContinueExistingSession)
         {
             await journal.SeedAsync(
@@ -146,16 +165,19 @@ internal static class Program
             autoPrunePolicy: agentSettings.Settings.BuildRetentionPolicy());
         var toolRegistry = BuildToolRegistry(
             providerRouter,
+            managedPolicy.AllowWebSearch,
             () => config.Model,
             client,
             hooks,
             agentTaskRuntime,
             agentSettings.Settings.BackgroundRunConcurrency);
         var commandRegistry = BuildCommandRegistry();
-        await using var mcpRuntime = await McpRuntime.CreateAsync(
-            toolRegistry,
-            workingDirectory,
-            options.SettingsPath);
+        await using var mcpRuntime = managedPolicy.AllowExternalMcpServers
+            ? await McpRuntime.CreateAsync(
+                toolRegistry,
+                workingDirectory,
+                options.SettingsPath)
+            : new McpRuntime();
 
         await using var queryEngine = new QueryEngine(
             client,
@@ -169,6 +191,35 @@ internal static class Program
             initialMessages: resumed?.Messages,
             initialUsage: resumed?.TotalUsage,
             initialMetadata: resumed?.Metadata);
+        var permissionContext = contextProvider.GetPermissionContext();
+        var appStateStore = new AppStateStore();
+        var appStateBridge = new AppStateHostBridge(
+            appStateStore,
+            new JsonFileAppStateBoundary(CreateAppStatePath()));
+        var appStateProjector = new AppStateProjector();
+
+        async Task PublishAppStateAsync()
+        {
+            try
+            {
+                appStateStore.Reset(appStateProjector.CreateSnapshot(
+                    workingDirectory,
+                    permissionContext.Mode,
+                    sessionId: session.SessionId,
+                    memoryRootDirectory: memoryLayout.ProjectMemoryDirectory,
+                    managedSettings: managedSettings.Settings,
+                    activeTokenSource: managedPolicy.ActiveTokenSource,
+                    mcpConnectionManager: mcpRuntime.ConnectionManager,
+                    agentTaskRuntime: agentTaskRuntime));
+                await appStateBridge.PublishAsync();
+            }
+            catch
+            {
+                // App-state publishing is best effort and should never break the CLI loop.
+            }
+        }
+
+        await PublishAppStateAsync();
 
         var startupParts = new List<string>();
         switch (resumed)
@@ -190,6 +241,10 @@ internal static class Program
             startupParts.Add(hookBuild.StartupSummary);
         if (!string.IsNullOrWhiteSpace(agentSettings.StartupSummary))
             startupParts.Add(agentSettings.StartupSummary);
+        if (!string.IsNullOrWhiteSpace(managedSettings.StartupSummary))
+            startupParts.Add(managedSettings.StartupSummary);
+        if (!string.IsNullOrWhiteSpace(managedPolicy.StartupSummary))
+            startupParts.Add(managedPolicy.StartupSummary);
         if (!string.IsNullOrWhiteSpace(anthropicSettings.StartupSummary))
             startupParts.Add(anthropicSettings.StartupSummary);
 
@@ -203,11 +258,14 @@ internal static class Program
             toolRegistry,
             commandRegistry,
             queryEngine,
-            contextProvider.GetPermissionContext(),
+            permissionContext,
             agentTaskRuntime,
-            startupNote);
+            startupNote,
+            PublishAppStateAsync);
 
-        return await shell.RunAsync(options.InitialPrompt);
+        var exitCode = await shell.RunAsync(options.InitialPrompt);
+        await PublishAppStateAsync();
+        return exitCode;
     }
 
     private static AnthropicClient CreateAnthropicClient(AnthropicClientSettings settings)
@@ -226,6 +284,7 @@ internal static class Program
 
     private static ToolRegistry BuildToolRegistry(
         IProviderCapabilityRouter providerRouter,
+        bool allowWebSearch,
         Func<string?> currentModelAccessor,
         AnthropicClient client,
         IHookRuntime hooks,
@@ -242,7 +301,8 @@ internal static class Program
         registry.Register(new GlobTool());
         registry.Register(new GrepTool());
         registry.Register(new WebFetchTool());
-        registry.Register(new WebSearchTool(providerRouter, currentModelAccessor));
+        if (allowWebSearch)
+            registry.Register(new WebSearchTool(providerRouter, currentModelAccessor));
         registry.Register(new AgentTool(
             new QueryEngineAgentRunner(client, hooks: hooks),
             providerRouter,
@@ -264,6 +324,24 @@ internal static class Program
             MemoryBaseDirectory = memoryBaseDirectory,
             ProjectRootDirectory = workingDirectory,
         };
+    }
+
+    private static string CreateAppStatePath()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(home, ".claudesharp", "state", "current.json");
+    }
+
+    private static string ResolveMemoryTeamName(ManagedSettingsSnapshot settings)
+    {
+        var policy = settings.OrganizationPolicy;
+        if (!string.IsNullOrWhiteSpace(policy.WorkspaceId))
+            return policy.WorkspaceId;
+
+        if (!string.IsNullOrWhiteSpace(policy.OrganizationId))
+            return policy.OrganizationId;
+
+        return "default";
     }
 
     private static CommandRegistry BuildCommandRegistry()
@@ -314,6 +392,7 @@ Options:
         private readonly PermissionContext _permissionContext;
         private readonly IAgentTaskRuntime _agentTaskRuntime;
         private readonly string? _startupNote;
+        private readonly Func<Task>? _afterInputAsync;
         private bool _exitRequested;
 
         public ClaudeSharpShell(
@@ -324,7 +403,8 @@ Options:
             QueryEngine queryEngine,
             PermissionContext permissionContext,
             IAgentTaskRuntime agentTaskRuntime,
-            string? startupNote)
+            string? startupNote,
+            Func<Task>? afterInputAsync = null)
         {
             _workingDirectory = workingDirectory;
             _hasApiKey = hasApiKey;
@@ -334,6 +414,7 @@ Options:
             _permissionContext = permissionContext;
             _agentTaskRuntime = agentTaskRuntime;
             _startupNote = startupNote;
+            _afterInputAsync = afterInputAsync;
         }
 
         public async Task<int> RunAsync(string? initialPrompt)
@@ -386,18 +467,26 @@ Options:
 
         private async Task HandleInputAsync(string input, CommandContext commandContext)
         {
-            if (_commandRegistry.IsCommand(input))
+            try
             {
-                var parts = input.Split(' ', 2, StringSplitOptions.TrimEntries);
-                var name = parts[0];
-                var args = parts.Length > 1 ? parts[1] : "";
-                var command = _commandRegistry.Get(name);
-                if (command != null)
-                    await command.ExecuteAsync(args, commandContext);
-                return;
-            }
+                if (_commandRegistry.IsCommand(input))
+                {
+                    var parts = input.Split(' ', 2, StringSplitOptions.TrimEntries);
+                    var name = parts[0];
+                    var args = parts.Length > 1 ? parts[1] : "";
+                    var command = _commandRegistry.Get(name);
+                    if (command != null)
+                        await command.ExecuteAsync(args, commandContext);
+                    return;
+                }
 
-            await RunQueryAsync(input);
+                await RunQueryAsync(input);
+            }
+            finally
+            {
+                if (_afterInputAsync != null)
+                    await _afterInputAsync();
+            }
         }
 
         private async Task RunQueryAsync(string input)

@@ -22,8 +22,11 @@ src/
 ├── ClaudeSharp.Cli/
 │   └── Program.cs
 ├── ClaudeSharp.Core/
+│   ├── Agents/
 │   ├── Query/
 │   ├── Context/
+│   ├── Hooks/
+│   ├── Mcp/
 │   ├── Tools/
 │   ├── Permissions/
 │   ├── Storage/
@@ -31,6 +34,8 @@ src/
 │   ├── Commands/
 │   └── Messages/
 ├── ClaudeSharp.Tools/
+│   ├── Web/
+│   ├── AgentTool.cs
 │   ├── BashTool.cs
 │   ├── FileReadTool.cs
 │   ├── FileWriteTool.cs
@@ -58,11 +63,12 @@ src/
 2. 如果指定了 `--continue` 或 `--resume`，先恢复旧会话
 3. 计算工作目录和模型
 4. 创建 `ContextProvider` 并加载 memory 文件
-5. 组装 `ToolRegistry` 和 `CommandRegistry`
-6. 创建 Anthropic SDK client
-7. 创建或续接 transcript session
-8. 用这些依赖初始化 `QueryEngine`
-9. 进入 `ClaudeSharpShell.RunAsync(...)`
+5. 读取 Anthropic 配置、agent 配置、hook 配置
+6. 组装 `ToolRegistry` 和 `CommandRegistry`
+7. 连接 `settings.json` 里声明的 MCP server，并把它们的工具动态注册进来
+8. 创建 Anthropic SDK client、transcript session 和 agent runtime
+9. 用这些依赖初始化 `QueryEngine`
+10. 进入 `ClaudeSharpShell.RunAsync(...)`
 
 用图看更直观：
 
@@ -71,16 +77,37 @@ flowchart TD
     A["Program.Main"] --> B["解析 CLI 参数"]
     B --> C["SessionResumeLoader / SessionRestorePipeline"]
     C --> D["ContextProvider.LoadMemoryAsync()"]
-    D --> E["BuildToolRegistry() / BuildCommandRegistry()"]
-    E --> F["CreateSessionAsync() 或续接旧 session"]
-    F --> G["new QueryEngine(...)"]
-    G --> H["ClaudeSharpShell.RunAsync()"]
+    D --> E["Anthropic / Agent / Hook 设置加载"]
+    E --> F["BuildToolRegistry() / BuildCommandRegistry()"]
+    F --> G["McpRuntime.CreateAsync()"]
+    G --> H["CreateSessionAsync() / PersistentAgentTaskRuntime"]
+    H --> I["new QueryEngine(...)"]
+    I --> J["ClaudeSharpShell.RunAsync()"]
 ```
 
 这里有两个实现特点：
 
 - 恢复逻辑在进入 QueryEngine 之前就做完了，所以 QueryEngine 一启动就拿到完整历史。
 - transcript session 和 QueryEngine 是分开的，方便继续做 fork session、metadata、resume。
+
+### 配置文件是怎么找的
+
+Anthropic 配置现在不是只认环境变量了，主路径会按这个顺序找：
+
+1. `ANTHROPIC_API_KEY`
+2. `<workingDirectory>/appsettings.secrets.json`
+3. `<workingDirectory>/appsettings.json`
+4. `<AppContext.BaseDirectory>/appsettings.secrets.json`
+5. `<AppContext.BaseDirectory>/appsettings.json`
+
+另外，hooks 和 MCP 复用同一套 `settings.json` 寻址逻辑，默认会依次查：
+
+- `~/.claudesharp/settings.json`
+- `~/.claude/settings.json`
+- `<workingDirectory>/.claudesharp/settings.json`
+- `<workingDirectory>/.claude/settings.json`
+
+如果用户传了 `--settings <path>`，就直接只读那一个文件。
 
 ## REPL 壳层做了什么
 
@@ -123,28 +150,25 @@ flowchart TD
 2. 在发请求前先跑 `PrepareContextForTurnAsync(...)`
 3. 让 `ContextProvider` 生成 system prompt
 4. 把内部消息模型转换成 Anthropic SDK 的 message 结构
-5. 读取工具定义，调用 `AnthropicClient.Messages.Create(...)`
-6. 遍历返回 content blocks
-   - 文本变成 `TextDeltaEvent`
-   - thinking 变成 `ThinkingDeltaEvent`
-   - tool_use 变成 `ToolUseStartEvent`
-7. 把整条 assistant 消息写回 `_messages`
-8. 如果没有工具调用，结束
-9. 如果有工具调用，走 `ExecuteToolCallsAsync(...)`
-10. 工具结果再作为 `tool_result` 用户消息写回消息链，继续下一轮
+5. 读取工具定义，构造 Anthropic request
+6. 默认走 `StreamAssistantTurnAsync(...)`，必要时回退到 `CollectAssistantTurnAsync(...)`
+7. 把流里的文本、thinking、tool_use 逐步还原成内部事件和 content blocks
+8. 把整条 assistant 消息写回 `_messages`
+9. 如果没有工具调用，结束
+10. 如果有工具调用，走 `ExecuteToolCallsAsync(...)`
+11. 工具结果再作为 `tool_result` 用户消息写回消息链，继续下一轮
 
 从形状上看，它已经是标准的 agentic loop。
 
 ### 目前和 Claude Code 的一个关键差别
 
-现在这版 ClaudeSharp 还不是 token 级流式 API：
+现在默认主路径已经会走 streaming API：
 
-- 使用的是 `Messages.Create(...)`
-- 然后按 content block 处理结果
+- `UseStreamingApi = true` 时走 `Messages.WithRawResponse.CreateStreaming(...)`
+- 按 SSE 事件把文本、thinking、tool_use 逐块还原成内部事件
+- 同时仍然保留 `Messages.Create(...)` 的缓冲式回退路径
 
-也就是说，当前是“响应级返回 + 事件化拆解”，不是 Claude Code 那种更复杂的流式边收边调度。
-
-不过它已经把事件协议、工具运行时、上下文压缩这些关键抽象都准备好了，后面可以继续往真正流式升级。
+所以这版不再是“纯响应级返回再拆块”，而是已经有真正的流式主链路。和 Claude Code 的差距主要不在“有没有流式”，而在于流式执行细节、UI 联动、hook/fallback 之类的平台能力还没那么厚。
 
 ## 消息模型怎么设计的
 
@@ -262,6 +286,11 @@ flowchart TD
 - `Edit`
 - `Glob`
 - `Grep`
+- `WebFetch`
+- `WebSearch`
+- `Agent`
+
+另外还注册了 `AgentStatus`、`AgentStop`、`AgentWait` 这组三个内部工具，但它们默认不暴露给模型，主要是复用同一套 agent runtime 给 CLI 的 `/agents` 命令。
 
 ### `StreamingToolExecutor`
 
@@ -298,6 +327,18 @@ flowchart TD
   - 用 `Microsoft.Extensions.FileSystemGlobbing`
 - `GrepTool.cs`
   - 用 .NET 正则递归搜索
+- `WebFetchTool.cs`
+  - 抓已知 URL
+  - 做权限域名判断
+  - 抽简化文本返回
+- `WebSearchTool.cs`
+  - 做网页发现，不负责抓已知 URL
+  - 当前默认后端是 DuckDuckGo HTML
+  - 会根据模型/provider 能力决定是否启用
+- `AgentTool.cs`
+  - 启动只读子代理做窄任务调查
+  - 可以前台等结果，也可以后台排队运行
+  - 后台运行状态落到 agent runtime，再交给 `/agents` 这组命令管理
 
 这套工具目前的取舍很明确：先做通用内核，再逐步贴近 Claude Code 的高阶行为。
 
@@ -471,7 +512,7 @@ manifest 里保存：
 - `src/ClaudeSharp.Core/Commands/CommandSystem.cs`
 - `src/ClaudeSharp.Commands/BuiltinCommands.cs`
 
-当前命令集中已经有三类：
+当前命令集中已经有四类：
 
 - 基础交互
   - `/help`
@@ -489,17 +530,29 @@ manifest 里保存：
   - `/session-memory`
   - `/pcompact`
   - `/microcompact`
+- 子代理管理
+  - `/agents`
+  - `/agents summary`
+  - `/agents list`
+  - `/agents wait`
+  - `/agents tail`
+  - `/agents prune`
+  - `/agents stop`
 
-也就是说，这个项目当前已经不只是“发 prompt 的 REPL”，而是开始有 Claude Code 那种“会话管理命令”的味道了。
+也就是说，这个项目当前已经不只是“发 prompt 的 REPL”，而是已经有了会话管理、上下文整理和后台子代理管理这几条比较完整的操作面。
 
 ## 这个项目当前还没做满的地方
 
-如果和 `claude-code/` 快照对照，当前 ClaudeSharp 还明显收敛在内核层，主要缺口包括：
+如果和 `claude-code/` 快照对照，当前 ClaudeSharp 还明显收敛在“内核已经跑通，但平台能力还没做满”的阶段，主要缺口包括：
 
-- 真正的 token 级流式 API 消费
 - 更完整的工具执行钩子和进度事件
-- MCP 动态工具的正式接线
-- 子代理 / 团队代理
+- 更成熟的流式 UI 和异常恢复细节
+- 更完整的 MCP 能力
+  - 现在已经能从 `settings.json` 动态接 stdio MCP 工具
+  - 但 transport、鉴权、生态兼容度还远不如原版
+- 更完整的子代理 / 团队代理
+  - 现在已经有只读子代理、后台运行和 `/agents` 管理
+  - 但离 team/workflow 那种多角色协作还差很远
 - bridge、remote、desktop、IDE 集成
 - 更丰富的 UI 和诊断界面
 - 更复杂的 shell / sandbox 安全模型

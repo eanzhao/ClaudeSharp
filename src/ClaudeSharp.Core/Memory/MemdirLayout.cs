@@ -37,6 +37,9 @@ public sealed record MemdirLayout
     public string GetTeamMemoryPath(string teamName) =>
         Path.Combine(TeamMemoryDirectory, SanitizeSegment(teamName), "TEAM_MEMORY.md");
 
+    public TeamMemoryFile CreateTeamMemoryFile(string teamName) =>
+        new(GetTeamMemoryPath(teamName), teamName, ProjectRootDirectory);
+
     public void EnsureDirectories()
     {
         Directory.CreateDirectory(ProjectMemoryDirectory);
