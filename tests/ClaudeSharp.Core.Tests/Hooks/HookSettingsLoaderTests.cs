@@ -72,4 +72,78 @@ public sealed class HookSettingsLoaderTests
             Path.GetFullPath(temp.FullPath("project", ".claude", "scripts")),
             permissionRequest.WorkingDirectory);
     }
+
+    [Fact]
+    public void LoadFromFiles_ReportsInvalidRootAndHooksShapes()
+    {
+        using var temp = new TempDirectory();
+        var invalidRoot = temp.WriteFile("invalid-root.json", "[]");
+        var invalidHooks = temp.WriteFile("invalid-hooks.json", """
+{
+  "hooks": []
+}
+""");
+
+        var result = HookSettingsLoader.LoadFromFiles(
+            [invalidRoot, invalidHooks],
+            temp.Root);
+
+        Assert.Empty(result.Commands);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("non-object hooks value", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void LoadFromFiles_IgnoresDisabledAndInvalidCommandsWhileKeepingValidHooks()
+    {
+        using var temp = new TempDirectory();
+        var config = temp.WriteFile("settings.json", """
+{
+  "hooks": {
+    "pre_tool_use": [
+      "",
+      {
+        "disabled": true,
+        "command": "echo skipped"
+      },
+      {
+        "command": "echo valid",
+        "timeout": "slow",
+        "env": {
+          "DEBUG": 1
+        }
+      },
+      {
+        "timeout": 100
+      }
+    ],
+    "permission_request": 123,
+    "stop-failure": "echo stop"
+  }
+}
+""");
+
+        var result = HookSettingsLoader.LoadFromFiles(
+            [config],
+            temp.Root);
+
+        Assert.Equal(2, result.Commands.Count);
+        Assert.Equal(
+            ["echo valid", "echo stop"],
+            result.Commands.Select(command => command.Command));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("contains an empty command", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("invalid timeout", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("is missing command", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("must be a command string, object, or array", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("1", result.Commands[0].Environment["DEBUG"]);
+    }
 }

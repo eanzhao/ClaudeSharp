@@ -9,18 +9,19 @@ namespace ClaudeSharp.Core.Tests.Mcp;
 public sealed class McpJsonRpcClientTests
 {
     [Fact]
-    public async Task SendRequestAsync_IgnoresNotificationsAndReturnsMatchingResponse()
+    public async Task SendRequestAsync_IgnoresNotificationsAndReturnsMatchingNumericResponse()
     {
         await using var transport = new FakeLineTransport(
         [
             """{"jsonrpc":"2.0","method":"notifications/message","params":{"text":"hello"}}""",
-            """{"jsonrpc":"2.0","id":"1","result":{"ok":true}}""",
+            """{"jsonrpc":"2.0","id":1}""",
         ]);
         await using var client = new McpJsonRpcClient(transport);
 
         var result = await client.SendRequestAsync("tools/list");
 
-        Assert.True(result.GetProperty("ok").GetBoolean());
+        Assert.Equal(JsonValueKind.Object, result.ValueKind);
+        Assert.Empty(result.EnumerateObject());
         Assert.Single(transport.Writes);
         Assert.Contains(@"""method"":""tools/list""", transport.Writes[0], StringComparison.Ordinal);
         Assert.Contains(@"""id"":""1""", transport.Writes[0], StringComparison.Ordinal);
@@ -43,6 +44,51 @@ public sealed class McpJsonRpcClientTests
         Assert.Contains(@"""method"":""initialize""", transport.Writes[0], StringComparison.Ordinal);
         Assert.Contains(@"""id"":""server-1""", transport.Writes[1], StringComparison.Ordinal);
         Assert.Contains(@"""code"":-32601", transport.Writes[1], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SendRequestAsync_ThrowsProtocolExceptionForErrorResponses()
+    {
+        await using var transport = new FakeLineTransport(
+        [
+            """{"jsonrpc":"2.0","id":"1","error":{"code":-32602,"message":"bad request","data":{"field":"name"}}}""",
+        ]);
+        await using var client = new McpJsonRpcClient(transport);
+
+        var ex = await Assert.ThrowsAsync<McpProtocolException>(() =>
+            client.SendRequestAsync("tools/call"));
+
+        Assert.Equal("tools/call", ex.Method);
+        Assert.Equal(-32602, ex.Code);
+        Assert.Contains("bad request", ex.Message, StringComparison.Ordinal);
+        Assert.NotNull(ex.Data);
+        Assert.Equal("name", ex.Data.Value.GetProperty("field").GetString());
+    }
+
+    [Fact]
+    public async Task SendRequestAsync_ThrowsWhenTransportReturnsInvalidJson()
+    {
+        await using var transport = new FakeLineTransport(
+        [
+            "not-json",
+        ]);
+        await using var client = new McpJsonRpcClient(transport);
+
+        await Assert.ThrowsAsync<IOException>(() => client.SendRequestAsync("tools/list"));
+    }
+
+    [Fact]
+    public async Task SendNotificationAsync_WritesNotificationWithoutRequestId()
+    {
+        await using var transport = new FakeLineTransport([]);
+        await using var client = new McpJsonRpcClient(transport);
+
+        await client.SendNotificationAsync("notifications/initialized", new { serverId = "server-a" });
+
+        var payload = Assert.Single(transport.Writes);
+        Assert.Contains(@"""method"":""notifications/initialized""", payload, StringComparison.Ordinal);
+        Assert.Contains(@"""params"":{""serverId"":""server-a""}", payload, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"""id""", payload, StringComparison.Ordinal);
     }
 
     private sealed class FakeLineTransport : IMcpLineTransport

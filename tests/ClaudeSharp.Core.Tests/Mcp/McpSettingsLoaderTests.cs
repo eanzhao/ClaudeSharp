@@ -69,4 +69,54 @@ public sealed class McpSettingsLoaderTests
         Assert.True(serverB.Disabled);
         Assert.Equal("python", serverB.Command);
     }
+
+    [Fact]
+    public void LoadFromFiles_SkipsMalformedEntriesAndPreservesDiagnostics()
+    {
+        using var temp = new TempDirectory();
+        var configPath = temp.WriteFile("settings.json", """
+{
+  "mcpServers": {
+    "": {
+      "command": "ignored"
+    },
+    "server-array": [],
+    "server-url": {
+      "url": "http://localhost:3000/sse"
+    },
+    "server-c": {
+      "command": "uvx",
+      "args": ["one", 2, true, {"nested": "value"}],
+      "cwd": "./relative",
+      "env": {
+        "A": "1",
+        "B": 2
+      }
+    }
+  }
+}
+""");
+
+        var result = McpSettingsLoader.LoadFromFiles([configPath], temp.Root);
+
+        Assert.Single(result.Servers);
+        var serverC = result.Servers[0];
+        Assert.Equal("server-c", serverC.ServerId);
+        Assert.Equal("uvx", serverC.Command);
+        Assert.Equal(["one"], serverC.Args);
+        Assert.Equal(
+            Path.GetFullPath(temp.FullPath("relative")),
+            serverC.WorkingDirectory);
+        Assert.Equal("1", serverC.Environment["A"]);
+        Assert.Equal("2", serverC.Environment["B"]);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("empty server id", StringComparison.Ordinal));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("is not an object", StringComparison.Ordinal));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("uses url transport", StringComparison.Ordinal));
+    }
 }
