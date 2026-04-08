@@ -16,25 +16,36 @@ public sealed class QueryEngineAgentRunner : IAgentExecutionRunner
     private readonly AnthropicClient _client;
     private readonly IPermissionChecker _permissions;
     private readonly IHookRuntime _fallbackHooks;
+    private readonly IAgentWorkspaceManager _workspaceManager;
 
     public QueryEngineAgentRunner(
         AnthropicClient client,
         IPermissionChecker? permissions = null,
-        IHookRuntime? hooks = null)
+        IHookRuntime? hooks = null,
+        IAgentWorkspaceManager? workspaceManager = null)
     {
         _client = client;
         _permissions = permissions ?? new DefaultPermissionChecker();
         _fallbackHooks = hooks ?? HookRuntime.Empty;
+        _workspaceManager = workspaceManager ?? new GitWorktreeAgentWorkspaceManager();
     }
 
     public async Task<AgentExecutionResult> RunAsync(
         AgentExecutionRequest request,
         CancellationToken cancellationToken = default)
     {
+        await using var workspace = request.UseIsolatedWorkspace
+            ? await _workspaceManager.AcquireAsync(request.WorkingDirectory, cancellationToken)
+            : AgentWorkspaceLease.Passthrough(
+                Path.GetFullPath(request.WorkingDirectory),
+                "Workspace isolation disabled.");
+
         var contextProvider = new ContextProvider
         {
-            WorkingDirectory = request.WorkingDirectory,
-            PermissionContext = ClonePermissionContext(request.PermissionContext),
+            WorkingDirectory = workspace.WorkingDirectory,
+            PermissionContext = ClonePermissionContext(
+                request.PermissionContext,
+                workspace.WorkingDirectory),
             MemoryContent = request.MemoryContent,
             SessionMemoryContent = request.SessionMemoryContent,
         };
@@ -110,12 +121,14 @@ public sealed class QueryEngineAgentRunner : IAgentExecutionRunner
             ErrorMessage: errorMessage);
     }
 
-    private static PermissionContext ClonePermissionContext(PermissionContext source)
+    private static PermissionContext ClonePermissionContext(
+        PermissionContext source,
+        string workingDirectory)
     {
         var clone = new PermissionContext
         {
             Mode = source.Mode,
-            WorkingDirectory = source.WorkingDirectory,
+            WorkingDirectory = workingDirectory,
         };
 
         foreach (var path in source.AdditionalWorkingDirectories)

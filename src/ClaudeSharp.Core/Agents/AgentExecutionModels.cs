@@ -16,6 +16,7 @@ public sealed record AgentExecutionRequest
     public required string Model { get; init; }
     public required ToolRegistry Tools { get; init; }
     public required PermissionContext PermissionContext { get; init; }
+    public bool UseIsolatedWorkspace { get; init; } = true;
     public string? MemoryContent { get; init; }
     public string? SessionMemoryContent { get; init; }
     public string? SystemPromptAppendix { get; init; }

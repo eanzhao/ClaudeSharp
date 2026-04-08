@@ -22,6 +22,9 @@ public sealed class AgentToolInput
 
     [JsonPropertyName("run_in_background")]
     public bool RunInBackground { get; set; }
+
+    [JsonPropertyName("use_isolated_workspace")]
+    public bool UseIsolatedWorkspace { get; set; } = true;
 }
 
 /// <summary>
@@ -69,6 +72,10 @@ public sealed class AgentTool : ITool
             "run_in_background": {
               "type": "boolean",
               "description": "When true, launch the subagent in the background and return immediately"
+            },
+            "use_isolated_workspace": {
+              "type": "boolean",
+              "description": "When true, run the subagent in a temporary isolated workspace when possible"
             }
           },
           "required": ["prompt"],
@@ -92,6 +99,7 @@ public sealed class AgentTool : ITool
             - This ClaudeSharp implementation runs subagents in read-only mode
             - The subagent can inspect files and use web discovery tools, but it does not edit files
             - Set run_in_background=true when the work can continue asynchronously
+            - By default the subagent runs in a temporary isolated workspace when the repo supports it
             - Use it for separable investigation tasks, not for the final user-facing answer
             - Give it a concrete prompt with a clear scope and expected output
             """);
@@ -239,6 +247,7 @@ public sealed class AgentTool : ITool
                 Model = context.MainLoopModel,
                 Tools = BuildReadOnlyToolRegistry(context.MainLoopModel),
                 PermissionContext = context.PermissionContext,
+                UseIsolatedWorkspace = input.UseIsolatedWorkspace,
                 SystemPromptAppendix = BuildSubagentSystemPrompt(input.SubagentType),
                 Hooks = _hooks,
             },

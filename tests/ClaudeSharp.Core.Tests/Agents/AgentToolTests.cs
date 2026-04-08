@@ -53,6 +53,7 @@ public sealed class AgentToolTests
         var request = Assert.Single(runner.Requests);
         Assert.Equal("Inspect the query pipeline", request.Prompt);
         Assert.Equal("claude-sonnet-4-6", request.Model);
+        Assert.True(request.UseIsolatedWorkspace);
         Assert.Equal(
             ["Glob", "Grep", "Read", "WebFetch", "WebSearch"],
             request.Tools.GetAllTools().Select(tool => tool.Name).OrderBy(name => name, StringComparer.Ordinal));
@@ -184,6 +185,34 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CanDisableWorkspaceIsolation()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var runner = new RecordingRunner(new AgentExecutionResult(
+            Summary: "child summary",
+            Success: true,
+            Usage: TokenUsage.Empty,
+            TurnCount: 1));
+
+        var tool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            runtime,
+            HookRuntime.Empty);
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "Inspect the query pipeline",
+                use_isolated_workspace = false,
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.False(Assert.Single(runner.Requests).UseIsolatedWorkspace);
+    }
+
+    [Fact]
     public async Task QueryEngineAgentRunner_UsesChildQueryEngineAndReturnsSummary()
     {
         using var temp = new TempDirectory();
@@ -217,6 +246,40 @@ public sealed class AgentToolTests
         Assert.Equal("Summarize the subsystem", request.GetProperty("messages")[0].GetProperty("content")[0].GetProperty("text").GetString());
         Assert.Equal("search", request.GetProperty("tools")[0].GetProperty("name").GetString());
         Assert.Contains("child appendix", request.GetProperty("system").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task QueryEngineAgentRunner_UsesWorkspaceManagerWorkingDirectory()
+    {
+        using var temp = new TempDirectory();
+        var source = temp.CreateDirectory("source");
+        var isolated = temp.CreateDirectory("isolated");
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("child answer", inputTokens: 3, outputTokens: 4));
+        var client = TestSupport.CreateAnthropicClient(handler);
+
+        var workspaceManager = new RecordingWorkspaceManager(isolated);
+        var runner = new QueryEngineAgentRunner(client, workspaceManager: workspaceManager);
+
+        var result = await runner.RunAsync(
+            new AgentExecutionRequest
+            {
+                Prompt = "Summarize the subsystem",
+                WorkingDirectory = source,
+                Model = "claude-sonnet-4-6",
+                Tools = new ToolRegistry(),
+                PermissionContext = new PermissionContext(),
+                SystemPromptAppendix = "child appendix",
+            });
+
+        Assert.True(result.Success);
+        Assert.True(workspaceManager.DisposeCalled);
+
+        var request = JsonDocument.Parse(handler.Bodies[0]).RootElement;
+        Assert.Contains(
+            $"Working Directory: {isolated}",
+            request.GetProperty("system").GetString(),
+            StringComparison.Ordinal);
     }
 
     private static ToolExecutionContext CreateContext() =>
@@ -282,5 +345,33 @@ public sealed class AgentToolTests
         }
 
         Assert.True(predicate(), "Condition was not met before timeout.");
+    }
+
+    private sealed class RecordingWorkspaceManager : IAgentWorkspaceManager
+    {
+        private readonly string _workingDirectory;
+
+        public RecordingWorkspaceManager(string workingDirectory)
+        {
+            _workingDirectory = workingDirectory;
+        }
+
+        public bool DisposeCalled { get; private set; }
+
+        public Task<AgentWorkspaceLease> AcquireAsync(
+            string workingDirectory,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(
+                new AgentWorkspaceLease(
+                    _workingDirectory,
+                    _workingDirectory,
+                    isIsolated: true,
+                    disposeAsync: () =>
+                    {
+                        DisposeCalled = true;
+                        return ValueTask.CompletedTask;
+                    }));
+        }
     }
 }
