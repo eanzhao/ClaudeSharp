@@ -8,3 +8,4 @@ coverage/
 coverage-threshold/
 runtime-coverage/
 foundations-coverage/
+appsettings.secrets.json

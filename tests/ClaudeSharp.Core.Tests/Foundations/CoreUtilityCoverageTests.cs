@@ -2,6 +2,7 @@ using System.Text.Json;
 using ClaudeSharp.Core.Agents;
 using ClaudeSharp.Core.Configuration;
 using ClaudeSharp.Core.Hooks;
+using ClaudeSharp.Core.Messages;
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Providers;
 using ClaudeSharp.Core.Tools;

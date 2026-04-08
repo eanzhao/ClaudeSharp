@@ -125,6 +125,8 @@ public sealed class AgentWaitTool : ITool
 
     public bool IsConcurrencySafe(JsonElement input) => true;
 
+    public bool IsEnabled() => false;
+
     public string GetUserFacingName(JsonElement? input = null) => "Wait for subagent";
 
     public string? GetActivityDescription(JsonElement? input) => "Waiting for subagent";

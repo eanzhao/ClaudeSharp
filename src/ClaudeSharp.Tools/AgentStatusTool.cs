@@ -132,6 +132,8 @@ public sealed class AgentStatusTool : ITool
 
     public bool IsConcurrencySafe(JsonElement input) => true;
 
+    public bool IsEnabled() => false;
+
     public string GetUserFacingName(JsonElement? input = null) => "Agent status";
 
     public string? GetActivityDescription(JsonElement? input) => "Checking subagent status";
@@ -402,7 +404,7 @@ public sealed class AgentStatusTool : ITool
         return true;
     }
 
-    private sealed record NormalizedAgentStatusRequest(
+    private readonly record struct NormalizedAgentStatusRequest(
         string? Id,
         AgentStatusView View,
         AgentStatusOverviewKind Kind,

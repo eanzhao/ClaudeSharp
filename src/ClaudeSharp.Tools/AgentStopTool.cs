@@ -80,6 +80,8 @@ public sealed class AgentStopTool : ITool
 
     public bool IsConcurrencySafe(JsonElement input) => true;
 
+    public bool IsEnabled() => false;
+
     public string GetUserFacingName(JsonElement? input = null) => "Stop subagent";
 
     public string? GetActivityDescription(JsonElement? input) => "Stopping subagent";

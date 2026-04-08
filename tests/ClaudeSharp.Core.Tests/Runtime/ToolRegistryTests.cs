@@ -1,5 +1,7 @@
 using System.Text.Json;
+using ClaudeSharp.Core.Agents;
 using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
@@ -78,5 +80,20 @@ public class ToolRegistryTests
         var definitions = registry.GetToolDefinitions();
 
         Assert.Equal(["alpha", "beta"], definitions.Select(def => def.GetProperty("name").GetString()));
+    }
+
+    [Fact]
+    public void GetEnabledTools_DoesNotExposeAgentManagementToolsToModel()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var registry = new ToolRegistry();
+        registry.Register(new AgentStatusTool(runtime));
+        registry.Register(new AgentStopTool(runtime));
+        registry.Register(new AgentWaitTool(runtime));
+        registry.Register(new FakeTool { Name = "alpha", Enabled = true });
+
+        var enabled = registry.GetEnabledTools();
+
+        Assert.Equal(["alpha"], enabled.Select(tool => tool.Name));
     }
 }

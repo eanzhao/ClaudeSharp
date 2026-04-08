@@ -462,7 +462,10 @@ public class QueryEngine : IAsyncDisposable
                 Name = def.GetProperty("name").GetString()!,
                 Description = def.GetProperty("description").GetString(),
                 InputSchema = schema,
-                Strict = true,
+                // ClaudeSharp validates tool inputs locally, so we can keep the
+                // API-side schema mode non-strict and avoid Anthropic's strict
+                // grammar compilation limits for larger tool sets.
+                Strict = false,
             };
 
             tools.Add(new ApiToolUnion(tool));

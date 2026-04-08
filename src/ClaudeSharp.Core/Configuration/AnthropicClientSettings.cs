@@ -40,7 +40,8 @@ public sealed record AnthropicClientSettings(
 }
 
 /// <summary>
-/// Loads Anthropic client settings from environment variables and appsettings.json.
+/// Loads Anthropic client settings from environment variables, appsettings.json,
+/// and appsettings.secrets.json.
 /// </summary>
 public static class AnthropicClientSettingsLoader
 {
@@ -104,11 +105,15 @@ public static class AnthropicClientSettingsLoader
     {
         var candidates = new List<string>
         {
+            Path.Combine(workingDirectory, "appsettings.secrets.json"),
             Path.Combine(workingDirectory, "appsettings.json"),
         };
 
         if (!string.IsNullOrWhiteSpace(appBaseDirectory))
+        {
+            candidates.Add(Path.Combine(appBaseDirectory, "appsettings.secrets.json"));
             candidates.Add(Path.Combine(appBaseDirectory, "appsettings.json"));
+        }
 
         return candidates
             .Select(Path.GetFullPath)

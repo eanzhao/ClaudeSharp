@@ -82,6 +82,41 @@ public sealed class AnthropicClientSettingsLoaderTests
     }
 
     [Fact]
+    public void Load_PrefersAppSettingsSecretsOverAppSettings()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("appsettings.json", """
+{
+  "Anthropic": {
+    "apiKey": "config-key",
+    "baseUrl": "https://config.example.com"
+  }
+}
+""");
+        temp.WriteFile("appsettings.secrets.json", """
+{
+  "Anthropic": {
+    "apiKey": "secret-key",
+    "baseUrl": "https://secret.example.com"
+  }
+}
+""");
+
+        var settings = AnthropicClientSettingsLoader.Load(
+            temp.Root,
+            _ => null);
+
+        Assert.Equal("secret-key", settings.ApiKey);
+        Assert.Equal("https://secret.example.com", settings.BaseUrl);
+        Assert.True(settings.ApiKeyFromAppSettings);
+        Assert.False(settings.ApiKeyFromEnvironment);
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(temp.Root, "appsettings.secrets.json")),
+            settings.SourcePath);
+        Assert.Contains("appsettings.secrets.json", settings.StartupSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Load_FallsBackToAppBaseDirectoryAppSettings()
     {
         using var temp = new TempDirectory();
@@ -104,6 +139,32 @@ public sealed class AnthropicClientSettingsLoaderTests
         Assert.Equal("https://output.example.com", settings.BaseUrl);
         Assert.Equal(
             Path.GetFullPath(Path.Combine(appBaseDirectory, "appsettings.json")),
+            settings.SourcePath);
+    }
+
+    [Fact]
+    public void Load_FallsBackToAppBaseDirectorySecretsFile()
+    {
+        using var temp = new TempDirectory();
+        var appBaseDirectory = temp.CreateDirectory("bin/Debug/net10.0");
+        temp.WriteFile("bin/Debug/net10.0/appsettings.secrets.json", """
+{
+  "Anthropic": {
+    "apiKey": "output-secret-key",
+    "baseUrl": "https://output-secret.example.com"
+  }
+}
+""");
+
+        var settings = AnthropicClientSettingsLoader.Load(
+            temp.CreateDirectory("work"),
+            _ => null,
+            appBaseDirectory);
+
+        Assert.Equal("output-secret-key", settings.ApiKey);
+        Assert.Equal("https://output-secret.example.com", settings.BaseUrl);
+        Assert.Equal(
+            Path.GetFullPath(Path.Combine(appBaseDirectory, "appsettings.secrets.json")),
             settings.SourcePath);
     }
 
