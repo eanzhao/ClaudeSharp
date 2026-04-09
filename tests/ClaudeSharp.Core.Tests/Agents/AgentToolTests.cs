@@ -69,8 +69,10 @@ public sealed class AgentToolTests
     {
         var taskRuntime = new InMemoryAgentTaskRuntime();
         var teamRuntime = new InMemoryAgentTeamRuntime();
+        var messageRuntime = new InMemoryAgentMessageRuntime();
         var team = teamRuntime.CreateTeam("Platform", leadName: "Ada");
         teamRuntime.AddMember(team.Id, "Bob");
+        var unread = messageRuntime.SendMessage("main", "Platform/Ada", "Please inspect the team runtime");
 
         var runner = new RecordingRunner(new AgentExecutionResult(
             Summary: "teammate summary",
@@ -83,6 +85,7 @@ public sealed class AgentToolTests
             new DefaultProviderCapabilityRouter(),
             taskRuntime,
             teamRuntime,
+            messageRuntime,
             hooks: HookRuntime.Empty);
 
         var result = await tool.ExecuteAsync(
@@ -104,12 +107,21 @@ public sealed class AgentToolTests
         Assert.Contains("Team assignment:", request.SystemPromptAppendix, StringComparison.Ordinal);
         Assert.Contains("Platform", request.SystemPromptAppendix, StringComparison.Ordinal);
         Assert.Contains("Ada (Lead)", request.SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Contains("Unread mailbox messages:", request.SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Contains(unread.Id, request.SystemPromptAppendix, StringComparison.Ordinal);
         Assert.Contains(
             request.Tools.GetAllTools().Select(tool => tool.Name),
             name => string.Equals(name, "TeamStatus", StringComparison.Ordinal));
+        Assert.Contains(
+            request.Tools.GetAllTools().Select(tool => tool.Name),
+            name => string.Equals(name, "SendMessage", StringComparison.Ordinal));
+        Assert.Contains(
+            request.Tools.GetAllTools().Select(tool => tool.Name),
+            name => string.Equals(name, "MailboxStatus", StringComparison.Ordinal));
 
         var workItem = Assert.Single(taskRuntime.ListWorkItems());
         Assert.Equal("Platform/Ada", workItem.Owner);
+        Assert.Equal(AgentMessageStatus.Read, messageRuntime.GetMessage(unread.Id)?.Status);
     }
 
     [Fact]

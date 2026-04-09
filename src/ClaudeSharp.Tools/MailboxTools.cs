@@ -1,0 +1,464 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using ClaudeSharp.Core.Agents;
+using ClaudeSharp.Core.Permissions;
+using ClaudeSharp.Core.Tools;
+
+namespace ClaudeSharp.Tools;
+
+/// <summary>
+/// Represents the top-level SendMessage tool input.
+/// </summary>
+public sealed class SendMessageToolInput
+{
+    [JsonPropertyName("request")]
+    public SendMessageRequestInput? Request { get; set; }
+}
+
+/// <summary>
+/// Represents a send-message request payload.
+/// </summary>
+public sealed class SendMessageRequestInput
+{
+    [JsonPropertyName("to")]
+    public string? To { get; set; }
+
+    [JsonPropertyName("from")]
+    public string? From { get; set; }
+
+    [JsonPropertyName("team_name")]
+    public string? TeamName { get; set; }
+
+    [JsonPropertyName("subject")]
+    public string? Subject { get; set; }
+
+    [JsonPropertyName("reply_to_message_id")]
+    public string? ReplyToMessageId { get; set; }
+
+    [JsonPropertyName("message")]
+    public JsonElement Message { get; set; }
+}
+
+/// <summary>
+/// Represents the top-level mailbox status tool input.
+/// </summary>
+public sealed class MailboxStatusToolInput
+{
+    [JsonPropertyName("request")]
+    public MailboxStatusRequestInput? Request { get; set; }
+}
+
+/// <summary>
+/// Represents a mailbox status query request.
+/// </summary>
+public sealed class MailboxStatusRequestInput
+{
+    [JsonPropertyName("message_id")]
+    public string? MessageId { get; set; }
+
+    [JsonPropertyName("participant")]
+    public string? Participant { get; set; }
+
+    [JsonPropertyName("sender")]
+    public string? Sender { get; set; }
+
+    [JsonPropertyName("recipient")]
+    public string? Recipient { get; set; }
+
+    [JsonPropertyName("unread_only")]
+    public bool UnreadOnly { get; set; }
+
+    [JsonPropertyName("limit")]
+    public int? Limit { get; set; }
+
+    [JsonPropertyName("mark_as_read")]
+    public bool MarkAsRead { get; set; }
+}
+
+/// <summary>
+/// Sends structured or plain-text mailbox messages between agents.
+/// </summary>
+public sealed class SendMessageTool : ITool
+{
+    private readonly IAgentMessageRuntime _messageRuntime;
+    private readonly IAgentTeamRuntime? _teamRuntime;
+
+    public SendMessageTool(
+        IAgentMessageRuntime messageRuntime,
+        IAgentTeamRuntime? teamRuntime = null)
+    {
+        _messageRuntime = messageRuntime;
+        _teamRuntime = teamRuntime;
+    }
+
+    public string Name => "SendMessage";
+
+    public Task<string> GetDescriptionAsync() =>
+        Task.FromResult("Send a mailbox message to another local agent or teammate.");
+
+    public JsonElement GetInputSchema() =>
+        JsonDocument.Parse("""
+        {
+          "type": "object",
+          "properties": {
+            "request": {
+              "type": "object",
+              "properties": {
+                "to": { "type": "string" },
+                "from": { "type": "string" },
+                "team_name": { "type": "string" },
+                "subject": { "type": "string" },
+                "reply_to_message_id": { "type": "string" },
+                "message": {
+                  "oneOf": [
+                    { "type": "string" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": { "type": "string" },
+                        "body": { "type": "string" },
+                        "subject": { "type": "string" }
+                      },
+                      "required": ["kind", "body"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": ["to", "message"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["request"],
+          "additionalProperties": false
+        }
+        """).RootElement.Clone();
+
+    public Task<string> GetPromptAsync(ToolPromptContext context) =>
+        Task.FromResult("""
+            Send a structured mailbox message to another local agent.
+
+            Supported targets in this ClaudeSharp build:
+            - a raw local mailbox address like "main" or "subagent"
+            - a teammate name inside a known team by setting team_name
+            - "*" or "broadcast" inside a known team to fan out to all teammates
+
+            bridge: and uds: targets are not implemented yet in this build.
+            """);
+
+    public Task<ValidationResult> ValidateInputAsync(JsonElement input, ToolExecutionContext context)
+    {
+        var parsed = JsonSerializer.Deserialize<SendMessageToolInput>(input);
+        if (parsed?.Request == null ||
+            string.IsNullOrWhiteSpace(parsed.Request.To) ||
+            parsed.Request.Message.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return Task.FromResult(ValidationResult.Invalid("request.to and request.message are required."));
+        }
+
+        return Task.FromResult(
+            TryParseMessage(parsed.Request.Message, parsed.Request.Subject, out _, out _, out var error)
+                ? ValidationResult.Valid()
+                : ValidationResult.Invalid(error!));
+    }
+
+    public Task<PermissionResult> CheckPermissionsAsync(JsonElement input, ToolExecutionContext context) =>
+        Task.FromResult(PermissionResult.Allow());
+
+    public bool IsReadOnly(JsonElement input) => false;
+    public bool IsConcurrencySafe(JsonElement input) => false;
+    public string GetUserFacingName(JsonElement? input = null) => "Send message";
+    public string? GetActivityDescription(JsonElement? input) => "Sending mailbox message";
+
+    public Task<ToolResult> ExecuteAsync(
+        JsonElement input,
+        ToolExecutionContext context,
+        IProgress<ToolProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var parsed = JsonSerializer.Deserialize<SendMessageToolInput>(input);
+        if (parsed?.Request == null)
+            return Task.FromResult(ToolResult.Error("request.to and request.message are required."));
+
+        var request = parsed.Request;
+        if (!TryParseMessage(request.Message, request.Subject, out var kind, out var body, out var error, out var subject))
+            return Task.FromResult(ToolResult.Error(error!));
+
+        var sender = ResolveSender(request);
+        if (sender == null)
+            return Task.FromResult(ToolResult.Error("Sender could not be resolved."));
+
+        if (request.To!.StartsWith("bridge:", StringComparison.OrdinalIgnoreCase) ||
+            request.To.StartsWith("uds:", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult(ToolResult.Error("bridge: and uds: targets are not implemented in this ClaudeSharp build."));
+        }
+
+        List<AgentMessage> delivered;
+        try
+        {
+            delivered = ResolveRecipients(request)
+                .Select(recipient => _messageRuntime.SendMessage(
+                    sender,
+                    recipient,
+                    body!,
+                    kind,
+                    subject,
+                    request.ReplyToMessageId))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            return Task.FromResult(ToolResult.Error(ex.Message));
+        }
+
+        var lines = new List<string>
+        {
+            $"Delivered {delivered.Count} message(s).",
+        };
+        foreach (var message in delivered)
+            lines.Add($"- {AgentMessageFormatter.FormatSummaryLine(message)}");
+
+        return Task.FromResult(ToolResult.Success(string.Join(Environment.NewLine, lines)));
+    }
+
+    private string? ResolveSender(SendMessageRequestInput request)
+    {
+        if (string.IsNullOrWhiteSpace(request.TeamName))
+            return string.IsNullOrWhiteSpace(request.From) ? "main" : request.From.Trim();
+
+        var team = _teamRuntime == null
+            ? null
+            : AgentTeamLookup.ResolveTeam(_teamRuntime, request.TeamName);
+        if (team == null)
+            throw new InvalidOperationException($"Team '{request.TeamName!.Trim()}' was not found.");
+
+        if (string.IsNullOrWhiteSpace(request.From))
+            return "main";
+
+        var senderMember = AgentTeamLookup.ResolveMember(team, request.From);
+        return senderMember == null
+            ? request.From.Trim()
+            : $"{team.Name}/{senderMember.Name}";
+    }
+
+    private IReadOnlyList<string> ResolveRecipients(SendMessageRequestInput request)
+    {
+        if (string.IsNullOrWhiteSpace(request.TeamName))
+            return [request.To!.Trim()];
+
+        if (_teamRuntime == null)
+            throw new InvalidOperationException("Team runtime is not configured.");
+
+        var team = AgentTeamLookup.ResolveTeam(_teamRuntime, request.TeamName);
+        if (team == null)
+            throw new InvalidOperationException($"Team '{request.TeamName!.Trim()}' was not found.");
+
+        if (request.To is "*" or "broadcast")
+        {
+            return team.Members
+                .OrderBy(member => member.Role == AgentTeamMemberRole.Lead ? 0 : 1)
+                .ThenBy(member => member.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(member => $"{team.Name}/{member.Name}")
+                .ToArray();
+        }
+
+        var teammate = AgentTeamLookup.ResolveMember(team, request.To!);
+        if (teammate == null)
+            throw new InvalidOperationException($"Teammate '{request.To!.Trim()}' was not found in team '{team.Name}'.");
+
+        return [$"{team.Name}/{teammate.Name}"];
+    }
+
+    private static bool TryParseMessage(
+        JsonElement value,
+        string? fallbackSubject,
+        out AgentMessageKind kind,
+        out string? body,
+        out string? error) =>
+        TryParseMessage(value, fallbackSubject, out kind, out body, out error, out _);
+
+    private static bool TryParseMessage(
+        JsonElement value,
+        string? fallbackSubject,
+        out AgentMessageKind kind,
+        out string? body,
+        out string? error,
+        out string? subject)
+    {
+        kind = AgentMessageKind.Note;
+        body = null;
+        error = null;
+        subject = string.IsNullOrWhiteSpace(fallbackSubject) ? null : fallbackSubject.Trim();
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            body = value.GetString()?.Trim();
+            error = string.IsNullOrWhiteSpace(body) ? "request.message cannot be empty." : null;
+            return error == null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            error = "request.message must be a string or an object.";
+            return false;
+        }
+
+        if (!value.TryGetProperty("kind", out var kindValue) ||
+            !Enum.TryParse<AgentMessageKind>(kindValue.GetString(), ignoreCase: true, out kind))
+        {
+            error = "request.message.kind is invalid.";
+            return false;
+        }
+
+        if (!value.TryGetProperty("body", out var bodyValue) ||
+            bodyValue.ValueKind != JsonValueKind.String ||
+            string.IsNullOrWhiteSpace(bodyValue.GetString()))
+        {
+            error = "request.message.body is required.";
+            return false;
+        }
+
+        body = bodyValue.GetString()!.Trim();
+        if (value.TryGetProperty("subject", out var subjectValue) &&
+            subjectValue.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(subjectValue.GetString()))
+        {
+            subject = subjectValue.GetString()!.Trim();
+        }
+
+        return true;
+    }
+}
+
+/// <summary>
+/// Reads mailbox summaries and message details.
+/// </summary>
+public sealed class MailboxStatusTool : ITool
+{
+    private readonly IAgentMessageRuntime _messageRuntime;
+
+    public MailboxStatusTool(IAgentMessageRuntime messageRuntime)
+    {
+        _messageRuntime = messageRuntime;
+    }
+
+    public string Name => "MailboxStatus";
+
+    public Task<string> GetDescriptionAsync() =>
+        Task.FromResult("Inspect mailbox summaries, unread messages, and message details.");
+
+    public JsonElement GetInputSchema() =>
+        JsonDocument.Parse("""
+        {
+          "type": "object",
+          "properties": {
+            "request": {
+              "type": "object",
+              "properties": {
+                "message_id": { "type": "string" },
+                "participant": { "type": "string" },
+                "sender": { "type": "string" },
+                "recipient": { "type": "string" },
+                "unread_only": { "type": "boolean" },
+                "limit": { "type": "integer" },
+                "mark_as_read": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["request"],
+          "additionalProperties": false
+        }
+        """).RootElement.Clone();
+
+    public Task<string> GetPromptAsync(ToolPromptContext context) =>
+        Task.FromResult("""
+            Inspect local mailbox state.
+
+            Use this after SendMessage, or when you need to check whether a teammate or local agent has unread messages.
+            Set request.message_id to inspect one message in detail. Set mark_as_read=true to acknowledge it.
+            Otherwise you can filter by participant, sender, recipient, and unread_only.
+            """);
+
+    public Task<ValidationResult> ValidateInputAsync(JsonElement input, ToolExecutionContext context)
+    {
+        var parsed = JsonSerializer.Deserialize<MailboxStatusToolInput>(input);
+        if (parsed?.Request == null)
+            return Task.FromResult(ValidationResult.Invalid("request is required."));
+
+        if (parsed.Request.Limit is <= 0)
+            return Task.FromResult(ValidationResult.Invalid("request.limit must be greater than 0."));
+
+        return Task.FromResult(ValidationResult.Valid());
+    }
+
+    public Task<PermissionResult> CheckPermissionsAsync(JsonElement input, ToolExecutionContext context) =>
+        Task.FromResult(PermissionResult.Allow());
+
+    public bool IsReadOnly(JsonElement input)
+    {
+        var parsed = JsonSerializer.Deserialize<MailboxStatusToolInput>(input);
+        return parsed?.Request?.MarkAsRead != true;
+    }
+
+    public bool IsConcurrencySafe(JsonElement input) => true;
+    public string GetUserFacingName(JsonElement? input = null) => "Mailbox status";
+    public string? GetActivityDescription(JsonElement? input) => "Reading mailbox";
+
+    public Task<ToolResult> ExecuteAsync(
+        JsonElement input,
+        ToolExecutionContext context,
+        IProgress<ToolProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var parsed = JsonSerializer.Deserialize<MailboxStatusToolInput>(input);
+        if (parsed?.Request == null)
+            return Task.FromResult(ToolResult.Error("request is required."));
+
+        var request = parsed.Request;
+        if (!string.IsNullOrWhiteSpace(request.MessageId))
+        {
+            if (request.MarkAsRead)
+                _messageRuntime.MarkMessageRead(request.MessageId);
+
+            var message = _messageRuntime.GetMessage(request.MessageId);
+            return Task.FromResult(message == null
+                ? ToolResult.Error($"Message '{request.MessageId.Trim()}' was not found.")
+                : ToolResult.Success(AgentMessageFormatter.FormatDetails(message)));
+        }
+
+        if (request.MarkAsRead &&
+            !string.IsNullOrWhiteSpace(request.Recipient))
+        {
+            _messageRuntime.MarkRecipientMessagesRead(request.Recipient);
+        }
+
+        var hasFilter = !string.IsNullOrWhiteSpace(request.Participant) ||
+                        !string.IsNullOrWhiteSpace(request.Sender) ||
+                        !string.IsNullOrWhiteSpace(request.Recipient) ||
+                        request.UnreadOnly ||
+                        request.Limit.HasValue;
+        if (!hasFilter)
+        {
+            return Task.FromResult(ToolResult.Success(
+                AgentMessageFormatter.FormatOverview(
+                    _messageRuntime.ListMessages(new AgentMessageListOptions { Limit = 5 }),
+                    _messageRuntime.GetUnreadCounts())));
+        }
+
+        var messages = _messageRuntime.ListMessages(new AgentMessageListOptions
+            {
+                Sender = request.Sender,
+                Recipient = request.Recipient,
+                Status = request.UnreadOnly ? AgentMessageStatus.Delivered : null,
+                Limit = request.Limit,
+            })
+            .Where(message =>
+                string.IsNullOrWhiteSpace(request.Participant) ||
+                string.Equals(message.From, request.Participant.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(message.To, request.Participant.Trim(), StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        return Task.FromResult(ToolResult.Success(AgentMessageFormatter.FormatList(messages)));
+    }
+}

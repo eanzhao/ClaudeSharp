@@ -51,6 +51,7 @@ public sealed class AgentTool : ITool
     private readonly IProviderCapabilityRouter _providerCapabilityRouter;
     private readonly IAgentTaskRuntime _taskRuntime;
     private readonly IAgentTeamRuntime? _teamRuntime;
+    private readonly IAgentMessageRuntime? _messageRuntime;
     private readonly IHookRuntime _hooks;
     private readonly BackgroundAgentRunScheduler _backgroundRunScheduler;
     private string? _assignmentErrorMessage;
@@ -60,6 +61,7 @@ public sealed class AgentTool : ITool
         IProviderCapabilityRouter? providerCapabilityRouter = null,
         IAgentTaskRuntime? taskRuntime = null,
         IAgentTeamRuntime? teamRuntime = null,
+        IAgentMessageRuntime? messageRuntime = null,
         IHookRuntime? hooks = null,
         BackgroundAgentRunScheduler? backgroundRunScheduler = null)
     {
@@ -67,6 +69,7 @@ public sealed class AgentTool : ITool
         _providerCapabilityRouter = providerCapabilityRouter ?? new DefaultProviderCapabilityRouter();
         _taskRuntime = taskRuntime ?? new InMemoryAgentTaskRuntime();
         _teamRuntime = teamRuntime;
+        _messageRuntime = messageRuntime;
         _hooks = hooks ?? HookRuntime.Empty;
         _backgroundRunScheduler = backgroundRunScheduler ?? new BackgroundAgentRunScheduler();
     }
@@ -362,7 +365,7 @@ public sealed class AgentTool : ITool
                 PermissionContext = context.PermissionContext,
                 UseIsolatedWorkspace = input.UseIsolatedWorkspace,
                 Progress = progress,
-                SystemPromptAppendix = BuildSubagentSystemPrompt(input.SubagentType, assignment),
+                SystemPromptAppendix = BuildSystemPromptAppendix(input.SubagentType, assignment),
                 Hooks = _hooks,
             },
             cancellationToken);
@@ -383,9 +386,56 @@ public sealed class AgentTool : ITool
         registry.Register(new GrepTool());
         if (_teamRuntime != null)
             registry.Register(new TeamStatusTool(_teamRuntime));
+        if (_messageRuntime != null)
+        {
+            registry.Register(new MailboxStatusTool(_messageRuntime));
+            registry.Register(new SendMessageTool(_messageRuntime, _teamRuntime));
+        }
         registry.Register(new WebFetchTool());
         registry.Register(new WebSearchTool(_providerCapabilityRouter, () => model));
         return registry;
+    }
+
+    private string BuildSystemPromptAppendix(
+        string? subagentType,
+        AgentAssignment assignment)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(BuildSubagentSystemPrompt(subagentType, assignment));
+
+        var mailboxAppendix = BuildMailboxAppendix(assignment);
+        if (!string.IsNullOrWhiteSpace(mailboxAppendix))
+        {
+            builder.AppendLine();
+            builder.AppendLine(mailboxAppendix);
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private string? BuildMailboxAppendix(AgentAssignment assignment)
+    {
+        if (_messageRuntime == null || string.IsNullOrWhiteSpace(assignment.Owner))
+            return null;
+
+        var unread = _messageRuntime.ListMessages(new AgentMessageListOptions
+        {
+            Recipient = assignment.Owner,
+            Status = AgentMessageStatus.Delivered,
+            Limit = 5,
+        });
+
+        if (unread.Count == 0)
+            return null;
+
+        _messageRuntime.MarkRecipientMessagesRead(assignment.Owner);
+
+        var builder = new StringBuilder();
+        builder.AppendLine("Unread mailbox messages:");
+        foreach (var message in unread.OrderBy(message => message.CreatedAt))
+            builder.AppendLine($"- {AgentMessageFormatter.FormatSummaryLine(message)}");
+
+        return builder.ToString().TrimEnd();
     }
 
     private static string BuildSubagentSystemPrompt(

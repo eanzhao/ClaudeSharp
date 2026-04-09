@@ -43,10 +43,26 @@ public sealed class PersistentAgentMessageRuntime : IAgentMessageRuntime
         return message;
     }
 
+    public AgentMessage SendMessage(
+        string from,
+        string to,
+        AgentMessageKind kind,
+        string body,
+        string? subject = null,
+        string? relatedMessageId = null)
+    {
+        var message = _inner.SendMessage(from, to, kind, body, subject, relatedMessageId);
+        Persist(AgentMessagePersistence.CreateMessageEntry(message));
+        return message;
+    }
+
     public AgentMessage? GetMessage(string id) => _inner.GetMessage(id);
 
     public IReadOnlyList<AgentMessage> ListMessages(AgentMessageListOptions? options = null) =>
         _inner.ListMessages(options);
+
+    public IReadOnlyList<AgentMessage> ListThread(string threadId) =>
+        _inner.ListThread(threadId);
 
     public bool MarkMessageRead(string id)
     {
@@ -56,6 +72,8 @@ public sealed class PersistentAgentMessageRuntime : IAgentMessageRuntime
 
         return updated;
     }
+
+    public bool MarkRead(string id) => MarkMessageRead(id);
 
     public AgentMessageReadResult MarkRecipientMessagesRead(string recipient)
     {
@@ -70,6 +88,9 @@ public sealed class PersistentAgentMessageRuntime : IAgentMessageRuntime
     }
 
     public IReadOnlyDictionary<string, int> GetUnreadCounts() => _inner.GetUnreadCounts();
+
+    public AgentMessageSummary GetSummary(AgentMessageListOptions? options = null) =>
+        _inner.GetSummary(options);
 
     private void Persist(TranscriptMetadataEntry entry)
     {

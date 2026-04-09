@@ -13,15 +13,29 @@ public interface IAgentMessageRuntime
         string? subject = null,
         string? relatedMessageId = null);
 
+    AgentMessage SendMessage(
+        string from,
+        string to,
+        AgentMessageKind kind,
+        string body,
+        string? subject = null,
+        string? relatedMessageId = null);
+
     AgentMessage? GetMessage(string id);
 
     IReadOnlyList<AgentMessage> ListMessages(AgentMessageListOptions? options = null);
 
+    IReadOnlyList<AgentMessage> ListThread(string threadId);
+
     bool MarkMessageRead(string id);
+
+    bool MarkRead(string id);
 
     AgentMessageReadResult MarkRecipientMessagesRead(string recipient);
 
     IReadOnlyDictionary<string, int> GetUnreadCounts();
+
+    AgentMessageSummary GetSummary(AgentMessageListOptions? options = null);
 }
 
 /// <summary>
@@ -33,6 +47,7 @@ public sealed class InMemoryAgentMessageRuntime : IAgentMessageRuntime
     private readonly Dictionary<string, AgentMessage> _messages =
         new(StringComparer.OrdinalIgnoreCase);
     private int _messageSequence;
+    private int _threadSequence;
 
     public InMemoryAgentMessageRuntime(IEnumerable<AgentMessage>? messages = null)
     {
@@ -44,6 +59,7 @@ public sealed class InMemoryAgentMessageRuntime : IAgentMessageRuntime
             var clone = message.Clone();
             _messages[clone.Id] = clone;
             _messageSequence = Math.Max(_messageSequence, ParseSequence(clone.Id, "agent-message-"));
+            _threadSequence = Math.Max(_threadSequence, ParseSequence(clone.ThreadId, "thread-"));
         }
     }
 
@@ -55,29 +71,49 @@ public sealed class InMemoryAgentMessageRuntime : IAgentMessageRuntime
         string? subject = null,
         string? relatedMessageId = null)
     {
+        return SendMessage(from, to, kind, body, subject, relatedMessageId);
+    }
+
+    public AgentMessage SendMessage(
+        string from,
+        string to,
+        AgentMessageKind kind,
+        string body,
+        string? subject = null,
+        string? relatedMessageId = null)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(from);
         ArgumentException.ThrowIfNullOrWhiteSpace(to);
         ArgumentException.ThrowIfNullOrWhiteSpace(body);
 
         var now = DateTimeOffset.UtcNow;
-        var message = new AgentMessage
-        {
-            Id = $"agent-message-{Interlocked.Increment(ref _messageSequence)}",
-            From = from.Trim(),
-            To = to.Trim(),
-            Kind = kind,
-            Body = body.Trim(),
-            Subject = string.IsNullOrWhiteSpace(subject) ? null : subject.Trim(),
-            RelatedMessageId = string.IsNullOrWhiteSpace(relatedMessageId) ? null : relatedMessageId.Trim(),
-            Status = AgentMessageStatus.Delivered,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
         lock (_gate)
-            _messages[message.Id] = message;
+        {
+            AgentMessage? related = null;
+            if (!string.IsNullOrWhiteSpace(relatedMessageId))
+            {
+                if (!_messages.TryGetValue(relatedMessageId.Trim(), out related))
+                    throw new InvalidOperationException($"Mailbox message '{relatedMessageId.Trim()}' was not found.");
+            }
 
-        return message.Clone();
+            var message = new AgentMessage
+            {
+                Id = $"agent-message-{Interlocked.Increment(ref _messageSequence)}",
+                ThreadId = related?.ThreadId ?? $"thread-{Interlocked.Increment(ref _threadSequence)}",
+                From = from.Trim(),
+                To = to.Trim(),
+                Kind = kind,
+                Body = body.Trim(),
+                Subject = string.IsNullOrWhiteSpace(subject) ? null : subject.Trim(),
+                RelatedMessageId = string.IsNullOrWhiteSpace(relatedMessageId) ? null : relatedMessageId.Trim(),
+                Status = AgentMessageStatus.Delivered,
+                CreatedAt = now,
+                UpdatedAt = now,
+            };
+
+            _messages[message.Id] = message;
+            return message.Clone();
+        }
     }
 
     public AgentMessage? GetMessage(string id)
@@ -119,6 +155,13 @@ public sealed class InMemoryAgentMessageRuntime : IAgentMessageRuntime
                     string.Equals(message.To, recipient, StringComparison.OrdinalIgnoreCase));
             }
 
+            if (!string.IsNullOrWhiteSpace(resolved.ThreadId))
+            {
+                var threadId = resolved.ThreadId.Trim();
+                query = query.Where(message =>
+                    string.Equals(message.ThreadId, threadId, StringComparison.OrdinalIgnoreCase));
+            }
+
             if (resolved.Status is { } status)
                 query = query.Where(message => message.Status == status);
 
@@ -134,7 +177,29 @@ public sealed class InMemoryAgentMessageRuntime : IAgentMessageRuntime
         }
     }
 
+    public IReadOnlyList<AgentMessage> ListThread(string threadId)
+    {
+        if (string.IsNullOrWhiteSpace(threadId))
+            return [];
+
+        lock (_gate)
+        {
+            return _messages.Values
+                .Where(message =>
+                    string.Equals(message.ThreadId, threadId.Trim(), StringComparison.OrdinalIgnoreCase))
+                .OrderBy(message => message.CreatedAt)
+                .ThenBy(message => message.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(message => message.Clone())
+                .ToArray();
+        }
+    }
+
     public bool MarkMessageRead(string id)
+    {
+        return MarkRead(id);
+    }
+
+    public bool MarkRead(string id)
     {
         if (string.IsNullOrWhiteSpace(id))
             return false;
@@ -189,6 +254,21 @@ public sealed class InMemoryAgentMessageRuntime : IAgentMessageRuntime
                     group => group.Count(),
                     StringComparer.OrdinalIgnoreCase);
         }
+    }
+
+    public AgentMessageSummary GetSummary(AgentMessageListOptions? options = null)
+    {
+        var messages = ListMessages(options);
+        var unreadCounts = GetUnreadCounts();
+
+        return new AgentMessageSummary
+        {
+            TotalCount = messages.Count,
+            ReadCount = messages.Count(message => message.Status == AgentMessageStatus.Read),
+            UnreadCount = messages.Count(message => message.Status == AgentMessageStatus.Delivered),
+            UnreadCounts = unreadCounts,
+            RecentMessages = messages.Take(5).Select(message => message.Clone()).ToArray(),
+        };
     }
 
     private static int ParseSequence(string value, string prefix)

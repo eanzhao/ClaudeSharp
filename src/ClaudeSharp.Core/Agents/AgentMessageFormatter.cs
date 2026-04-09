@@ -7,6 +7,79 @@ namespace ClaudeSharp.Core.Agents;
 /// </summary>
 public static class AgentMessageFormatter
 {
+    public static string FormatInbox(
+        string participant,
+        IReadOnlyList<AgentMessage> messages)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Mailbox inbox: {participant}");
+        builder.AppendLine($"  Messages: {messages.Count}");
+
+        if (messages.Count == 0)
+        {
+            builder.AppendLine("  Items: (none)");
+            return builder.ToString().TrimEnd();
+        }
+
+        builder.AppendLine("  Items:");
+        foreach (var message in messages)
+            builder.AppendLine($"  - {FormatSummaryLine(message)}");
+
+        return builder.ToString().TrimEnd();
+    }
+
+    public static string FormatOutbox(
+        string participant,
+        IReadOnlyList<AgentMessage> messages)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Mailbox outbox: {participant}");
+        builder.AppendLine($"  Messages: {messages.Count}");
+
+        if (messages.Count == 0)
+        {
+            builder.AppendLine("  Items: (none)");
+            return builder.ToString().TrimEnd();
+        }
+
+        builder.AppendLine("  Items:");
+        foreach (var message in messages)
+            builder.AppendLine($"  - {FormatSummaryLine(message)}");
+
+        return builder.ToString().TrimEnd();
+    }
+
+    public static string FormatThread(
+        string threadId,
+        IReadOnlyList<AgentMessage> messages)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Mailbox thread: {threadId}");
+        builder.AppendLine($"  Messages: {messages.Count}");
+
+        if (messages.Count == 0)
+        {
+            builder.AppendLine("  Items: (none)");
+            return builder.ToString().TrimEnd();
+        }
+
+        var subject = messages
+            .Select(message => message.Subject)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (!string.IsNullOrWhiteSpace(subject))
+            builder.AppendLine($"  Subject: {subject}");
+
+        builder.AppendLine("  Timeline:");
+        foreach (var message in messages)
+        {
+            builder.AppendLine(
+                $"  - {message.CreatedAt:O} | {message.From} -> {message.To} | {message.Kind} | {message.Status}");
+            builder.AppendLine($"    {message.Body.Replace(Environment.NewLine, $"{Environment.NewLine}    ", StringComparison.Ordinal)}");
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
     public static string FormatOverview(
         IReadOnlyList<AgentMessage> messages,
         IReadOnlyDictionary<string, int> unreadCounts)
@@ -44,6 +117,34 @@ public static class AgentMessageFormatter
         var builder = new StringBuilder();
         builder.AppendLine("Mailbox:");
         foreach (var message in messages)
+            builder.AppendLine($"  - {FormatSummaryLine(message)}");
+
+        return builder.ToString().TrimEnd();
+    }
+
+    public static string FormatSummary(AgentMessageSummary summary)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine("Mailbox summary:");
+        builder.AppendLine($"  Total: {summary.TotalCount}");
+        builder.AppendLine($"  Read: {summary.ReadCount}");
+        builder.AppendLine($"  Unread: {summary.UnreadCount}");
+
+        if (summary.UnreadCounts.Count > 0)
+        {
+            builder.AppendLine("  Unread by recipient:");
+            foreach (var entry in summary.UnreadCounts.OrderBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase))
+                builder.AppendLine($"  - {entry.Key}: {entry.Value}");
+        }
+
+        if (summary.RecentMessages.Count == 0)
+        {
+            builder.AppendLine("  Recent: (none)");
+            return builder.ToString().TrimEnd();
+        }
+
+        builder.AppendLine("  Recent:");
+        foreach (var message in summary.RecentMessages)
             builder.AppendLine($"  - {FormatSummaryLine(message)}");
 
         return builder.ToString().TrimEnd();

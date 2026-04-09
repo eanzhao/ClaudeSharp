@@ -27,6 +27,7 @@ public enum AgentMessageStatus
 public sealed class AgentMessage
 {
     public required string Id { get; init; }
+    public required string ThreadId { get; set; }
     public required string From { get; set; }
     public required string To { get; set; }
     public AgentMessageKind Kind { get; set; } = AgentMessageKind.Note;
@@ -41,6 +42,7 @@ public sealed class AgentMessage
         new()
         {
             Id = Id,
+            ThreadId = ThreadId,
             From = From,
             To = To,
             Kind = Kind,
@@ -60,6 +62,7 @@ public sealed record AgentMessageListOptions
 {
     public string? Sender { get; init; }
     public string? Recipient { get; init; }
+    public string? ThreadId { get; init; }
     public AgentMessageStatus? Status { get; init; }
     public int Offset { get; init; }
     public int? Limit { get; init; }
@@ -73,4 +76,17 @@ public sealed record AgentMessageReadResult(
 {
     public int UpdatedCount => MessageIds.Count;
     public bool HasChanges => UpdatedCount > 0;
+}
+
+/// <summary>
+/// Represents a mailbox summary for the runtime.
+/// </summary>
+public sealed record AgentMessageSummary
+{
+    public int TotalCount { get; init; }
+    public int ReadCount { get; init; }
+    public int UnreadCount { get; init; }
+    public IReadOnlyDictionary<string, int> UnreadCounts { get; init; } =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyList<AgentMessage> RecentMessages { get; init; } = [];
 }

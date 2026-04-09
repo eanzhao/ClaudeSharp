@@ -20,7 +20,7 @@ public sealed class AppStateProjector
         McpConnectionManager? mcpConnectionManager = null,
         IAgentTaskRuntime? agentTaskRuntime = null,
         IAgentTeamRuntime? agentTeamRuntime = null,
-        IAgentMailboxRuntime? agentMailboxRuntime = null)
+        IAgentMessageRuntime? agentMessageRuntime = null)
     {
         var workItems = SnapshotWorkItems(agentTaskRuntime);
 
@@ -36,7 +36,7 @@ public sealed class AppStateProjector
             McpConnections = SnapshotMcpConnections(mcpConnectionManager),
             WorkItems = workItems,
             Teams = SnapshotTeams(agentTeamRuntime),
-            Mailboxes = SnapshotMailboxes(agentMailboxRuntime),
+            Mailboxes = SnapshotMailboxes(agentMessageRuntime),
         };
     }
 
@@ -120,23 +120,55 @@ public sealed class AppStateProjector
     }
 
     internal static IReadOnlyList<AppStateMailboxSnapshot> SnapshotMailboxes(
-        IAgentMailboxRuntime? runtime)
+        IAgentMessageRuntime? runtime)
     {
         if (runtime == null)
             return [];
 
-        return runtime.ListMailboxes()
-            .Select(mailbox => new AppStateMailboxSnapshot
+        var messages = runtime.ListMessages();
+        var participants = messages
+            .SelectMany(message => new[] { message.From, message.To })
+            .Where(participant => !string.IsNullOrWhiteSpace(participant))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(participant => participant, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return participants
+            .Select(participant =>
             {
-                Participant = mailbox.Participant,
-                InboxCount = mailbox.InboxCount,
-                UnreadCount = mailbox.UnreadCount,
-                OutboxCount = mailbox.OutboxCount,
-                ThreadCount = mailbox.ThreadCount,
-                LatestThreadId = mailbox.LatestThreadId,
-                LatestSubject = mailbox.LatestSubject,
-                LatestCounterparty = mailbox.LatestCounterparty,
-                LatestMessageAt = mailbox.LatestMessageAt,
+                var related = messages.Where(message =>
+                        string.Equals(message.From, participant, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(message.To, participant, StringComparison.OrdinalIgnoreCase))
+                    .ToArray();
+                var inbox = related.Where(message =>
+                    string.Equals(message.To, participant, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var outbox = related.Where(message =>
+                    string.Equals(message.From, participant, StringComparison.OrdinalIgnoreCase)).ToArray();
+                var latest = related
+                    .OrderByDescending(message => message.CreatedAt)
+                    .ThenByDescending(message => message.Id, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault();
+                var latestCounterparty = latest == null
+                    ? null
+                    : string.Equals(latest.From, participant, StringComparison.OrdinalIgnoreCase)
+                        ? latest.To
+                        : latest.From;
+
+                return new AppStateMailboxSnapshot
+                {
+                    Participant = participant,
+                    InboxCount = inbox.Length,
+                    UnreadCount = inbox.Count(message => message.Status == AgentMessageStatus.Delivered),
+                    OutboxCount = outbox.Length,
+                    ThreadCount = related
+                        .Select(message => message.ThreadId)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Count(),
+                    LatestThreadId = latest?.ThreadId,
+                    LatestSubject = latest?.Subject,
+                    LatestCounterparty = latestCounterparty,
+                    LatestMessageAt = latest?.CreatedAt,
+                };
             })
             .ToArray();
     }

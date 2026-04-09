@@ -12,17 +12,17 @@ public sealed class AppStateMailboxProjectionTests
     [Fact]
     public void CreateSnapshot_ProjectsMailboxSummaries()
     {
-        var runtime = new InMemoryAgentMailboxRuntime();
-        var launch = runtime.SendMessage("Ada", "Bob", "Inspect launch", subject: "Launch");
-        runtime.SendMessage("Ada", "Bob", "Follow up", subject: "Launch");
-        runtime.SendMessage("Bob", "Ada", "Looks good", subject: "Re: Launch", replyToMessageId: launch.Id);
-        runtime.MarkAsRead(launch.Id);
+        var runtime = new InMemoryAgentMessageRuntime();
+        var launch = runtime.SendMessage("Ada", "Bob", "Inspect launch", AgentMessageKind.Note, subject: "Launch");
+        runtime.SendMessage("Ada", "Bob", "Follow up", AgentMessageKind.PlanApprovalRequest, subject: "Launch");
+        runtime.SendMessage("Bob", "Ada", "Looks good", AgentMessageKind.PlanApprovalResponse, subject: "Re: Launch", relatedMessageId: launch.Id);
+        runtime.MarkRead(launch.Id);
 
         var projector = new AppStateProjector();
         var snapshot = projector.CreateSnapshot(
             "/workspace",
             PermissionMode.Plan,
-            agentMailboxRuntime: runtime);
+            agentMessageRuntime: runtime);
 
         var ada = Assert.Single(snapshot.Mailboxes, mailbox =>
             string.Equals(mailbox.Participant, "Ada", StringComparison.OrdinalIgnoreCase));

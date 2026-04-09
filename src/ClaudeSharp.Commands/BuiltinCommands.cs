@@ -380,6 +380,138 @@ internal static class TeamCommandDefaults
 }
 
 /// <summary>
+/// Represents mailbox command.
+/// </summary>
+public class MailboxCommand : ICommand
+{
+    private readonly IAgentMessageRuntime? _runtime;
+
+    public MailboxCommand(IAgentMessageRuntime? runtime = null)
+    {
+        _runtime = runtime;
+    }
+
+    public string Name => "mailbox";
+    public string Description => "Inspect or acknowledge local agent mailbox messages";
+    public string[] Aliases => ["messages"];
+
+    public Task ExecuteAsync(string args, CommandContext context)
+    {
+        var runtime = ResolveRuntime(context);
+        var trimmed = args.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed) ||
+            trimmed.Equals("list", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("status", StringComparison.OrdinalIgnoreCase))
+        {
+            context.WriteLine(AgentMessageFormatter.FormatOverview(
+                runtime.ListMessages(new AgentMessageListOptions { Limit = 5 }),
+                runtime.GetUnreadCounts()));
+            return Task.CompletedTask;
+        }
+
+        var parts = trimmed.Split(' ', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var action = parts[0];
+        var remainder = parts.Length > 1 ? parts[1] : string.Empty;
+
+        if (action.Equals("show", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("inspect", StringComparison.OrdinalIgnoreCase))
+        {
+            return ShowMessageAsync(runtime, remainder, context);
+        }
+
+        if (action.Equals("read", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("ack", StringComparison.OrdinalIgnoreCase))
+        {
+            return ReadMessageAsync(runtime, remainder, context);
+        }
+
+        if (action.Equals("for", StringComparison.OrdinalIgnoreCase))
+        {
+            return ListParticipantMessagesAsync(runtime, remainder, context);
+        }
+
+        if (runtime.GetMessage(trimmed) is { } direct)
+        {
+            context.WriteLine(AgentMessageFormatter.FormatDetails(direct));
+            return Task.CompletedTask;
+        }
+
+        context.WriteLine("  Usage: /mailbox [list|status], /mailbox show <message-id>, /mailbox read <message-id>, /mailbox for <participant>");
+        return Task.CompletedTask;
+    }
+
+    private static Task ShowMessageAsync(
+        IAgentMessageRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        var id = args.Trim();
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            context.WriteLine("  Usage: /mailbox show <message-id>");
+            return Task.CompletedTask;
+        }
+
+        var message = runtime.GetMessage(id);
+        context.WriteLine(message == null
+            ? $"  Message '{id}' was not found."
+            : AgentMessageFormatter.FormatDetails(message));
+        return Task.CompletedTask;
+    }
+
+    private static Task ReadMessageAsync(
+        IAgentMessageRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        var id = args.Trim();
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            context.WriteLine("  Usage: /mailbox read <message-id>");
+            return Task.CompletedTask;
+        }
+
+        runtime.MarkMessageRead(id);
+        var message = runtime.GetMessage(id);
+        context.WriteLine(message == null
+            ? $"  Message '{id}' was not found."
+            : AgentMessageFormatter.FormatDetails(message));
+        return Task.CompletedTask;
+    }
+
+    private static Task ListParticipantMessagesAsync(
+        IAgentMessageRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        var participant = args.Trim();
+        if (string.IsNullOrWhiteSpace(participant))
+        {
+            context.WriteLine("  Usage: /mailbox for <participant>");
+            return Task.CompletedTask;
+        }
+
+        var messages = runtime.ListMessages()
+            .Where(message =>
+                string.Equals(message.From, participant, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(message.To, participant, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(message => message.CreatedAt)
+            .ThenByDescending(message => message.Id, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        context.WriteLine(AgentMessageFormatter.FormatList(messages));
+        return Task.CompletedTask;
+    }
+
+    private IAgentMessageRuntime ResolveRuntime(CommandContext context) =>
+        _runtime ?? context.AgentMessageRuntime ?? MailboxCommandDefaults.Default;
+}
+
+internal static class MailboxCommandDefaults
+{
+    public static IAgentMessageRuntime Default { get; } = new InMemoryAgentMessageRuntime();
+}
+
+/// <summary>
 /// Represents agents command.
 /// </summary>
 public class AgentsCommand : ICommand
