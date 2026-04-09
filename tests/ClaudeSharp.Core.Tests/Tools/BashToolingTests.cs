@@ -93,11 +93,7 @@ public sealed class BashToolingTests
         using var temp = new TempDirectory();
         var tool = new BashTool();
         var progressMessages = new List<string>();
-        var progress = new Progress<ToolProgress>(item =>
-        {
-            if (!string.IsNullOrWhiteSpace(item.Message))
-                progressMessages.Add(item.Message);
-        });
+        var progress = new CollectingProgress(progressMessages);
 
         var result = await tool.ExecuteAsync(
             Json(new { command = "printf 'hello\\n'" }),
@@ -194,4 +190,13 @@ public sealed class BashToolingTests
             Messages = [],
             CancellationToken = CancellationToken.None,
         };
+
+    private sealed class CollectingProgress(List<string> messages) : IProgress<ToolProgress>
+    {
+        public void Report(ToolProgress value)
+        {
+            if (!string.IsNullOrWhiteSpace(value.Message))
+                messages.Add(value.Message);
+        }
+    }
 }

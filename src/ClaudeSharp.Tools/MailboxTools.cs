@@ -53,8 +53,14 @@ public sealed class MailboxStatusToolInput
 /// </summary>
 public sealed class MailboxStatusRequestInput
 {
+    [JsonPropertyName("view")]
+    public string? View { get; set; }
+
     [JsonPropertyName("message_id")]
     public string? MessageId { get; set; }
+
+    [JsonPropertyName("thread_id")]
+    public string? ThreadId { get; set; }
 
     [JsonPropertyName("participant")]
     public string? Participant { get; set; }
@@ -353,10 +359,15 @@ public sealed class MailboxStatusTool : ITool
         {
           "type": "object",
           "properties": {
-            "request": {
-              "type": "object",
-              "properties": {
+                "request": {
+                  "type": "object",
+                  "properties": {
+                "view": {
+                  "type": "string",
+                  "enum": ["overview", "list", "inbox", "outbox", "thread"]
+                },
                 "message_id": { "type": "string" },
+                "thread_id": { "type": "string" },
                 "participant": { "type": "string" },
                 "sender": { "type": "string" },
                 "recipient": { "type": "string" },
@@ -378,7 +389,8 @@ public sealed class MailboxStatusTool : ITool
 
             Use this after SendMessage, or when you need to check whether a teammate or local agent has unread messages.
             Set request.message_id to inspect one message in detail. Set mark_as_read=true to acknowledge it.
-            Otherwise you can filter by participant, sender, recipient, and unread_only.
+            Otherwise you can filter by participant, sender, recipient, and unread_only, or set
+            request.view to "inbox", "outbox", or "thread" for a focused mailbox view.
             """);
 
     public Task<ValidationResult> ValidateInputAsync(JsonElement input, ToolExecutionContext context)
@@ -389,6 +401,15 @@ public sealed class MailboxStatusTool : ITool
 
         if (parsed.Request.Limit is <= 0)
             return Task.FromResult(ValidationResult.Invalid("request.limit must be greater than 0."));
+
+        if (!IsSupportedView(parsed.Request.View))
+            return Task.FromResult(ValidationResult.Invalid("request.view must be one of overview, list, inbox, outbox, or thread."));
+
+        if (IsThreadView(parsed.Request.View) &&
+            string.IsNullOrWhiteSpace(parsed.Request.ThreadId))
+        {
+            return Task.FromResult(ValidationResult.Invalid("request.thread_id is required when request.view is thread."));
+        }
 
         return Task.FromResult(ValidationResult.Valid());
     }
@@ -428,6 +449,58 @@ public sealed class MailboxStatusTool : ITool
                 : ToolResult.Success(AgentMessageFormatter.FormatDetails(message)));
         }
 
+        if (IsThreadView(request.View))
+        {
+            var threadId = request.ThreadId!.Trim();
+            var thread = _messageRuntime.ListThread(threadId);
+            if (request.MarkAsRead)
+            {
+                foreach (var message in thread.Where(message => ShouldMarkMessageAsRead(message, request)))
+                    _messageRuntime.MarkMessageRead(message.Id);
+
+                thread = _messageRuntime.ListThread(threadId);
+            }
+
+            return Task.FromResult(ToolResult.Success(
+                AgentMessageFormatter.FormatThread(threadId, thread)));
+        }
+
+        if (IsInboxView(request.View))
+        {
+            var participant = ResolveInboxParticipant(request);
+            if (string.IsNullOrWhiteSpace(participant))
+                return Task.FromResult(ToolResult.Error("request.participant or request.recipient is required for inbox view."));
+
+            if (request.MarkAsRead)
+                _messageRuntime.MarkRecipientMessagesRead(participant);
+
+            var inbox = _messageRuntime.ListMessages(new AgentMessageListOptions
+            {
+                Recipient = participant,
+                Status = request.UnreadOnly ? AgentMessageStatus.Delivered : null,
+                Limit = request.Limit,
+            });
+
+            return Task.FromResult(ToolResult.Success(
+                AgentMessageFormatter.FormatInbox(participant, inbox)));
+        }
+
+        if (IsOutboxView(request.View))
+        {
+            var participant = ResolveOutboxParticipant(request);
+            if (string.IsNullOrWhiteSpace(participant))
+                return Task.FromResult(ToolResult.Error("request.participant or request.sender is required for outbox view."));
+
+            var outbox = _messageRuntime.ListMessages(new AgentMessageListOptions
+            {
+                Sender = participant,
+                Limit = request.Limit,
+            });
+
+            return Task.FromResult(ToolResult.Success(
+                AgentMessageFormatter.FormatOutbox(participant, outbox)));
+        }
+
         if (request.MarkAsRead &&
             !string.IsNullOrWhiteSpace(request.Recipient))
         {
@@ -451,6 +524,7 @@ public sealed class MailboxStatusTool : ITool
             {
                 Sender = request.Sender,
                 Recipient = request.Recipient,
+                ThreadId = request.ThreadId,
                 Status = request.UnreadOnly ? AgentMessageStatus.Delivered : null,
                 Limit = request.Limit,
             })
@@ -461,4 +535,57 @@ public sealed class MailboxStatusTool : ITool
             .ToArray();
         return Task.FromResult(ToolResult.Success(AgentMessageFormatter.FormatList(messages)));
     }
+
+    private static bool IsSupportedView(string? view) =>
+        string.IsNullOrWhiteSpace(view) ||
+        view.Equals("overview", StringComparison.OrdinalIgnoreCase) ||
+        view.Equals("list", StringComparison.OrdinalIgnoreCase) ||
+        view.Equals("inbox", StringComparison.OrdinalIgnoreCase) ||
+        view.Equals("outbox", StringComparison.OrdinalIgnoreCase) ||
+        view.Equals("thread", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsInboxView(string? view) =>
+        view?.Equals("inbox", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsOutboxView(string? view) =>
+        view?.Equals("outbox", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsThreadView(string? view) =>
+        view?.Equals("thread", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool ShouldMarkMessageAsRead(
+        AgentMessage message,
+        MailboxStatusRequestInput request)
+    {
+        if (message.Status != AgentMessageStatus.Delivered)
+            return false;
+
+        if (!string.IsNullOrWhiteSpace(request.Recipient))
+        {
+            return string.Equals(
+                message.To,
+                request.Recipient.Trim(),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Participant))
+        {
+            return string.Equals(
+                message.To,
+                request.Participant.Trim(),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        return true;
+    }
+
+    private static string? ResolveInboxParticipant(MailboxStatusRequestInput request) =>
+        string.IsNullOrWhiteSpace(request.Recipient)
+            ? request.Participant?.Trim()
+            : request.Recipient.Trim();
+
+    private static string? ResolveOutboxParticipant(MailboxStatusRequestInput request) =>
+        string.IsNullOrWhiteSpace(request.Sender)
+            ? request.Participant?.Trim()
+            : request.Sender.Trim();
 }

@@ -92,6 +92,54 @@ public sealed class MailboxToolsTests
         Assert.False(tool.IsReadOnly(Json(new { request = new { message_id = first.Id, mark_as_read = true } })));
     }
 
+    [Fact]
+    public async Task MailboxStatusTool_ExecuteAsync_RendersInboxOutboxAndThreadViews()
+    {
+        var runtime = new InMemoryAgentMessageRuntime();
+        var first = runtime.SendMessage("main", "Platform/Ada", "Check build");
+        runtime.SendMessage("Platform/Ada", "main", AgentMessageKind.Note, "Build passed", relatedMessageId: first.Id);
+        runtime.SendMessage("main", "Platform/Ada", AgentMessageKind.PlanApprovalRequest, "Please confirm deploy", subject: "Deploy");
+
+        var tool = new MailboxStatusTool(runtime);
+        var context = CreateContext();
+
+        var inbox = await tool.ExecuteAsync(
+            Json(new { request = new { view = "inbox", participant = "Platform/Ada" } }),
+            context);
+        var outbox = await tool.ExecuteAsync(
+            Json(new { request = new { view = "outbox", participant = "main" } }),
+            context);
+        var thread = await tool.ExecuteAsync(
+            Json(new { request = new { view = "thread", thread_id = first.ThreadId, participant = "Platform/Ada", mark_as_read = true } }),
+            context);
+
+        Assert.False(inbox.IsError);
+        Assert.Contains("Mailbox inbox: Platform/Ada", inbox.Data, StringComparison.Ordinal);
+        Assert.Contains("main -> Platform/Ada", inbox.Data, StringComparison.Ordinal);
+
+        Assert.False(outbox.IsError);
+        Assert.Contains("Mailbox outbox: main", outbox.Data, StringComparison.Ordinal);
+        Assert.Contains("main -> Platform/Ada", outbox.Data, StringComparison.Ordinal);
+
+        Assert.False(thread.IsError);
+        Assert.Contains($"Mailbox thread: {first.ThreadId}", thread.Data, StringComparison.Ordinal);
+        Assert.Contains("Timeline:", thread.Data, StringComparison.Ordinal);
+        Assert.Equal(AgentMessageStatus.Read, runtime.GetMessage(first.Id)?.Status);
+    }
+
+    [Fact]
+    public async Task MailboxStatusTool_ValidateInputAsync_RequiresThreadIdForThreadView()
+    {
+        var tool = new MailboxStatusTool(new InMemoryAgentMessageRuntime());
+
+        var result = await tool.ValidateInputAsync(
+            Json(new { request = new { view = "thread" } }),
+            CreateContext());
+
+        Assert.False(result.IsValid);
+        Assert.Contains("thread_id", result.Message, StringComparison.Ordinal);
+    }
+
     private static JsonElement Json(object value) =>
         JsonSerializer.SerializeToElement(value);
 

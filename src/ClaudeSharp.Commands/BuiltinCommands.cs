@@ -430,13 +430,28 @@ public class MailboxCommand : ICommand
             return ListParticipantMessagesAsync(runtime, remainder, context);
         }
 
+        if (action.Equals("inbox", StringComparison.OrdinalIgnoreCase))
+        {
+            return ListInboxAsync(runtime, remainder, context);
+        }
+
+        if (action.Equals("outbox", StringComparison.OrdinalIgnoreCase))
+        {
+            return ListOutboxAsync(runtime, remainder, context);
+        }
+
+        if (action.Equals("thread", StringComparison.OrdinalIgnoreCase))
+        {
+            return ShowThreadAsync(runtime, remainder, context);
+        }
+
         if (runtime.GetMessage(trimmed) is { } direct)
         {
             context.WriteLine(AgentMessageFormatter.FormatDetails(direct));
             return Task.CompletedTask;
         }
 
-        context.WriteLine("  Usage: /mailbox [list|status], /mailbox show <message-id>, /mailbox read <message-id>, /mailbox for <participant>");
+        context.WriteLine("  Usage: /mailbox [list|status], /mailbox show <message-id>, /mailbox read <message-id>, /mailbox for <participant>, /mailbox inbox <participant>, /mailbox outbox <participant>, /mailbox thread <thread-id>");
         return Task.CompletedTask;
     }
 
@@ -499,6 +514,62 @@ public class MailboxCommand : ICommand
             .ThenByDescending(message => message.Id, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         context.WriteLine(AgentMessageFormatter.FormatList(messages));
+        return Task.CompletedTask;
+    }
+
+    private static Task ListInboxAsync(
+        IAgentMessageRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        var participant = args.Trim();
+        if (string.IsNullOrWhiteSpace(participant))
+        {
+            context.WriteLine("  Usage: /mailbox inbox <participant>");
+            return Task.CompletedTask;
+        }
+
+        var messages = runtime.ListMessages(new AgentMessageListOptions
+        {
+            Recipient = participant,
+        });
+        context.WriteLine(AgentMessageFormatter.FormatInbox(participant, messages));
+        return Task.CompletedTask;
+    }
+
+    private static Task ListOutboxAsync(
+        IAgentMessageRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        var participant = args.Trim();
+        if (string.IsNullOrWhiteSpace(participant))
+        {
+            context.WriteLine("  Usage: /mailbox outbox <participant>");
+            return Task.CompletedTask;
+        }
+
+        var messages = runtime.ListMessages(new AgentMessageListOptions
+        {
+            Sender = participant,
+        });
+        context.WriteLine(AgentMessageFormatter.FormatOutbox(participant, messages));
+        return Task.CompletedTask;
+    }
+
+    private static Task ShowThreadAsync(
+        IAgentMessageRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        var threadId = args.Trim();
+        if (string.IsNullOrWhiteSpace(threadId))
+        {
+            context.WriteLine("  Usage: /mailbox thread <thread-id>");
+            return Task.CompletedTask;
+        }
+
+        context.WriteLine(AgentMessageFormatter.FormatThread(threadId, runtime.ListThread(threadId)));
         return Task.CompletedTask;
     }
 

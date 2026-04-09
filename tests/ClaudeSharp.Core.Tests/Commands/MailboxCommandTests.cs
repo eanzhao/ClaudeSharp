@@ -32,6 +32,26 @@ public sealed class MailboxCommandTests
         Assert.Contains("Platform/Ada -> main", output, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_CanRenderInboxOutboxAndThreadViews()
+    {
+        var runtime = new InMemoryAgentMessageRuntime();
+        var first = runtime.SendMessage("main", "Platform/Ada", "Inspect runtime");
+        runtime.SendMessage("Platform/Ada", "main", AgentMessageKind.Note, "Done", relatedMessageId: first.Id);
+        var lines = new List<string>();
+        var command = new MailboxCommand(runtime);
+
+        await command.ExecuteAsync("inbox Platform/Ada", CreateContext(lines));
+        await command.ExecuteAsync("outbox main", CreateContext(lines));
+        await command.ExecuteAsync($"thread {first.ThreadId}", CreateContext(lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Mailbox inbox: Platform/Ada", output, StringComparison.Ordinal);
+        Assert.Contains("Mailbox outbox: main", output, StringComparison.Ordinal);
+        Assert.Contains($"Mailbox thread: {first.ThreadId}", output, StringComparison.Ordinal);
+        Assert.Contains("Timeline:", output, StringComparison.Ordinal);
+    }
+
     private static CommandContext CreateContext(List<string> lines) =>
         new()
         {

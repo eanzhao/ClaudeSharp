@@ -40,6 +40,9 @@ public sealed class AgentMessageRuntimeTests
         });
         Assert.Equal([second.Id, first.Id], bobInbox.Select(message => message.Id));
 
+        var firstThread = runtime.ListThread(first.ThreadId);
+        Assert.Equal([first.Id, reply.Id], firstThread.Select(message => message.Id));
+
         var summary = runtime.GetSummary();
         Assert.Equal(3, summary.TotalCount);
         Assert.Equal(2, summary.ReadCount);
@@ -49,12 +52,19 @@ public sealed class AgentMessageRuntimeTests
 
         var overview = AgentMessageFormatter.FormatOverview(messages, runtime.GetUnreadCounts());
         var list = AgentMessageFormatter.FormatList(messages);
+        var inbox = AgentMessageFormatter.FormatInbox("Bob", bobInbox);
+        var outbox = AgentMessageFormatter.FormatOutbox("Ada", runtime.ListMessages(new AgentMessageListOptions { Sender = "Ada" }));
+        var thread = AgentMessageFormatter.FormatThread(first.ThreadId, firstThread);
         var details = AgentMessageFormatter.FormatDetails(first);
         var summaryText = AgentMessageFormatter.FormatSummary(summary);
 
         Assert.Contains("Mailbox:", overview, StringComparison.Ordinal);
         Assert.Contains("Unread by recipient:", overview, StringComparison.Ordinal);
         Assert.Contains("Mailbox:", list, StringComparison.Ordinal);
+        Assert.Contains("Mailbox inbox: Bob", inbox, StringComparison.Ordinal);
+        Assert.Contains("Mailbox outbox: Ada", outbox, StringComparison.Ordinal);
+        Assert.Contains($"Mailbox thread: {first.ThreadId}", thread, StringComparison.Ordinal);
+        Assert.Contains("Timeline:", thread, StringComparison.Ordinal);
         Assert.Contains("Message: agent-message-1", details, StringComparison.Ordinal);
         Assert.Contains("Mailbox summary:", summaryText, StringComparison.Ordinal);
     }
