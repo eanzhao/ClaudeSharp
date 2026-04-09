@@ -88,13 +88,16 @@ public sealed class SendMessageTool : ITool
 {
     private readonly IAgentMessageRuntime _messageRuntime;
     private readonly IAgentTeamRuntime? _teamRuntime;
+    private readonly IAgentMessageActivationRuntime? _activationRuntime;
 
     public SendMessageTool(
         IAgentMessageRuntime messageRuntime,
-        IAgentTeamRuntime? teamRuntime = null)
+        IAgentTeamRuntime? teamRuntime = null,
+        IAgentMessageActivationRuntime? activationRuntime = null)
     {
         _messageRuntime = messageRuntime;
         _teamRuntime = teamRuntime;
+        _activationRuntime = activationRuntime;
     }
 
     public string Name => "SendMessage";
@@ -176,7 +179,7 @@ public sealed class SendMessageTool : ITool
     public string GetUserFacingName(JsonElement? input = null) => "Send message";
     public string? GetActivityDescription(JsonElement? input) => "Sending mailbox message";
 
-    public Task<ToolResult> ExecuteAsync(
+    public async Task<ToolResult> ExecuteAsync(
         JsonElement input,
         ToolExecutionContext context,
         IProgress<ToolProgress>? progress = null,
@@ -184,20 +187,20 @@ public sealed class SendMessageTool : ITool
     {
         var parsed = JsonSerializer.Deserialize<SendMessageToolInput>(input);
         if (parsed?.Request == null)
-            return Task.FromResult(ToolResult.Error("request.to and request.message are required."));
+            return ToolResult.Error("request.to and request.message are required.");
 
         var request = parsed.Request;
         if (!TryParseMessage(request.Message, request.Subject, out var kind, out var body, out var error, out var subject))
-            return Task.FromResult(ToolResult.Error(error!));
+            return ToolResult.Error(error!);
 
         var sender = ResolveSender(request);
         if (sender == null)
-            return Task.FromResult(ToolResult.Error("Sender could not be resolved."));
+            return ToolResult.Error("Sender could not be resolved.");
 
         if (request.To!.StartsWith("bridge:", StringComparison.OrdinalIgnoreCase) ||
             request.To.StartsWith("uds:", StringComparison.OrdinalIgnoreCase))
         {
-            return Task.FromResult(ToolResult.Error("bridge: and uds: targets are not implemented in this ClaudeSharp build."));
+            return ToolResult.Error("bridge: and uds: targets are not implemented in this ClaudeSharp build.");
         }
 
         List<AgentMessage> delivered;
@@ -215,7 +218,7 @@ public sealed class SendMessageTool : ITool
         }
         catch (Exception ex)
         {
-            return Task.FromResult(ToolResult.Error(ex.Message));
+            return ToolResult.Error(ex.Message);
         }
 
         var lines = new List<string>
@@ -225,7 +228,34 @@ public sealed class SendMessageTool : ITool
         foreach (var message in delivered)
             lines.Add($"- {AgentMessageFormatter.FormatSummaryLine(message)}");
 
-        return Task.FromResult(ToolResult.Success(string.Join(Environment.NewLine, lines)));
+        foreach (var activation in await ActivateRecipientsAsync(delivered, sender, cancellationToken))
+            lines.Add(FormatActivationLine(activation));
+
+        return ToolResult.Success(string.Join(Environment.NewLine, lines));
+    }
+
+    private async Task<IReadOnlyList<AgentMessageActivationResult>> ActivateRecipientsAsync(
+        IReadOnlyList<AgentMessage> delivered,
+        string sender,
+        CancellationToken cancellationToken)
+    {
+        if (_activationRuntime == null || delivered.Count == 0)
+            return [];
+
+        var results = new List<AgentMessageActivationResult>();
+        foreach (var recipient in delivered
+                     .Select(message => message.To)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var result = await _activationRuntime.TryActivateAsync(
+                recipient,
+                $"New mailbox message from {sender}.",
+                cancellationToken);
+            if (result.Status != AgentMessageActivationStatus.NotRegistered)
+                results.Add(result);
+        }
+
+        return results;
     }
 
     private string? ResolveSender(SendMessageRequestInput request)
@@ -334,6 +364,20 @@ public sealed class SendMessageTool : ITool
         }
 
         return true;
+    }
+
+    private static string FormatActivationLine(AgentMessageActivationResult result)
+    {
+        return result.Status switch
+        {
+            AgentMessageActivationStatus.Reactivated =>
+                $"- Reactivated {result.Owner} as {result.BackgroundRunId} ({result.WorkItemId}).",
+            AgentMessageActivationStatus.AlreadyActive =>
+                $"- {result.Owner} already has an active background run.",
+            AgentMessageActivationStatus.Failed =>
+                $"- Failed to reactivate {result.Owner}: {result.Message}",
+            _ => $"- No activation handler is registered for {result.Owner}.",
+        };
     }
 }
 

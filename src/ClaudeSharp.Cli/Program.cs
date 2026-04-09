@@ -308,6 +308,7 @@ internal static class Program
         var registry = new ToolRegistry();
         var backgroundRunScheduler = new BackgroundAgentRunScheduler(
             maxConcurrency: backgroundRunConcurrency);
+        var messageActivationRuntime = new InMemoryAgentMessageActivationRuntime();
         registry.Register(new BashTool());
         registry.Register(new FileReadTool());
         registry.Register(new FileWriteTool());
@@ -317,7 +318,7 @@ internal static class Program
         registry.Register(new TeamCreateTool(agentTeamRuntime));
         registry.Register(new TeamStatusTool(agentTeamRuntime));
         registry.Register(new TeamDissolveTool(agentTeamRuntime));
-        registry.Register(new SendMessageTool(agentMessageRuntime, agentTeamRuntime));
+        registry.Register(new SendMessageTool(agentMessageRuntime, agentTeamRuntime, messageActivationRuntime));
         registry.Register(new MailboxStatusTool(agentMessageRuntime));
         registry.Register(new WebFetchTool());
         if (allowWebSearch)
@@ -329,7 +330,8 @@ internal static class Program
             agentTeamRuntime,
             agentMessageRuntime,
             hooks,
-            backgroundRunScheduler));
+            backgroundRunScheduler,
+            messageActivationRuntime));
         registry.Register(new AgentStatusTool(agentTaskRuntime));
         registry.Register(new AgentStopTool(agentTaskRuntime));
         registry.Register(new AgentWaitTool(agentTaskRuntime));

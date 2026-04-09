@@ -125,6 +125,79 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_BackgroundTeammateCanBeReactivatedFromMailboxMessage()
+    {
+        var taskRuntime = new InMemoryAgentTaskRuntime();
+        var teamRuntime = new InMemoryAgentTeamRuntime();
+        var messageRuntime = new InMemoryAgentMessageRuntime();
+        var activationRuntime = new InMemoryAgentMessageActivationRuntime();
+        var team = teamRuntime.CreateTeam("Platform", leadName: "Ada");
+        teamRuntime.AddMember(team.Id, "Bob");
+        var runner = new AsyncRecordingRunner(async (_, cancellationToken) =>
+        {
+            await Task.Delay(10, cancellationToken);
+            return new AgentExecutionResult(
+                Summary: "teammate summary",
+                Success: true,
+                Usage: TokenUsage.Empty,
+                TurnCount: 1);
+        });
+
+        var agentTool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            taskRuntime,
+            teamRuntime,
+            messageRuntime,
+            hooks: HookRuntime.Empty,
+            messageActivationRuntime: activationRuntime);
+
+        var launch = await agentTool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "Inspect the teammate runtime",
+                run_in_background = true,
+                teammate = new
+                {
+                    team_name = "Platform",
+                    member_name = "Ada",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(launch.IsError);
+        await WaitForAsync(() =>
+            taskRuntime.GetBackgroundRun("background-run-1")?.Status == AgentBackgroundRunStatus.Stopped);
+
+        var sendTool = new SendMessageTool(messageRuntime, teamRuntime, activationRuntime);
+        var send = await sendTool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                request = new
+                {
+                    to = "Ada",
+                    team_name = "Platform",
+                    from = "main",
+                    message = "Please pick this back up",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(send.IsError);
+        Assert.Contains("Reactivated Platform/Ada as background-run-2", send.Data, StringComparison.Ordinal);
+
+        await WaitForAsync(() =>
+            taskRuntime.GetBackgroundRun("background-run-2")?.Status == AgentBackgroundRunStatus.Stopped);
+
+        Assert.Equal(2, runner.Requests.Count);
+        Assert.All(runner.Requests, request =>
+            Assert.Equal("Inspect the teammate runtime", request.Prompt));
+        Assert.Contains("Unread mailbox messages:", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Contains("Please pick this back up", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Equal(AgentMessageStatus.Read, messageRuntime.GetMessage("agent-message-1")?.Status);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ReportsRunnerFailuresAndMarksWorkItemBlocked()
     {
         var runtime = new InMemoryAgentTaskRuntime();

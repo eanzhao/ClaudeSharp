@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeSharp.Core.Agents;
 using ClaudeSharp.Core.Hooks;
+using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Providers;
 using ClaudeSharp.Core.Query;
 using ClaudeSharp.Core.Tools;
@@ -52,6 +53,7 @@ public sealed class AgentTool : ITool
     private readonly IAgentTaskRuntime _taskRuntime;
     private readonly IAgentTeamRuntime? _teamRuntime;
     private readonly IAgentMessageRuntime? _messageRuntime;
+    private readonly IAgentMessageActivationRuntime? _messageActivationRuntime;
     private readonly IHookRuntime _hooks;
     private readonly BackgroundAgentRunScheduler _backgroundRunScheduler;
     private string? _assignmentErrorMessage;
@@ -63,13 +65,15 @@ public sealed class AgentTool : ITool
         IAgentTeamRuntime? teamRuntime = null,
         IAgentMessageRuntime? messageRuntime = null,
         IHookRuntime? hooks = null,
-        BackgroundAgentRunScheduler? backgroundRunScheduler = null)
+        BackgroundAgentRunScheduler? backgroundRunScheduler = null,
+        IAgentMessageActivationRuntime? messageActivationRuntime = null)
     {
         _runner = runner;
         _providerCapabilityRouter = providerCapabilityRouter ?? new DefaultProviderCapabilityRouter();
         _taskRuntime = taskRuntime ?? new InMemoryAgentTaskRuntime();
         _teamRuntime = teamRuntime;
         _messageRuntime = messageRuntime;
+        _messageActivationRuntime = messageActivationRuntime;
         _hooks = hooks ?? HookRuntime.Empty;
         _backgroundRunScheduler = backgroundRunScheduler ?? new BackgroundAgentRunScheduler();
     }
@@ -187,6 +191,7 @@ public sealed class AgentTool : ITool
         if (assignment == null)
             return ToolResult.Error(_assignmentErrorMessage ?? "Failed to resolve agent assignment.");
 
+        var executionContext = AgentExecutionContextSnapshot.Create(context);
         var title = BuildTitle(parsed.Prompt);
         var workItem = _taskRuntime.CreateWorkItem(
             title,
@@ -195,11 +200,11 @@ public sealed class AgentTool : ITool
         _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.InProgress);
 
         if (parsed.RunInBackground)
-            return LaunchInBackground(workItem, assignment, parsed, context);
+            return LaunchInBackground(workItem, assignment, parsed, executionContext);
 
         try
         {
-            var result = await RunSubagentAsync(parsed, assignment, context, cancellationToken);
+            var result = await RunSubagentAsync(parsed, assignment, executionContext, cancellationToken);
 
             _taskRuntime.UpdateWorkItem(workItem.Id, item =>
             {
@@ -232,7 +237,60 @@ public sealed class AgentTool : ITool
         AgentWorkItem workItem,
         AgentAssignment assignment,
         AgentToolInput input,
-        ToolExecutionContext context)
+        AgentExecutionContextSnapshot executionContext)
+    {
+        try
+        {
+            RegisterMailboxActivationIfNeeded(input, assignment, executionContext);
+            var backgroundRun = QueueBackgroundRun(workItem, assignment, input, executionContext);
+            return ToolResult.Success(
+                $"{assignment.SubjectLabel} {workItem.Id} was queued in the background as {backgroundRun.Id}. " +
+                $"Use AgentStatus with id=\"{backgroundRun.Id}\" to inspect progress, or AgentStop to cancel it.");
+        }
+        catch (Exception ex)
+        {
+            _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+                item.Status = AgentWorkItemStatus.Blocked);
+            return ToolResult.Error($"{assignment.SubjectLabel} {workItem.Id} failed to start in the background: {ex.Message}");
+        }
+    }
+
+    private Task<AgentExecutionResult> RunSubagentAsync(
+        AgentToolInput input,
+        AgentAssignment assignment,
+        AgentExecutionContextSnapshot context,
+        IProgress<AgentExecutionProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        return _runner.RunAsync(
+            new AgentExecutionRequest
+            {
+                Prompt = input.Prompt.Trim(),
+                WorkingDirectory = context.WorkingDirectory,
+                Model = context.MainLoopModel,
+                Tools = BuildReadOnlyToolRegistry(context.MainLoopModel),
+                PermissionContext = ClonePermissionContext(context.PermissionContext),
+                UseIsolatedWorkspace = input.UseIsolatedWorkspace,
+                Progress = progress,
+                SystemPromptAppendix = BuildSystemPromptAppendix(input.SubagentType, assignment),
+                Hooks = _hooks,
+            },
+            cancellationToken);
+    }
+
+    private Task<AgentExecutionResult> RunSubagentAsync(
+        AgentToolInput input,
+        AgentAssignment assignment,
+        AgentExecutionContextSnapshot context,
+        CancellationToken cancellationToken) =>
+        RunSubagentAsync(input, assignment, context, progress: null, cancellationToken);
+
+    private AgentBackgroundRun QueueBackgroundRun(
+        AgentWorkItem workItem,
+        AgentAssignment assignment,
+        AgentToolInput input,
+        AgentExecutionContextSnapshot executionContext,
+        string? resumeReason = null)
     {
         var backgroundRun = _taskRuntime.StartBackgroundRun(
             BuildTitle(input.Prompt),
@@ -242,6 +300,13 @@ public sealed class AgentTool : ITool
         _taskRuntime.AppendBackgroundRunOutput(
             backgroundRun.Id,
             $"Queued prompt: {input.Prompt.Trim()}");
+        if (!string.IsNullOrWhiteSpace(resumeReason))
+        {
+            _taskRuntime.AppendBackgroundRunOutput(
+                backgroundRun.Id,
+                $"[resume] {resumeReason.Trim()}");
+        }
+
         var cancellationSource = new CancellationTokenSource();
         var logger = new BackgroundRunLogger(_taskRuntime, backgroundRun.Id);
         Action? cancellationCallback = null;
@@ -262,7 +327,7 @@ public sealed class AgentTool : ITool
                         var result = await RunSubagentAsync(
                             input,
                             assignment,
-                            context,
+                            executionContext,
                             logger,
                             cancellationToken);
                         logger.Flush();
@@ -330,53 +395,19 @@ public sealed class AgentTool : ITool
                     _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
                     cancellationSource.Dispose();
                 });
+
+            return backgroundRun;
         }
-        catch (Exception ex)
+        catch
         {
             cancellationSource.Dispose();
-            _taskRuntime.UpdateWorkItem(workItem.Id, item =>
-                item.Status = AgentWorkItemStatus.Blocked);
             _taskRuntime.AppendBackgroundRunOutput(
                 backgroundRun.Id,
-                $"{assignment.SubjectLabel} {workItem.Id} failed to start: {ex.Message}");
-            _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
-            return ToolResult.Error($"{assignment.SubjectLabel} {workItem.Id} failed to start in the background: {ex.Message}");
+                $"{assignment.SubjectLabel} {workItem.Id} failed to start.");
+            _taskRuntime.FailBackgroundRun(backgroundRun.Id, "failed to start");
+            throw;
         }
-
-        return ToolResult.Success(
-            $"{assignment.SubjectLabel} {workItem.Id} was queued in the background as {backgroundRun.Id}. " +
-            $"Use AgentStatus with id=\"{backgroundRun.Id}\" to inspect progress, or AgentStop to cancel it.");
     }
-
-    private Task<AgentExecutionResult> RunSubagentAsync(
-        AgentToolInput input,
-        AgentAssignment assignment,
-        ToolExecutionContext context,
-        IProgress<AgentExecutionProgress>? progress,
-        CancellationToken cancellationToken)
-    {
-        return _runner.RunAsync(
-            new AgentExecutionRequest
-            {
-                Prompt = input.Prompt.Trim(),
-                WorkingDirectory = context.WorkingDirectory,
-                Model = context.MainLoopModel,
-                Tools = BuildReadOnlyToolRegistry(context.MainLoopModel),
-                PermissionContext = context.PermissionContext,
-                UseIsolatedWorkspace = input.UseIsolatedWorkspace,
-                Progress = progress,
-                SystemPromptAppendix = BuildSystemPromptAppendix(input.SubagentType, assignment),
-                Hooks = _hooks,
-            },
-            cancellationToken);
-    }
-
-    private Task<AgentExecutionResult> RunSubagentAsync(
-        AgentToolInput input,
-        AgentAssignment assignment,
-        ToolExecutionContext context,
-        CancellationToken cancellationToken) =>
-        RunSubagentAsync(input, assignment, context, progress: null, cancellationToken);
 
     private ToolRegistry BuildReadOnlyToolRegistry(string model)
     {
@@ -389,11 +420,127 @@ public sealed class AgentTool : ITool
         if (_messageRuntime != null)
         {
             registry.Register(new MailboxStatusTool(_messageRuntime));
-            registry.Register(new SendMessageTool(_messageRuntime, _teamRuntime));
+            registry.Register(new SendMessageTool(_messageRuntime, _teamRuntime, _messageActivationRuntime));
         }
         registry.Register(new WebFetchTool());
         registry.Register(new WebSearchTool(_providerCapabilityRouter, () => model));
         return registry;
+    }
+
+    private void RegisterMailboxActivationIfNeeded(
+        AgentToolInput input,
+        AgentAssignment assignment,
+        AgentExecutionContextSnapshot executionContext)
+    {
+        if (!input.RunInBackground ||
+            _messageActivationRuntime == null ||
+            string.IsNullOrWhiteSpace(assignment.Owner))
+        {
+            return;
+        }
+
+        var capturedInput = CloneInput(input);
+        var capturedAssignment = assignment;
+        var capturedContext = executionContext;
+
+        _messageActivationRuntime.RegisterOwner(
+            assignment.Owner,
+            (reason, cancellationToken) => ReactivateFromMailboxAsync(
+                capturedInput,
+                capturedAssignment,
+                capturedContext,
+                reason,
+                cancellationToken));
+    }
+
+    private Task<AgentMessageActivationResult> ReactivateFromMailboxAsync(
+        AgentToolInput input,
+        AgentAssignment assignment,
+        AgentExecutionContextSnapshot executionContext,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (HasActiveBackgroundRun(assignment.Owner))
+        {
+            return Task.FromResult(AgentMessageActivationResult.AlreadyActive(
+                assignment.Owner,
+                "A queued or running background run already exists."));
+        }
+
+        var workItem = _taskRuntime.CreateWorkItem(
+            BuildTitle(input.Prompt),
+            description: input.Prompt,
+            owner: assignment.Owner);
+        _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.InProgress);
+
+        try
+        {
+            var backgroundRun = QueueBackgroundRun(
+                workItem,
+                assignment,
+                input,
+                executionContext,
+                reason);
+            return Task.FromResult(AgentMessageActivationResult.Reactivated(
+                assignment.Owner,
+                backgroundRun.Id,
+                workItem.Id,
+                reason));
+        }
+        catch (Exception ex)
+        {
+            _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.Blocked);
+            return Task.FromResult(AgentMessageActivationResult.Failed(assignment.Owner, ex.Message));
+        }
+    }
+
+    private bool HasActiveBackgroundRun(string owner)
+    {
+        return _taskRuntime.ListBackgroundRuns().Any(run =>
+            string.Equals(run.Owner, owner, StringComparison.OrdinalIgnoreCase) &&
+            (run.Status is AgentBackgroundRunStatus.Queued or
+                AgentBackgroundRunStatus.Running or
+                AgentBackgroundRunStatus.CancellationRequested));
+    }
+
+    private static AgentToolInput CloneInput(AgentToolInput input) =>
+        new()
+        {
+            Prompt = input.Prompt,
+            SubagentType = input.SubagentType,
+            RunInBackground = input.RunInBackground,
+            UseIsolatedWorkspace = input.UseIsolatedWorkspace,
+            Teammate = input.Teammate == null
+                ? null
+                : new AgentTeammateInput
+                {
+                    TeamName = input.Teammate.TeamName,
+                    MemberName = input.Teammate.MemberName,
+                },
+        };
+
+    private static PermissionContext ClonePermissionContext(PermissionContext source)
+    {
+        var clone = new PermissionContext
+        {
+            Mode = source.Mode,
+            WorkingDirectory = source.WorkingDirectory,
+        };
+
+        foreach (var directory in source.AdditionalWorkingDirectories)
+            clone.AdditionalWorkingDirectories.Add(directory);
+        foreach (var rule in source.AlwaysAllowRules)
+            clone.AlwaysAllowRules.Add(rule);
+        foreach (var rule in source.AlwaysAskRules)
+            clone.AlwaysAskRules.Add(rule);
+        foreach (var rule in source.AlwaysDenyRules)
+            clone.AlwaysDenyRules.Add(rule);
+        foreach (var rule in source.Rules)
+            clone.Rules.Add(rule);
+
+        return clone;
     }
 
     private string BuildSystemPromptAppendix(
@@ -560,6 +707,18 @@ public sealed class AgentTool : ITool
             AgentTeam team,
             AgentTeamMember member) =>
             new($"{team.Name}/{member.Name}", $"Teammate {member.Name}", team, member);
+    }
+
+    private sealed record AgentExecutionContextSnapshot(
+        string WorkingDirectory,
+        string MainLoopModel,
+        PermissionContext PermissionContext)
+    {
+        public static AgentExecutionContextSnapshot Create(ToolExecutionContext context) =>
+            new(
+                context.WorkingDirectory,
+                context.MainLoopModel,
+                ClonePermissionContext(context.PermissionContext));
     }
 
     private sealed class BackgroundRunLogger : IProgress<AgentExecutionProgress>

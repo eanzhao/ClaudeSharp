@@ -65,6 +65,36 @@ public sealed class MailboxToolsTests
     }
 
     [Fact]
+    public async Task SendMessageTool_ExecuteAsync_ReportsReactivatedRecipients()
+    {
+        var messages = new InMemoryAgentMessageRuntime();
+        var activations = new InMemoryAgentMessageActivationRuntime();
+        activations.RegisterOwner(
+            "Platform/Ada",
+            (_, _) => Task.FromResult(AgentMessageActivationResult.Reactivated(
+                "Platform/Ada",
+                "background-run-7",
+                "work-item-9")));
+
+        var tool = new SendMessageTool(messages, activationRuntime: activations);
+
+        var result = await tool.ExecuteAsync(
+            Json(new
+            {
+                request = new
+                {
+                    to = "Platform/Ada",
+                    from = "main",
+                    message = "Please resume investigation",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("Reactivated Platform/Ada as background-run-7", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MailboxStatusTool_ExecuteAsync_RendersOverviewFiltersAndDetails()
     {
         var runtime = new InMemoryAgentMessageRuntime();
