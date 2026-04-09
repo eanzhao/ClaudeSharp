@@ -260,7 +260,8 @@ public sealed class AgentTool : ITool
         AgentAssignment assignment,
         AgentExecutionContextSnapshot context,
         IProgress<AgentExecutionProgress>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AgentMessageActivationRequest? activationRequest = null)
     {
         return _runner.RunAsync(
             new AgentExecutionRequest
@@ -272,7 +273,7 @@ public sealed class AgentTool : ITool
                 PermissionContext = ClonePermissionContext(context.PermissionContext),
                 UseIsolatedWorkspace = input.UseIsolatedWorkspace,
                 Progress = progress,
-                SystemPromptAppendix = BuildSystemPromptAppendix(input.SubagentType, assignment),
+                SystemPromptAppendix = BuildSystemPromptAppendix(input.SubagentType, assignment, activationRequest),
                 Hooks = _hooks,
             },
             cancellationToken);
@@ -290,7 +291,7 @@ public sealed class AgentTool : ITool
         AgentAssignment assignment,
         AgentToolInput input,
         AgentExecutionContextSnapshot executionContext,
-        string? resumeReason = null)
+        AgentMessageActivationRequest? activationRequest = null)
     {
         var backgroundRun = _taskRuntime.StartBackgroundRun(
             BuildTitle(input.Prompt),
@@ -300,12 +301,7 @@ public sealed class AgentTool : ITool
         _taskRuntime.AppendBackgroundRunOutput(
             backgroundRun.Id,
             $"Queued prompt: {input.Prompt.Trim()}");
-        if (!string.IsNullOrWhiteSpace(resumeReason))
-        {
-            _taskRuntime.AppendBackgroundRunOutput(
-                backgroundRun.Id,
-                $"[resume] {resumeReason.Trim()}");
-        }
+        AppendResumeTriggerOutput(backgroundRun.Id, activationRequest);
 
         var cancellationSource = new CancellationTokenSource();
         var logger = new BackgroundRunLogger(_taskRuntime, backgroundRun.Id);
@@ -329,7 +325,8 @@ public sealed class AgentTool : ITool
                             assignment,
                             executionContext,
                             logger,
-                            cancellationToken);
+                            cancellationToken,
+                            activationRequest);
                         logger.Flush();
                         if (result.Success)
                         {
@@ -445,11 +442,11 @@ public sealed class AgentTool : ITool
 
         _messageActivationRuntime.RegisterOwner(
             assignment.Owner,
-            (reason, cancellationToken) => ReactivateFromMailboxAsync(
+            (request, cancellationToken) => ReactivateFromMailboxAsync(
                 capturedInput,
                 capturedAssignment,
                 capturedContext,
-                reason,
+                request,
                 cancellationToken));
     }
 
@@ -457,7 +454,7 @@ public sealed class AgentTool : ITool
         AgentToolInput input,
         AgentAssignment assignment,
         AgentExecutionContextSnapshot executionContext,
-        string? reason,
+        AgentMessageActivationRequest request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -466,7 +463,7 @@ public sealed class AgentTool : ITool
         {
             return Task.FromResult(AgentMessageActivationResult.AlreadyActive(
                 assignment.Owner,
-                "A queued or running background run already exists."));
+                $"Trigger {request.Message.Id} is waiting because a queued or running background run already exists."));
         }
 
         var workItem = _taskRuntime.CreateWorkItem(
@@ -482,12 +479,12 @@ public sealed class AgentTool : ITool
                 assignment,
                 input,
                 executionContext,
-                reason);
+                request);
             return Task.FromResult(AgentMessageActivationResult.Reactivated(
                 assignment.Owner,
                 backgroundRun.Id,
                 workItem.Id,
-                reason));
+                $"Triggered by {request.Message.Id} in {request.Message.ThreadId}."));
         }
         catch (Exception ex)
         {
@@ -543,12 +540,38 @@ public sealed class AgentTool : ITool
         return clone;
     }
 
+    private void AppendResumeTriggerOutput(
+        string backgroundRunId,
+        AgentMessageActivationRequest? activationRequest)
+    {
+        if (activationRequest == null)
+            return;
+
+        var message = activationRequest.Message;
+        var resumeLine = new StringBuilder();
+        resumeLine.Append($"[resume] Triggered by {message.Id} in {message.ThreadId} from {message.From}.");
+        if (!string.IsNullOrWhiteSpace(message.Protocol?.ActionName))
+            resumeLine.Append($" action={message.Protocol.ActionName}.");
+        if (!string.IsNullOrWhiteSpace(activationRequest.ResumeReason))
+            resumeLine.Append($" reason={activationRequest.ResumeReason}.");
+
+        _taskRuntime.AppendBackgroundRunOutput(backgroundRunId, resumeLine.ToString());
+    }
+
     private string BuildSystemPromptAppendix(
         string? subagentType,
-        AgentAssignment assignment)
+        AgentAssignment assignment,
+        AgentMessageActivationRequest? activationRequest = null)
     {
         var builder = new StringBuilder();
         builder.AppendLine(BuildSubagentSystemPrompt(subagentType, assignment));
+
+        var resumeAppendix = BuildResumeAppendix(activationRequest);
+        if (!string.IsNullOrWhiteSpace(resumeAppendix))
+        {
+            builder.AppendLine();
+            builder.AppendLine(resumeAppendix);
+        }
 
         var mailboxAppendix = BuildMailboxAppendix(assignment);
         if (!string.IsNullOrWhiteSpace(mailboxAppendix))
@@ -556,6 +579,28 @@ public sealed class AgentTool : ITool
             builder.AppendLine();
             builder.AppendLine(mailboxAppendix);
         }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string? BuildResumeAppendix(AgentMessageActivationRequest? activationRequest)
+    {
+        if (activationRequest == null)
+            return null;
+
+        var message = activationRequest.Message;
+        var builder = new StringBuilder();
+        builder.AppendLine("Resume trigger:");
+        builder.AppendLine($"- Trigger message: {message.Id}");
+        builder.AppendLine($"- Thread: {message.ThreadId}");
+        builder.AppendLine($"- From: {message.From}");
+        builder.AppendLine($"- Kind: {message.Kind}");
+        if (!string.IsNullOrWhiteSpace(message.Protocol?.ActionName))
+            builder.AppendLine($"- Action: {message.Protocol.ActionName}");
+        if (!string.IsNullOrWhiteSpace(activationRequest.ResumeReason))
+            builder.AppendLine($"- Resume reason: {activationRequest.ResumeReason}");
+        if (message.Protocol?.RequiresResponse == true)
+            builder.AppendLine("- A response is expected in this thread.");
 
         return builder.ToString().TrimEnd();
     }

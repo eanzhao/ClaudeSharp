@@ -12,6 +12,16 @@ public enum AgentMessageActivationStatus
 }
 
 /// <summary>
+/// Represents a mailbox-triggered activation request.
+/// </summary>
+public sealed record AgentMessageActivationRequest
+{
+    public required AgentMessage Message { get; init; }
+    public string Owner => Message.To;
+    public string? ResumeReason => Message.Protocol?.ResumeReason;
+}
+
+/// <summary>
 /// Represents the result of trying to reactivate an agent from mailbox traffic.
 /// </summary>
 public sealed record AgentMessageActivationResult
@@ -71,11 +81,10 @@ public interface IAgentMessageActivationRuntime
 {
     void RegisterOwner(
         string owner,
-        Func<string?, CancellationToken, Task<AgentMessageActivationResult>> activateAsync);
+        Func<AgentMessageActivationRequest, CancellationToken, Task<AgentMessageActivationResult>> activateAsync);
 
     Task<AgentMessageActivationResult> TryActivateAsync(
-        string owner,
-        string? reason = null,
+        AgentMessage message,
         CancellationToken cancellationToken = default);
 }
 
@@ -85,14 +94,14 @@ public interface IAgentMessageActivationRuntime
 public sealed class InMemoryAgentMessageActivationRuntime : IAgentMessageActivationRuntime
 {
     private readonly object _gate = new();
-    private readonly Dictionary<string, Func<string?, CancellationToken, Task<AgentMessageActivationResult>>> _activators =
+    private readonly Dictionary<string, Func<AgentMessageActivationRequest, CancellationToken, Task<AgentMessageActivationResult>>> _activators =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Task<AgentMessageActivationResult>> _inFlightActivations =
         new(StringComparer.OrdinalIgnoreCase);
 
     public void RegisterOwner(
         string owner,
-        Func<string?, CancellationToken, Task<AgentMessageActivationResult>> activateAsync)
+        Func<AgentMessageActivationRequest, CancellationToken, Task<AgentMessageActivationResult>> activateAsync)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(owner);
         ArgumentNullException.ThrowIfNull(activateAsync);
@@ -102,14 +111,17 @@ public sealed class InMemoryAgentMessageActivationRuntime : IAgentMessageActivat
     }
 
     public Task<AgentMessageActivationResult> TryActivateAsync(
-        string owner,
-        string? reason = null,
+        AgentMessage message,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(owner))
+        if (message == null || string.IsNullOrWhiteSpace(message.To))
             return Task.FromResult(AgentMessageActivationResult.NotRegistered(string.Empty));
 
-        var normalizedOwner = owner.Trim();
+        var request = new AgentMessageActivationRequest
+        {
+            Message = message.Clone(),
+        };
+        var normalizedOwner = request.Owner.Trim();
         lock (_gate)
         {
             if (!_activators.TryGetValue(normalizedOwner, out var activateAsync))
@@ -121,7 +133,7 @@ public sealed class InMemoryAgentMessageActivationRuntime : IAgentMessageActivat
             var activationTask = ExecuteActivationAsync(
                 normalizedOwner,
                 activateAsync,
-                reason,
+                request,
                 cancellationToken);
             _inFlightActivations[normalizedOwner] = activationTask;
             return activationTask;
@@ -130,13 +142,13 @@ public sealed class InMemoryAgentMessageActivationRuntime : IAgentMessageActivat
 
     private async Task<AgentMessageActivationResult> ExecuteActivationAsync(
         string owner,
-        Func<string?, CancellationToken, Task<AgentMessageActivationResult>> activateAsync,
-        string? reason,
+        Func<AgentMessageActivationRequest, CancellationToken, Task<AgentMessageActivationResult>> activateAsync,
+        AgentMessageActivationRequest request,
         CancellationToken cancellationToken)
     {
         try
         {
-            var result = await activateAsync(reason, cancellationToken);
+            var result = await activateAsync(request, cancellationToken);
             return string.IsNullOrWhiteSpace(result.Owner)
                 ? result with { Owner = owner }
                 : result;

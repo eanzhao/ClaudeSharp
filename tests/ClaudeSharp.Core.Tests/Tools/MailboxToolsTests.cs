@@ -71,10 +71,16 @@ public sealed class MailboxToolsTests
         var activations = new InMemoryAgentMessageActivationRuntime();
         activations.RegisterOwner(
             "Platform/Ada",
-            (_, _) => Task.FromResult(AgentMessageActivationResult.Reactivated(
-                "Platform/Ada",
-                "background-run-7",
-                "work-item-9")));
+            (request, _) =>
+            {
+                Assert.Equal("resume-review", request.Message.Protocol?.ActionName);
+                Assert.Equal("Need follow-up on the current thread", request.ResumeReason);
+                return Task.FromResult(AgentMessageActivationResult.Reactivated(
+                    "Platform/Ada",
+                    "background-run-7",
+                    "work-item-9",
+                    $"Triggered by {request.Message.Id} in {request.Message.ThreadId}."));
+            });
 
         var tool = new SendMessageTool(messages, activationRuntime: activations);
 
@@ -85,13 +91,25 @@ public sealed class MailboxToolsTests
                 {
                     to = "Platform/Ada",
                     from = "main",
-                    message = "Please resume investigation",
+                    message = new
+                    {
+                        kind = "Note",
+                        body = "Please resume investigation",
+                        action = "resume-review",
+                        requires_response = true,
+                        resume_reason = "Need follow-up on the current thread",
+                    },
                 },
             }),
             CreateContext());
 
         Assert.False(result.IsError);
         Assert.Contains("Reactivated Platform/Ada as background-run-7", result.Data, StringComparison.Ordinal);
+        Assert.Contains("Triggered by agent-message-1 in thread-1.", result.Data, StringComparison.Ordinal);
+        var delivered = Assert.Single(messages.ListMessages());
+        Assert.Equal("resume-review", delivered.Protocol?.ActionName);
+        Assert.True(delivered.Protocol?.RequiresResponse);
+        Assert.Equal("Need follow-up on the current thread", delivered.Protocol?.ResumeReason);
     }
 
     [Fact]
@@ -155,6 +173,41 @@ public sealed class MailboxToolsTests
         Assert.Contains($"Mailbox thread: {first.ThreadId}", thread.Data, StringComparison.Ordinal);
         Assert.Contains("Timeline:", thread.Data, StringComparison.Ordinal);
         Assert.Equal(AgentMessageStatus.Read, runtime.GetMessage(first.Id)?.Status);
+    }
+
+    [Fact]
+    public async Task MailboxStatusTool_ExecuteAsync_ShowsStructuredProtocolFields()
+    {
+        var runtime = new InMemoryAgentMessageRuntime();
+        var message = runtime.SendMessage(
+            "main",
+            "Platform/Ada",
+            AgentMessageKind.Note,
+            "Please continue review",
+            subject: "Review",
+            protocol: new AgentMessageProtocol
+            {
+                ActionName = "resume-review",
+                RequiresResponse = true,
+                ResumeReason = "The thread has new work",
+            });
+        var tool = new MailboxStatusTool(runtime);
+
+        var details = await tool.ExecuteAsync(
+            Json(new { request = new { message_id = message.Id } }),
+            CreateContext());
+        var thread = await tool.ExecuteAsync(
+            Json(new { request = new { view = "thread", thread_id = message.ThreadId } }),
+            CreateContext());
+
+        Assert.False(details.IsError);
+        Assert.Contains("Action: resume-review", details.Data, StringComparison.Ordinal);
+        Assert.Contains("Requires response: true", details.Data, StringComparison.Ordinal);
+        Assert.Contains("Resume reason: The thread has new work", details.Data, StringComparison.Ordinal);
+
+        Assert.False(thread.IsError);
+        Assert.Contains("Action: resume-review", thread.Data, StringComparison.Ordinal);
+        Assert.Contains("Resume reason: The thread has new work", thread.Data, StringComparison.Ordinal);
     }
 
     [Fact]

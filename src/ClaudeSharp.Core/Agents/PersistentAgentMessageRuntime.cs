@@ -36,9 +36,10 @@ public sealed class PersistentAgentMessageRuntime : IAgentMessageRuntime
         string body,
         AgentMessageKind kind = AgentMessageKind.Note,
         string? subject = null,
-        string? relatedMessageId = null)
+        string? relatedMessageId = null,
+        AgentMessageProtocol? protocol = null)
     {
-        var message = _inner.SendMessage(from, to, body, kind, subject, relatedMessageId);
+        var message = _inner.SendMessage(from, to, body, kind, subject, relatedMessageId, protocol);
         Persist(AgentMessagePersistence.CreateMessageEntry(message));
         return message;
     }
@@ -49,9 +50,10 @@ public sealed class PersistentAgentMessageRuntime : IAgentMessageRuntime
         AgentMessageKind kind,
         string body,
         string? subject = null,
-        string? relatedMessageId = null)
+        string? relatedMessageId = null,
+        AgentMessageProtocol? protocol = null)
     {
-        var message = _inner.SendMessage(from, to, kind, body, subject, relatedMessageId);
+        var message = _inner.SendMessage(from, to, kind, body, subject, relatedMessageId, protocol);
         Persist(AgentMessagePersistence.CreateMessageEntry(message));
         return message;
     }

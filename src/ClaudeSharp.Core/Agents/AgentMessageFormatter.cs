@@ -74,6 +74,9 @@ public static class AgentMessageFormatter
         {
             builder.AppendLine(
                 $"  - {message.CreatedAt:O} | {message.From} -> {message.To} | {message.Kind} | {message.Status}");
+            var protocolNote = FormatProtocolDetails(message.Protocol, prefix: "    ");
+            if (!string.IsNullOrWhiteSpace(protocolNote))
+                builder.AppendLine(protocolNote);
             builder.AppendLine($"    {message.Body.Replace(Environment.NewLine, $"{Environment.NewLine}    ", StringComparison.Ordinal)}");
         }
 
@@ -162,6 +165,12 @@ public static class AgentMessageFormatter
             builder.AppendLine($"  Subject: {message.Subject}");
         if (!string.IsNullOrWhiteSpace(message.RelatedMessageId))
             builder.AppendLine($"  Related: {message.RelatedMessageId}");
+        if (!string.IsNullOrWhiteSpace(message.Protocol?.ActionName))
+            builder.AppendLine($"  Action: {message.Protocol.ActionName}");
+        if (message.Protocol?.RequiresResponse == true)
+            builder.AppendLine("  Requires response: true");
+        if (!string.IsNullOrWhiteSpace(message.Protocol?.ResumeReason))
+            builder.AppendLine($"  Resume reason: {message.Protocol.ResumeReason}");
         builder.AppendLine($"  Created: {message.CreatedAt:O}");
         builder.AppendLine("  Body:");
         builder.AppendLine($"  {message.Body.Replace(Environment.NewLine, $"{Environment.NewLine}  ", StringComparison.Ordinal)}");
@@ -190,6 +199,45 @@ public static class AgentMessageFormatter
         var preview = message.Body.Length <= 48
             ? message.Body
             : $"{message.Body[..45]}...";
-        return $"{message.Id} | {message.From} -> {message.To} | {message.Kind} | {message.Status} | {preview}";
+        var protocolNote = FormatProtocolSummary(message.Protocol);
+        return $"{message.Id} | {message.From} -> {message.To} | {message.Kind} | {message.Status}{protocolNote} | {preview}";
+    }
+
+    private static string FormatProtocolSummary(AgentMessageProtocol? protocol)
+    {
+        if (protocol == null)
+            return string.Empty;
+
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(protocol.ActionName))
+            parts.Add($"action={protocol.ActionName}");
+        if (protocol.RequiresResponse)
+            parts.Add("reply=yes");
+        if (!string.IsNullOrWhiteSpace(protocol.ResumeReason))
+            parts.Add("resume");
+
+        return parts.Count == 0
+            ? string.Empty
+            : $" | {string.Join(", ", parts)}";
+    }
+
+    private static string? FormatProtocolDetails(
+        AgentMessageProtocol? protocol,
+        string prefix)
+    {
+        if (protocol == null)
+            return null;
+
+        var lines = new List<string>();
+        if (!string.IsNullOrWhiteSpace(protocol.ActionName))
+            lines.Add($"{prefix}Action: {protocol.ActionName}");
+        if (protocol.RequiresResponse)
+            lines.Add($"{prefix}Requires response");
+        if (!string.IsNullOrWhiteSpace(protocol.ResumeReason))
+            lines.Add($"{prefix}Resume reason: {protocol.ResumeReason}");
+
+        return lines.Count == 0
+            ? null
+            : string.Join(Environment.NewLine, lines);
     }
 }

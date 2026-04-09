@@ -11,7 +11,8 @@ public interface IAgentMessageRuntime
         string body,
         AgentMessageKind kind = AgentMessageKind.Note,
         string? subject = null,
-        string? relatedMessageId = null);
+        string? relatedMessageId = null,
+        AgentMessageProtocol? protocol = null);
 
     AgentMessage SendMessage(
         string from,
@@ -19,7 +20,8 @@ public interface IAgentMessageRuntime
         AgentMessageKind kind,
         string body,
         string? subject = null,
-        string? relatedMessageId = null);
+        string? relatedMessageId = null,
+        AgentMessageProtocol? protocol = null);
 
     AgentMessage? GetMessage(string id);
 
@@ -69,9 +71,10 @@ public sealed class InMemoryAgentMessageRuntime : IAgentMessageRuntime
         string body,
         AgentMessageKind kind = AgentMessageKind.Note,
         string? subject = null,
-        string? relatedMessageId = null)
+        string? relatedMessageId = null,
+        AgentMessageProtocol? protocol = null)
     {
-        return SendMessage(from, to, kind, body, subject, relatedMessageId);
+        return SendMessage(from, to, kind, body, subject, relatedMessageId, protocol);
     }
 
     public AgentMessage SendMessage(
@@ -80,7 +83,8 @@ public sealed class InMemoryAgentMessageRuntime : IAgentMessageRuntime
         AgentMessageKind kind,
         string body,
         string? subject = null,
-        string? relatedMessageId = null)
+        string? relatedMessageId = null,
+        AgentMessageProtocol? protocol = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(from);
         ArgumentException.ThrowIfNullOrWhiteSpace(to);
@@ -106,6 +110,7 @@ public sealed class InMemoryAgentMessageRuntime : IAgentMessageRuntime
                 Body = body.Trim(),
                 Subject = string.IsNullOrWhiteSpace(subject) ? null : subject.Trim(),
                 RelatedMessageId = string.IsNullOrWhiteSpace(relatedMessageId) ? null : relatedMessageId.Trim(),
+                Protocol = protocol is null ? null : protocol with { },
                 Status = AgentMessageStatus.Delivered,
                 CreatedAt = now,
                 UpdatedAt = now,

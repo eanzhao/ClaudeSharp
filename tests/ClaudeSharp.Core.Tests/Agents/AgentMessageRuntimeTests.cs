@@ -15,13 +15,25 @@ public sealed class AgentMessageRuntimeTests
     {
         var runtime = new InMemoryAgentMessageRuntime();
 
-        var first = runtime.SendMessage("Ada", "Bob", "Inspect launch", AgentMessageKind.Note, subject: "Launch");
+        var first = runtime.SendMessage(
+            "Ada",
+            "Bob",
+            "Inspect launch",
+            AgentMessageKind.Note,
+            subject: "Launch",
+            protocol: new AgentMessageProtocol
+            {
+                ActionName = "resume-launch-review",
+                RequiresResponse = true,
+                ResumeReason = "Launch thread needs a reply",
+            });
         var second = runtime.SendMessage("Ada", "Bob", "Follow up", AgentMessageKind.PlanApprovalRequest, subject: "Launch");
         var reply = runtime.SendMessage("Bob", "Ada", AgentMessageKind.PlanApprovalResponse, "Looks good", subject: "Re: Launch", relatedMessageId: first.Id);
 
         Assert.Equal("agent-message-1", first.Id);
         Assert.Equal(AgentMessageStatus.Delivered, first.Status);
         Assert.Equal(AgentMessageKind.Note, first.Kind);
+        Assert.Equal("resume-launch-review", first.Protocol?.ActionName);
         Assert.Equal("agent-message-3", reply.Id);
         Assert.Equal(first.ThreadId, reply.ThreadId);
         Assert.NotEqual(first.ThreadId, second.ThreadId);
@@ -66,6 +78,9 @@ public sealed class AgentMessageRuntimeTests
         Assert.Contains($"Mailbox thread: {first.ThreadId}", thread, StringComparison.Ordinal);
         Assert.Contains("Timeline:", thread, StringComparison.Ordinal);
         Assert.Contains("Message: agent-message-1", details, StringComparison.Ordinal);
+        Assert.Contains("Action: resume-launch-review", details, StringComparison.Ordinal);
+        Assert.Contains("Resume reason: Launch thread needs a reply", details, StringComparison.Ordinal);
+        Assert.Contains("reply=yes", inbox, StringComparison.Ordinal);
         Assert.Contains("Mailbox summary:", summaryText, StringComparison.Ordinal);
     }
 
@@ -85,7 +100,17 @@ public sealed class AgentMessageRuntimeTests
         var journal = new RecordingJournal();
         var runtime = await PersistentAgentMessageRuntime.CreateAsync(journal);
 
-        var first = runtime.SendMessage("Alice", "Bob", "Hello Bob", AgentMessageKind.Note, subject: "Launch");
+        var first = runtime.SendMessage(
+            "Alice",
+            "Bob",
+            "Hello Bob",
+            AgentMessageKind.Note,
+            subject: "Launch",
+            protocol: new AgentMessageProtocol
+            {
+                ActionName = "resume-launch",
+                ResumeReason = "Needs another pass",
+            });
         var second = runtime.SendMessage("Bob", "Alice", AgentMessageKind.ShutdownRequest, "Hi Alice", subject: "Re: Launch");
         Assert.True(runtime.MarkMessageRead(first.Id));
 
@@ -97,7 +122,10 @@ public sealed class AgentMessageRuntimeTests
 
         var restoredMessages = restored.ListMessages();
         Assert.Equal(2, restoredMessages.Count);
-        Assert.Equal(AgentMessageStatus.Read, Assert.Single(restoredMessages, message => message.Id == first.Id).Status);
+        var restoredFirst = Assert.Single(restoredMessages, message => message.Id == first.Id);
+        Assert.Equal(AgentMessageStatus.Read, restoredFirst.Status);
+        Assert.Equal("resume-launch", restoredFirst.Protocol?.ActionName);
+        Assert.Equal("Needs another pass", restoredFirst.Protocol?.ResumeReason);
         Assert.Equal(AgentMessageStatus.Delivered, Assert.Single(restoredMessages, message => message.Id == second.Id).Status);
 
         var summary = restored.GetSummary();

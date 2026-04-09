@@ -22,6 +22,16 @@ public enum AgentMessageStatus
 }
 
 /// <summary>
+/// Represents optional protocol metadata carried by a mailbox message.
+/// </summary>
+public sealed record AgentMessageProtocol
+{
+    public string? ActionName { get; init; }
+    public bool RequiresResponse { get; init; }
+    public string? ResumeReason { get; init; }
+}
+
+/// <summary>
 /// Represents a mailbox message exchanged between agents.
 /// </summary>
 public sealed class AgentMessage
@@ -34,6 +44,7 @@ public sealed class AgentMessage
     public required string Body { get; set; }
     public string? Subject { get; set; }
     public string? RelatedMessageId { get; set; }
+    public AgentMessageProtocol? Protocol { get; set; }
     public AgentMessageStatus Status { get; set; } = AgentMessageStatus.Delivered;
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -49,6 +60,7 @@ public sealed class AgentMessage
             Body = Body,
             Subject = Subject,
             RelatedMessageId = RelatedMessageId,
+            Protocol = Protocol is null ? null : Protocol with { },
             Status = Status,
             CreatedAt = CreatedAt,
             UpdatedAt = UpdatedAt,

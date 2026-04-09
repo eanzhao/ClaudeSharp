@@ -11,8 +11,9 @@ public sealed class AgentMessageActivationRuntimeTests
     public async Task TryActivateAsync_ReturnsNotRegisteredForUnknownOwner()
     {
         var runtime = new InMemoryAgentMessageActivationRuntime();
+        var message = CreateMessage("Platform/Ada");
 
-        var result = await runtime.TryActivateAsync("Platform/Ada");
+        var result = await runtime.TryActivateAsync(message);
 
         Assert.Equal(AgentMessageActivationStatus.NotRegistered, result.Status);
         Assert.Equal("Platform/Ada", result.Owner);
@@ -27,18 +28,19 @@ public sealed class AgentMessageActivationRuntimeTests
 
         runtime.RegisterOwner(
             "Platform/Ada",
-            async (_, cancellationToken) =>
+            async (request, cancellationToken) =>
             {
                 Interlocked.Increment(ref calls);
                 await release.Task.WaitAsync(cancellationToken);
                 return AgentMessageActivationResult.Reactivated(
                     "Platform/Ada",
                     "background-run-7",
-                    "work-item-9");
+                    "work-item-9",
+                    request.ResumeReason);
             });
 
-        var first = runtime.TryActivateAsync("Platform/Ada", "message one");
-        var second = runtime.TryActivateAsync("Platform/Ada", "message two");
+        var first = runtime.TryActivateAsync(CreateMessage("Platform/Ada", "Need follow-up"));
+        var second = runtime.TryActivateAsync(CreateMessage("Platform/Ada", "Need follow-up"));
         release.TrySetResult();
 
         var results = await Task.WhenAll(first, second);
@@ -48,6 +50,24 @@ public sealed class AgentMessageActivationRuntimeTests
         {
             Assert.Equal(AgentMessageActivationStatus.Reactivated, result.Status);
             Assert.Equal("background-run-7", result.BackgroundRunId);
+            Assert.Equal("Need follow-up", result.Message);
         });
     }
+
+    private static AgentMessage CreateMessage(string recipient, string? resumeReason = null) =>
+        new()
+        {
+            Id = "agent-message-1",
+            ThreadId = "thread-1",
+            From = "main",
+            To = recipient,
+            Kind = AgentMessageKind.Note,
+            Body = "Please resume work",
+            Protocol = string.IsNullOrWhiteSpace(resumeReason)
+                ? null
+                : new AgentMessageProtocol
+                {
+                    ResumeReason = resumeReason,
+                },
+        };
 }

@@ -178,13 +178,21 @@ public sealed class AgentToolTests
                     to = "Ada",
                     team_name = "Platform",
                     from = "main",
-                    message = "Please pick this back up",
+                    message = new
+                    {
+                        kind = "Note",
+                        body = "Please pick this back up",
+                        action = "resume-review",
+                        requires_response = true,
+                        resume_reason = "The review thread has new work",
+                    },
                 },
             }),
             CreateContext());
 
         Assert.False(send.IsError);
         Assert.Contains("Reactivated Platform/Ada as background-run-2", send.Data, StringComparison.Ordinal);
+        Assert.Contains("Triggered by agent-message-1 in thread-1", send.Data, StringComparison.Ordinal);
 
         await WaitForAsync(() =>
             taskRuntime.GetBackgroundRun("background-run-2")?.Status == AgentBackgroundRunStatus.Stopped);
@@ -192,8 +200,17 @@ public sealed class AgentToolTests
         Assert.Equal(2, runner.Requests.Count);
         Assert.All(runner.Requests, request =>
             Assert.Equal("Inspect the teammate runtime", request.Prompt));
+        Assert.Contains("Resume trigger:", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Contains("Action: resume-review", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Contains("Resume reason: The review thread has new work", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
         Assert.Contains("Unread mailbox messages:", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
         Assert.Contains("Please pick this back up", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
+        var reactivatedRun = taskRuntime.GetBackgroundRun("background-run-2");
+        Assert.NotNull(reactivatedRun);
+        Assert.Contains(reactivatedRun!.Output, chunk =>
+            chunk.Contains("[resume] Triggered by agent-message-1 in thread-1 from main.", StringComparison.Ordinal));
+        Assert.Contains(reactivatedRun.Output, chunk =>
+            chunk.Contains("action=resume-review", StringComparison.Ordinal));
         Assert.Equal(AgentMessageStatus.Read, messageRuntime.GetMessage("agent-message-1")?.Status);
     }
 

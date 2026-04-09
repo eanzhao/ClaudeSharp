@@ -126,7 +126,10 @@ public sealed class SendMessageTool : ITool
                       "properties": {
                         "kind": { "type": "string" },
                         "body": { "type": "string" },
-                        "subject": { "type": "string" }
+                        "subject": { "type": "string" },
+                        "action": { "type": "string" },
+                        "requires_response": { "type": "boolean" },
+                        "resume_reason": { "type": "string" }
                       },
                       "required": ["kind", "body"],
                       "additionalProperties": false
@@ -166,7 +169,7 @@ public sealed class SendMessageTool : ITool
         }
 
         return Task.FromResult(
-            TryParseMessage(parsed.Request.Message, parsed.Request.Subject, out _, out _, out var error)
+            TryParseMessage(parsed.Request.Message, parsed.Request.Subject, out _, out _, out _, out var error)
                 ? ValidationResult.Valid()
                 : ValidationResult.Invalid(error!));
     }
@@ -190,7 +193,7 @@ public sealed class SendMessageTool : ITool
             return ToolResult.Error("request.to and request.message are required.");
 
         var request = parsed.Request;
-        if (!TryParseMessage(request.Message, request.Subject, out var kind, out var body, out var error, out var subject))
+        if (!TryParseMessage(request.Message, request.Subject, out var kind, out var body, out var protocol, out var error, out var subject))
             return ToolResult.Error(error!);
 
         var sender = ResolveSender(request);
@@ -213,7 +216,8 @@ public sealed class SendMessageTool : ITool
                     body!,
                     kind,
                     subject,
-                    request.ReplyToMessageId))
+                    request.ReplyToMessageId,
+                    protocol))
                 .ToList();
         }
         catch (Exception ex)
@@ -247,10 +251,9 @@ public sealed class SendMessageTool : ITool
                      .Select(message => message.To)
                      .Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            var result = await _activationRuntime.TryActivateAsync(
-                recipient,
-                $"New mailbox message from {sender}.",
-                cancellationToken);
+            var message = delivered
+                .Last(candidate => string.Equals(candidate.To, recipient, StringComparison.OrdinalIgnoreCase));
+            var result = await _activationRuntime.TryActivateAsync(message, cancellationToken);
             if (result.Status != AgentMessageActivationStatus.NotRegistered)
                 results.Add(result);
         }
@@ -311,19 +314,22 @@ public sealed class SendMessageTool : ITool
         string? fallbackSubject,
         out AgentMessageKind kind,
         out string? body,
+        out AgentMessageProtocol? protocol,
         out string? error) =>
-        TryParseMessage(value, fallbackSubject, out kind, out body, out error, out _);
+        TryParseMessage(value, fallbackSubject, out kind, out body, out protocol, out error, out _);
 
     private static bool TryParseMessage(
         JsonElement value,
         string? fallbackSubject,
         out AgentMessageKind kind,
         out string? body,
+        out AgentMessageProtocol? protocol,
         out string? error,
         out string? subject)
     {
         kind = AgentMessageKind.Note;
         body = null;
+        protocol = null;
         error = null;
         subject = string.IsNullOrWhiteSpace(fallbackSubject) ? null : fallbackSubject.Trim();
 
@@ -363,6 +369,30 @@ public sealed class SendMessageTool : ITool
             subject = subjectValue.GetString()!.Trim();
         }
 
+        var actionName = value.TryGetProperty("action", out var actionValue) &&
+            actionValue.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(actionValue.GetString())
+            ? actionValue.GetString()!.Trim()
+            : null;
+        var requiresResponse = value.TryGetProperty("requires_response", out var requiresResponseValue) &&
+            requiresResponseValue.ValueKind is JsonValueKind.True or JsonValueKind.False &&
+            requiresResponseValue.GetBoolean();
+        var resumeReason = value.TryGetProperty("resume_reason", out var resumeReasonValue) &&
+            resumeReasonValue.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(resumeReasonValue.GetString())
+            ? resumeReasonValue.GetString()!.Trim()
+            : null;
+
+        if (!string.IsNullOrWhiteSpace(actionName) || requiresResponse || !string.IsNullOrWhiteSpace(resumeReason))
+        {
+            protocol = new AgentMessageProtocol
+            {
+                ActionName = actionName,
+                RequiresResponse = requiresResponse,
+                ResumeReason = resumeReason,
+            };
+        }
+
         return true;
     }
 
@@ -371,14 +401,19 @@ public sealed class SendMessageTool : ITool
         return result.Status switch
         {
             AgentMessageActivationStatus.Reactivated =>
-                $"- Reactivated {result.Owner} as {result.BackgroundRunId} ({result.WorkItemId}).",
+                $"- Reactivated {result.Owner} as {result.BackgroundRunId} ({result.WorkItemId})." +
+                $"{FormatActivationMessageSuffix(result)}",
             AgentMessageActivationStatus.AlreadyActive =>
-                $"- {result.Owner} already has an active background run.",
+                $"- {result.Owner} already has an active background run." +
+                $"{FormatActivationMessageSuffix(result)}",
             AgentMessageActivationStatus.Failed =>
                 $"- Failed to reactivate {result.Owner}: {result.Message}",
             _ => $"- No activation handler is registered for {result.Owner}.",
         };
     }
+
+    private static string FormatActivationMessageSuffix(AgentMessageActivationResult result) =>
+        string.IsNullOrWhiteSpace(result.Message) ? string.Empty : $" {result.Message}";
 }
 
 /// <summary>
