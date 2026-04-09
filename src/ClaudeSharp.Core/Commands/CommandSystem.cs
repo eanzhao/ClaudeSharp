@@ -32,6 +32,7 @@ public class CommandContext
     public required Query.QueryEngine QueryEngine { get; init; }
     public required Permissions.PermissionContext PermissionContext { get; init; }
     public required IAgentTaskRuntime AgentTaskRuntime { get; init; }
+    public IAgentTeamRuntime? AgentTeamRuntime { get; init; }
     public required IReadOnlyList<ICommand> Commands { get; init; }
     public Func<TimeSpan, CancellationToken, Task>? DelayAsync { get; init; }
     public CancellationToken CancellationToken { get; init; }

@@ -25,6 +25,21 @@ public sealed class AgentToolInput
 
     [JsonPropertyName("use_isolated_workspace")]
     public bool UseIsolatedWorkspace { get; set; } = true;
+
+    [JsonPropertyName("teammate")]
+    public AgentTeammateInput? Teammate { get; set; }
+}
+
+/// <summary>
+/// Represents teammate-scoped agent execution input.
+/// </summary>
+public sealed class AgentTeammateInput
+{
+    [JsonPropertyName("team_name")]
+    public string? TeamName { get; set; }
+
+    [JsonPropertyName("member_name")]
+    public string? MemberName { get; set; }
 }
 
 /// <summary>
@@ -35,19 +50,23 @@ public sealed class AgentTool : ITool
     private readonly IAgentExecutionRunner _runner;
     private readonly IProviderCapabilityRouter _providerCapabilityRouter;
     private readonly IAgentTaskRuntime _taskRuntime;
+    private readonly IAgentTeamRuntime? _teamRuntime;
     private readonly IHookRuntime _hooks;
     private readonly BackgroundAgentRunScheduler _backgroundRunScheduler;
+    private string? _assignmentErrorMessage;
 
     public AgentTool(
         IAgentExecutionRunner runner,
         IProviderCapabilityRouter? providerCapabilityRouter = null,
         IAgentTaskRuntime? taskRuntime = null,
+        IAgentTeamRuntime? teamRuntime = null,
         IHookRuntime? hooks = null,
         BackgroundAgentRunScheduler? backgroundRunScheduler = null)
     {
         _runner = runner;
         _providerCapabilityRouter = providerCapabilityRouter ?? new DefaultProviderCapabilityRouter();
         _taskRuntime = taskRuntime ?? new InMemoryAgentTaskRuntime();
+        _teamRuntime = teamRuntime;
         _hooks = hooks ?? HookRuntime.Empty;
         _backgroundRunScheduler = backgroundRunScheduler ?? new BackgroundAgentRunScheduler();
     }
@@ -79,6 +98,22 @@ public sealed class AgentTool : ITool
             "use_isolated_workspace": {
               "type": "boolean",
               "description": "When true, run the subagent in a temporary isolated workspace when possible"
+            },
+            "teammate": {
+              "type": "object",
+              "description": "Optional teammate assignment for running as a named team member",
+              "properties": {
+                "team_name": {
+                  "type": "string",
+                  "description": "Team id or name"
+                },
+                "member_name": {
+                  "type": "string",
+                  "description": "Teammate id or name within the selected team"
+                }
+              },
+              "required": ["team_name", "member_name"],
+              "additionalProperties": false
             }
           },
           "required": ["prompt"],
@@ -114,6 +149,16 @@ public sealed class AgentTool : ITool
         if (parsed == null || string.IsNullOrWhiteSpace(parsed.Prompt))
             return Task.FromResult(ValidationResult.Invalid("prompt is required."));
 
+        if (parsed.Teammate != null &&
+            (string.IsNullOrWhiteSpace(parsed.Teammate.TeamName) ||
+             string.IsNullOrWhiteSpace(parsed.Teammate.MemberName)))
+        {
+            return Task.FromResult(ValidationResult.Invalid("teammate.team_name and teammate.member_name are required."));
+        }
+
+        if (parsed.Teammate != null && _teamRuntime == null)
+            return Task.FromResult(ValidationResult.Invalid("team runtime is not configured."));
+
         return Task.FromResult(ValidationResult.Valid());
     }
 
@@ -135,19 +180,23 @@ public sealed class AgentTool : ITool
         if (parsed == null || string.IsNullOrWhiteSpace(parsed.Prompt))
             return ToolResult.Error("prompt is required.");
 
+        var assignment = ResolveAssignment(parsed);
+        if (assignment == null)
+            return ToolResult.Error(_assignmentErrorMessage ?? "Failed to resolve agent assignment.");
+
         var title = BuildTitle(parsed.Prompt);
         var workItem = _taskRuntime.CreateWorkItem(
             title,
             description: parsed.Prompt,
-            owner: "subagent");
+            owner: assignment.Owner);
         _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.InProgress);
 
         if (parsed.RunInBackground)
-            return LaunchInBackground(workItem, parsed, context);
+            return LaunchInBackground(workItem, assignment, parsed, context);
 
         try
         {
-            var result = await RunSubagentAsync(parsed, context, cancellationToken);
+            var result = await RunSubagentAsync(parsed, assignment, context, cancellationToken);
 
             _taskRuntime.UpdateWorkItem(workItem.Id, item =>
             {
@@ -159,31 +208,32 @@ public sealed class AgentTool : ITool
             if (!result.Success)
             {
                 return ToolResult.Error(
-                    $"Subagent {workItem.Id} failed: {result.ErrorMessage ?? "Unknown error"}");
+                    $"{assignment.SubjectLabel} {workItem.Id} failed: {result.ErrorMessage ?? "Unknown error"}");
             }
 
-            return ToolResult.Success(FormatResult(workItem.Id, parsed, result));
+            return ToolResult.Success(FormatResult(assignment, workItem.Id, parsed, result));
         }
         catch (OperationCanceledException)
         {
             _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.Cancelled);
-            return ToolResult.Error($"Subagent {workItem.Id} was cancelled.");
+            return ToolResult.Error($"{assignment.SubjectLabel} {workItem.Id} was cancelled.");
         }
         catch (Exception ex)
         {
             _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.Blocked);
-            return ToolResult.Error($"Subagent {workItem.Id} failed: {ex.Message}");
+            return ToolResult.Error($"{assignment.SubjectLabel} {workItem.Id} failed: {ex.Message}");
         }
     }
 
     private ToolResult LaunchInBackground(
         AgentWorkItem workItem,
+        AgentAssignment assignment,
         AgentToolInput input,
         ToolExecutionContext context)
     {
         var backgroundRun = _taskRuntime.StartBackgroundRun(
             BuildTitle(input.Prompt),
-            owner: "subagent",
+            owner: assignment.Owner,
             workItemId: workItem.Id,
             initialStatus: AgentBackgroundRunStatus.Queued);
         _taskRuntime.AppendBackgroundRunOutput(
@@ -208,6 +258,7 @@ public sealed class AgentTool : ITool
 
                         var result = await RunSubagentAsync(
                             input,
+                            assignment,
                             context,
                             logger,
                             cancellationToken);
@@ -218,7 +269,7 @@ public sealed class AgentTool : ITool
                                 item.Status = AgentWorkItemStatus.Completed);
                             _taskRuntime.AppendBackgroundRunOutput(
                                 backgroundRun.Id,
-                                FormatResult(workItem.Id, input, result));
+                                FormatResult(assignment, workItem.Id, input, result));
                             _taskRuntime.StopBackgroundRun(backgroundRun.Id, "completed");
                             return;
                         }
@@ -228,7 +279,7 @@ public sealed class AgentTool : ITool
                             item.Status = AgentWorkItemStatus.Blocked);
                         _taskRuntime.AppendBackgroundRunOutput(
                             backgroundRun.Id,
-                            $"Subagent {workItem.Id} failed: {error}");
+                            $"{assignment.SubjectLabel} {workItem.Id} failed: {error}");
                         _taskRuntime.FailBackgroundRun(backgroundRun.Id, error);
                     }
                     catch (OperationCanceledException)
@@ -238,7 +289,7 @@ public sealed class AgentTool : ITool
                             item.Status = AgentWorkItemStatus.Cancelled);
                         _taskRuntime.AppendBackgroundRunOutput(
                             backgroundRun.Id,
-                            $"Subagent {workItem.Id} was cancelled.");
+                            $"{assignment.SubjectLabel} {workItem.Id} was cancelled.");
                         _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
                     }
                     catch (Exception ex)
@@ -248,7 +299,7 @@ public sealed class AgentTool : ITool
                             item.Status = AgentWorkItemStatus.Blocked);
                         _taskRuntime.AppendBackgroundRunOutput(
                             backgroundRun.Id,
-                            $"Subagent {workItem.Id} failed: {ex.Message}");
+                            $"{assignment.SubjectLabel} {workItem.Id} failed: {ex.Message}");
                         _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
                     }
                     finally
@@ -272,7 +323,7 @@ public sealed class AgentTool : ITool
                         item.Status = AgentWorkItemStatus.Cancelled);
                     _taskRuntime.AppendBackgroundRunOutput(
                         backgroundRun.Id,
-                        $"Subagent {workItem.Id} was cancelled before execution started.");
+                        $"{assignment.SubjectLabel} {workItem.Id} was cancelled before execution started.");
                     _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
                     cancellationSource.Dispose();
                 });
@@ -284,18 +335,19 @@ public sealed class AgentTool : ITool
                 item.Status = AgentWorkItemStatus.Blocked);
             _taskRuntime.AppendBackgroundRunOutput(
                 backgroundRun.Id,
-                $"Subagent {workItem.Id} failed to start: {ex.Message}");
+                $"{assignment.SubjectLabel} {workItem.Id} failed to start: {ex.Message}");
             _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
-            return ToolResult.Error($"Subagent {workItem.Id} failed to start in the background: {ex.Message}");
+            return ToolResult.Error($"{assignment.SubjectLabel} {workItem.Id} failed to start in the background: {ex.Message}");
         }
 
         return ToolResult.Success(
-            $"Subagent {workItem.Id} was queued in the background as {backgroundRun.Id}. " +
+            $"{assignment.SubjectLabel} {workItem.Id} was queued in the background as {backgroundRun.Id}. " +
             $"Use AgentStatus with id=\"{backgroundRun.Id}\" to inspect progress, or AgentStop to cancel it.");
     }
 
     private Task<AgentExecutionResult> RunSubagentAsync(
         AgentToolInput input,
+        AgentAssignment assignment,
         ToolExecutionContext context,
         IProgress<AgentExecutionProgress>? progress,
         CancellationToken cancellationToken)
@@ -310,7 +362,7 @@ public sealed class AgentTool : ITool
                 PermissionContext = context.PermissionContext,
                 UseIsolatedWorkspace = input.UseIsolatedWorkspace,
                 Progress = progress,
-                SystemPromptAppendix = BuildSubagentSystemPrompt(input.SubagentType),
+                SystemPromptAppendix = BuildSubagentSystemPrompt(input.SubagentType, assignment),
                 Hooks = _hooks,
             },
             cancellationToken);
@@ -318,9 +370,10 @@ public sealed class AgentTool : ITool
 
     private Task<AgentExecutionResult> RunSubagentAsync(
         AgentToolInput input,
+        AgentAssignment assignment,
         ToolExecutionContext context,
         CancellationToken cancellationToken) =>
-        RunSubagentAsync(input, context, progress: null, cancellationToken);
+        RunSubagentAsync(input, assignment, context, progress: null, cancellationToken);
 
     private ToolRegistry BuildReadOnlyToolRegistry(string model)
     {
@@ -328,18 +381,24 @@ public sealed class AgentTool : ITool
         registry.Register(new FileReadTool());
         registry.Register(new GlobTool());
         registry.Register(new GrepTool());
+        if (_teamRuntime != null)
+            registry.Register(new TeamStatusTool(_teamRuntime));
         registry.Register(new WebFetchTool());
         registry.Register(new WebSearchTool(_providerCapabilityRouter, () => model));
         return registry;
     }
 
-    private static string BuildSubagentSystemPrompt(string? subagentType)
+    private static string BuildSubagentSystemPrompt(
+        string? subagentType,
+        AgentAssignment assignment)
     {
         var kind = string.IsNullOrWhiteSpace(subagentType)
             ? "research"
             : subagentType.Trim();
 
-        return $"""
+        var builder = new StringBuilder();
+        builder.AppendLine(
+            $$"""
             You are a subordinate ClaudeSharp agent helping another agent.
 
             Your job:
@@ -349,8 +408,21 @@ public sealed class AgentTool : ITool
             - Do not ask the user follow-up questions; make reasonable assumptions and keep moving
             - End with a concise, high-signal summary the parent agent can reuse directly
 
-            Subagent type hint: {kind}
-            """;
+            Subagent type hint: {{kind}}
+            """);
+
+        if (assignment.Team != null &&
+            assignment.Member != null)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Team assignment:");
+            builder.AppendLine($"- Team: {assignment.Team.Name} ({assignment.Team.Id})");
+            builder.AppendLine($"- Teammate: {assignment.Member.Name} ({assignment.Member.Role})");
+            builder.AppendLine("- Work only on behalf of this teammate.");
+            builder.AppendLine("- Do not speak for the whole team or invent updates from other teammates.");
+        }
+
+        return builder.ToString().TrimEnd();
     }
 
     private static string BuildTitle(string prompt)
@@ -366,12 +438,13 @@ public sealed class AgentTool : ITool
     }
 
     private static string FormatResult(
+        AgentAssignment assignment,
         string workItemId,
         AgentToolInput input,
         AgentExecutionResult result)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Subagent {workItemId} completed.");
+        builder.AppendLine($"{assignment.SubjectLabel} {workItemId} completed.");
         builder.AppendLine($"Turns: {result.TurnCount}");
         builder.AppendLine(
             $"Usage: in={result.Usage.InputTokens}, out={result.Usage.OutputTokens}");
@@ -384,6 +457,59 @@ public sealed class AgentTool : ITool
         builder.AppendLine(result.Summary);
 
         return builder.ToString().TrimEnd();
+    }
+
+    private AgentAssignment? ResolveAssignment(AgentToolInput input)
+    {
+        _assignmentErrorMessage = null;
+
+        if (input.Teammate == null)
+            return AgentAssignment.Subagent();
+
+        if (string.IsNullOrWhiteSpace(input.Teammate.TeamName) ||
+            string.IsNullOrWhiteSpace(input.Teammate.MemberName))
+        {
+            _assignmentErrorMessage = "teammate.team_name and teammate.member_name are required.";
+            return null;
+        }
+
+        if (_teamRuntime == null)
+        {
+            _assignmentErrorMessage = "team runtime is not configured.";
+            return null;
+        }
+
+        var team = AgentTeamLookup.ResolveTeam(_teamRuntime, input.Teammate.TeamName!);
+        if (team == null)
+        {
+            _assignmentErrorMessage = $"Team '{input.Teammate.TeamName!.Trim()}' was not found.";
+            return null;
+        }
+
+        var teammate = AgentTeamLookup.ResolveMember(team, input.Teammate.MemberName!);
+        if (teammate == null)
+        {
+            _assignmentErrorMessage =
+                $"Teammate '{input.Teammate.MemberName!.Trim()}' was not found in team '{team.Name}'.";
+            return null;
+        }
+
+        return AgentAssignment.ForTeammate(team, teammate);
+    }
+
+    private sealed record AgentAssignment(
+        string Owner,
+        string SubjectLabel,
+        AgentTeam? Team = null,
+        AgentTeamMember? Member = null)
+    {
+        public static AgentAssignment Subagent() =>
+            new("subagent", "Subagent");
+
+        public static AgentAssignment ForTeammate(
+            AgentTeam team,
+            AgentTeamMember member) =>
+            new($"{team.Name}/{member.Name}", $"Teammate {member.Name}", team, member);
     }
 
     private sealed class BackgroundRunLogger : IProgress<AgentExecutionProgress>

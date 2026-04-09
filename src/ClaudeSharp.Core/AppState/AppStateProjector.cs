@@ -18,7 +18,9 @@ public sealed class AppStateProjector
         ManagedSettingsSnapshot? managedSettings = null,
         AnthropicTokenSourceSnapshot? activeTokenSource = null,
         McpConnectionManager? mcpConnectionManager = null,
-        IAgentTaskRuntime? agentTaskRuntime = null)
+        IAgentTaskRuntime? agentTaskRuntime = null,
+        IAgentTeamRuntime? agentTeamRuntime = null,
+        IAgentMailboxRuntime? agentMailboxRuntime = null)
     {
         var workItems = SnapshotWorkItems(agentTaskRuntime);
 
@@ -33,6 +35,8 @@ public sealed class AppStateProjector
             ActiveTokenSource = activeTokenSource,
             McpConnections = SnapshotMcpConnections(mcpConnectionManager),
             WorkItems = workItems,
+            Teams = SnapshotTeams(agentTeamRuntime),
+            Mailboxes = SnapshotMailboxes(agentMailboxRuntime),
         };
     }
 
@@ -84,5 +88,56 @@ public sealed class AppStateProjector
             .ThenBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
             .Select(entry => entry.Key)
             .FirstOrDefault();
+    }
+
+    internal static IReadOnlyList<AppStateTeamSnapshot> SnapshotTeams(
+        IAgentTeamRuntime? runtime)
+    {
+        if (runtime == null)
+            return [];
+
+        return runtime.ListTeams()
+            .Select(team =>
+            {
+                var lead = string.IsNullOrWhiteSpace(team.LeadMemberId)
+                    ? null
+                    : team.GetMember(team.LeadMemberId!);
+
+                return new AppStateTeamSnapshot
+                {
+                    Id = team.Id,
+                    Name = team.Name,
+                    Description = team.Description,
+                    LeadName = lead?.Name,
+                    Members = team.Members
+                        .OrderBy(member => member.Role == AgentTeamMemberRole.Lead ? 0 : 1)
+                        .ThenBy(member => member.Name, StringComparer.OrdinalIgnoreCase)
+                        .Select(member => member.Name)
+                        .ToArray(),
+                };
+            })
+            .ToArray();
+    }
+
+    internal static IReadOnlyList<AppStateMailboxSnapshot> SnapshotMailboxes(
+        IAgentMailboxRuntime? runtime)
+    {
+        if (runtime == null)
+            return [];
+
+        return runtime.ListMailboxes()
+            .Select(mailbox => new AppStateMailboxSnapshot
+            {
+                Participant = mailbox.Participant,
+                InboxCount = mailbox.InboxCount,
+                UnreadCount = mailbox.UnreadCount,
+                OutboxCount = mailbox.OutboxCount,
+                ThreadCount = mailbox.ThreadCount,
+                LatestThreadId = mailbox.LatestThreadId,
+                LatestSubject = mailbox.LatestSubject,
+                LatestCounterparty = mailbox.LatestCounterparty,
+                LatestMessageAt = mailbox.LatestMessageAt,
+            })
+            .ToArray();
     }
 }

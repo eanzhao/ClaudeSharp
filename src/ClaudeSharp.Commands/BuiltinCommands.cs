@@ -95,6 +95,291 @@ public class ExitCommand : ICommand
 }
 
 /// <summary>
+/// Represents team command.
+/// </summary>
+public class TeamCommand : ICommand
+{
+    private readonly IAgentTeamRuntime? _runtime;
+
+    public TeamCommand(IAgentTeamRuntime? runtime = null)
+    {
+        _runtime = runtime;
+    }
+
+    public string Name => "team";
+    public string Description => "Create, inspect, list, or dissolve teams";
+    public string[] Aliases => ["teams"];
+
+    public Task ExecuteAsync(string args, CommandContext context)
+    {
+        var runtime = ResolveRuntime(context);
+        var trimmed = args.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed) ||
+            trimmed.Equals("list", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Equals("status", StringComparison.OrdinalIgnoreCase))
+        {
+            context.WriteLine(AgentTeamStatusFormatter.FormatOverview(runtime.ListTeams()));
+            return Task.CompletedTask;
+        }
+
+        var parts = trimmed.Split(' ', 2, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        var action = parts[0];
+        var remainder = parts.Length > 1 ? parts[1] : string.Empty;
+
+        if (action.Equals("create", StringComparison.OrdinalIgnoreCase))
+        {
+            return CreateTeamAsync(runtime, remainder, context);
+        }
+
+        if (action.Equals("dissolve", StringComparison.OrdinalIgnoreCase))
+        {
+            return DissolveTeamAsync(runtime, remainder, context);
+        }
+
+        if (action.Equals("show", StringComparison.OrdinalIgnoreCase) ||
+            action.Equals("inspect", StringComparison.OrdinalIgnoreCase))
+        {
+            return ShowTeamAsync(runtime, remainder, context);
+        }
+
+        var team = AgentTeamLookup.ResolveTeam(runtime, trimmed);
+        if (team != null)
+        {
+            context.WriteLine(AgentTeamStatusFormatter.FormatDetails(team));
+            return Task.CompletedTask;
+        }
+
+        context.WriteLine("  Usage: /team [list|status], /team create <name> [--lead <name>] [--member <name>]..., /team dissolve <id|name> [reason], /team show <id|name>");
+        return Task.CompletedTask;
+    }
+
+    private Task CreateTeamAsync(
+        IAgentTeamRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        if (!TryParseCreateArguments(args, out var input, out var error))
+        {
+            context.WriteLine(error ?? "  Usage: /team create <name> [--lead <name>] [--member <name>]...");
+            return Task.CompletedTask;
+        }
+
+        try
+        {
+            var team = runtime.CreateTeam(
+                input.Name!,
+                description: input.Description,
+                leadName: input.Lead);
+
+            foreach (var member in input.Members ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(member) ||
+                    string.Equals(member.Trim(), input.Lead?.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                runtime.AddMember(team.Id, member);
+            }
+
+            team = runtime.GetTeam(team.Id) ?? team;
+            context.WriteLine(FormatCreateResult(team));
+        }
+        catch (Exception ex)
+        {
+            context.WriteLine($"  {ex.Message}");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private Task DissolveTeamAsync(
+        IAgentTeamRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        if (!TryParseTargetAndReason(args, out var target, out var reason, out var error))
+        {
+            context.WriteLine(error ?? "  Usage: /team dissolve <id|name> [reason]");
+            return Task.CompletedTask;
+        }
+
+        var team = AgentTeamLookup.ResolveTeam(runtime, target);
+        if (team == null)
+        {
+            context.WriteLine($"  No team matched '{target}'.");
+            return Task.CompletedTask;
+        }
+
+        runtime.DeleteTeam(team.Id);
+        context.WriteLine(FormatDissolveResult(team, reason));
+        return Task.CompletedTask;
+    }
+
+    private Task ShowTeamAsync(
+        IAgentTeamRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        var target = args.Trim();
+        if (string.IsNullOrWhiteSpace(target))
+        {
+            context.WriteLine(AgentTeamStatusFormatter.FormatOverview(runtime.ListTeams()));
+            return Task.CompletedTask;
+        }
+
+        var team = AgentTeamLookup.ResolveTeam(runtime, target);
+        if (team == null)
+        {
+            context.WriteLine($"  No team matched '{target}'.");
+            return Task.CompletedTask;
+        }
+
+        context.WriteLine(AgentTeamStatusFormatter.FormatDetails(team));
+        return Task.CompletedTask;
+    }
+
+    private IAgentTeamRuntime ResolveRuntime(CommandContext context) =>
+        _runtime ?? context.AgentTeamRuntime ?? TeamCommandDefaults.Default;
+
+    private static string FormatCreateResult(AgentTeam team) =>
+        $"Team created: {team.Id}\n{AgentTeamStatusFormatter.FormatDetails(team)}";
+
+    private static string FormatDissolveResult(AgentTeam team, string? reason)
+    {
+        var builder = new System.Text.StringBuilder();
+        builder.AppendLine($"Team dissolved: {team.Id}");
+        builder.AppendLine($"Team: {team.Name} ({team.Id})");
+        builder.AppendLine($"Lead: {FormatLead(team)}");
+        builder.AppendLine($"Members: {team.Members.Count}");
+        if (!string.IsNullOrWhiteSpace(reason))
+            builder.AppendLine($"Reason: {reason.Trim()}");
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string FormatLead(AgentTeam team)
+    {
+        if (string.IsNullOrWhiteSpace(team.LeadMemberId))
+            return "(none)";
+
+        var lead = team.GetMember(team.LeadMemberId!);
+        return lead == null ? team.LeadMemberId! : lead.Name;
+    }
+
+    private static bool TryParseCreateArguments(
+        string args,
+        out TeamCommandCreateInput input,
+        out string? error)
+    {
+        input = new TeamCommandCreateInput();
+        error = null;
+
+        var tokens = Tokenize(args);
+        if (tokens.Count == 0)
+        {
+            error = "  team name is required.";
+            return false;
+        }
+
+        input.Name = tokens[0];
+        var members = new List<string>();
+
+        for (var i = 1; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (token.Equals("--lead", StringComparison.OrdinalIgnoreCase))
+            {
+                if (++i >= tokens.Count)
+                {
+                    error = "  --lead requires a value.";
+                    return false;
+                }
+
+                input.Lead = tokens[i];
+                continue;
+            }
+
+            if (token.Equals("--member", StringComparison.OrdinalIgnoreCase))
+            {
+                if (++i >= tokens.Count)
+                {
+                    error = "  --member requires a value.";
+                    return false;
+                }
+
+                members.Add(tokens[i]);
+                continue;
+            }
+
+            if (token.Equals("--description", StringComparison.OrdinalIgnoreCase))
+            {
+                if (++i >= tokens.Count)
+                {
+                    error = "  --description requires a value.";
+                    return false;
+                }
+
+                input.Description = string.Join(" ", tokens.Skip(i));
+                break;
+            }
+
+            members.Add(token);
+        }
+
+        input.Members = members.Count == 0 ? [] : members.ToArray();
+        return true;
+    }
+
+    private static bool TryParseTargetAndReason(
+        string args,
+        out string target,
+        out string? reason,
+        out string? error)
+    {
+        var tokens = Tokenize(args);
+        if (tokens.Count == 0)
+        {
+            target = string.Empty;
+            reason = null;
+            error = "  team id or name is required.";
+            return false;
+        }
+
+        target = tokens[0];
+        reason = tokens.Count > 1
+            ? string.Join(" ", tokens.Skip(1))
+            : null;
+        error = null;
+        return true;
+    }
+
+    private static List<string> Tokenize(string args)
+    {
+        return args.Split(
+                ' ',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+    }
+}
+
+/// <summary>
+/// Represents the input payload for team creation.
+/// </summary>
+public sealed class TeamCommandCreateInput
+{
+    public string? Name { get; set; }
+    public string? Lead { get; set; }
+    public string? Description { get; set; }
+    public string[]? Members { get; set; }
+}
+
+internal static class TeamCommandDefaults
+{
+    public static IAgentTeamRuntime Default { get; } = new InMemoryAgentTeamRuntime();
+}
+
+/// <summary>
 /// Represents agents command.
 /// </summary>
 public class AgentsCommand : ICommand

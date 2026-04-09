@@ -12,12 +12,15 @@ namespace ClaudeSharp.Core.Tests.AppState;
 public sealed class AppStateProjectorTests
 {
     [Fact]
-    public void CreateSnapshot_ProjectsMcpConnectionsAndAgentWorkItems()
+    public void CreateSnapshot_ProjectsMcpConnectionsAgentWorkItemsAndTeams()
     {
         var runtime = new InMemoryAgentTaskRuntime();
         var pending = runtime.CreateWorkItem("pending");
         var active = runtime.CreateWorkItem("active");
         runtime.UpdateWorkItem(active.Id, item => item.Status = AgentWorkItemStatus.InProgress);
+        var teamRuntime = new InMemoryAgentTeamRuntime();
+        var team = teamRuntime.CreateTeam("Platform", leadName: "Ada");
+        teamRuntime.AddMember(team.Id, "Bob");
 
         var mcp = new McpConnectionManager();
         mcp.Register(new McpConnection("alpha"));
@@ -45,7 +48,8 @@ public sealed class AppStateProjectorTests
                 IsActive = true,
             },
             mcpConnectionManager: mcp,
-            agentTaskRuntime: runtime);
+            agentTaskRuntime: runtime,
+            agentTeamRuntime: teamRuntime);
 
         Assert.Equal("session-1", snapshot.SessionId);
         Assert.Equal("/workspace", snapshot.WorkingDirectory);
@@ -58,5 +62,9 @@ public sealed class AppStateProjectorTests
         Assert.Equal(McpConnectionState.Failed, snapshot.McpConnections["beta"]);
         Assert.Equal(AgentWorkItemStatus.Pending, snapshot.WorkItems[pending.Id]);
         Assert.Equal(AgentWorkItemStatus.InProgress, snapshot.WorkItems[active.Id]);
+        var projectedTeam = Assert.Single(snapshot.Teams);
+        Assert.Equal("Platform", projectedTeam.Name);
+        Assert.Equal("Ada", projectedTeam.LeadName);
+        Assert.Equal(["Ada", "Bob"], projectedTeam.Members);
     }
 }

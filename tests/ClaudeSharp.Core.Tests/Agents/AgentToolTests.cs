@@ -34,7 +34,7 @@ public sealed class AgentToolTests
             runner,
             new DefaultProviderCapabilityRouter(),
             runtime,
-            HookRuntime.Empty);
+            hooks: HookRuntime.Empty);
 
         var result = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new
@@ -65,6 +65,54 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CanRunAsNamedTeammate()
+    {
+        var taskRuntime = new InMemoryAgentTaskRuntime();
+        var teamRuntime = new InMemoryAgentTeamRuntime();
+        var team = teamRuntime.CreateTeam("Platform", leadName: "Ada");
+        teamRuntime.AddMember(team.Id, "Bob");
+
+        var runner = new RecordingRunner(new AgentExecutionResult(
+            Summary: "teammate summary",
+            Success: true,
+            Usage: TokenUsage.Empty,
+            TurnCount: 1));
+
+        var tool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            taskRuntime,
+            teamRuntime,
+            hooks: HookRuntime.Empty);
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "Inspect the team runtime",
+                teammate = new
+                {
+                    team_name = "Platform",
+                    member_name = "Ada",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("Teammate Ada work-item-1 completed.", result.Data, StringComparison.Ordinal);
+
+        var request = Assert.Single(runner.Requests);
+        Assert.Contains("Team assignment:", request.SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Contains("Platform", request.SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Contains("Ada (Lead)", request.SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Contains(
+            request.Tools.GetAllTools().Select(tool => tool.Name),
+            name => string.Equals(name, "TeamStatus", StringComparison.Ordinal));
+
+        var workItem = Assert.Single(taskRuntime.ListWorkItems());
+        Assert.Equal("Platform/Ada", workItem.Owner);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ReportsRunnerFailuresAndMarksWorkItemBlocked()
     {
         var runtime = new InMemoryAgentTaskRuntime();
@@ -79,7 +127,7 @@ public sealed class AgentToolTests
             runner,
             new DefaultProviderCapabilityRouter(),
             runtime,
-            HookRuntime.Empty);
+            hooks: HookRuntime.Empty);
 
         var result = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new { prompt = "Trace the bug" }),
@@ -112,7 +160,7 @@ public sealed class AgentToolTests
             runner,
             new DefaultProviderCapabilityRouter(),
             runtime,
-            HookRuntime.Empty);
+            hooks: HookRuntime.Empty);
 
         var result = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new
@@ -168,7 +216,7 @@ public sealed class AgentToolTests
             runner,
             new DefaultProviderCapabilityRouter(),
             runtime,
-            HookRuntime.Empty);
+            hooks: HookRuntime.Empty);
 
         var result = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new
@@ -216,7 +264,7 @@ public sealed class AgentToolTests
             runner,
             new DefaultProviderCapabilityRouter(),
             runtime,
-            HookRuntime.Empty);
+            hooks: HookRuntime.Empty);
 
         var launch = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new
@@ -286,8 +334,8 @@ public sealed class AgentToolTests
             runner,
             new DefaultProviderCapabilityRouter(),
             runtime,
-            HookRuntime.Empty,
-            new BackgroundAgentRunScheduler(maxConcurrency: 1));
+            hooks: HookRuntime.Empty,
+            backgroundRunScheduler: new BackgroundAgentRunScheduler(maxConcurrency: 1));
 
         var firstLaunch = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new
@@ -354,8 +402,8 @@ public sealed class AgentToolTests
             runner,
             new DefaultProviderCapabilityRouter(),
             runtime,
-            HookRuntime.Empty,
-            new BackgroundAgentRunScheduler(maxConcurrency: 1));
+            hooks: HookRuntime.Empty,
+            backgroundRunScheduler: new BackgroundAgentRunScheduler(maxConcurrency: 1));
 
         await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new
@@ -699,7 +747,7 @@ public sealed class AgentToolTests
             runner,
             new DefaultProviderCapabilityRouter(),
             runtime,
-            HookRuntime.Empty);
+            hooks: HookRuntime.Empty);
 
         var result = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new

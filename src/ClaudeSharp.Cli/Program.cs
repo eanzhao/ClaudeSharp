@@ -163,6 +163,9 @@ internal static class Program
             journal,
             agentMetadataEntries,
             autoPrunePolicy: agentSettings.Settings.BuildRetentionPolicy());
+        var agentTeamRuntime = await PersistentAgentTeamRuntime.CreateAsync(
+            journal,
+            agentMetadataEntries);
         var toolRegistry = BuildToolRegistry(
             providerRouter,
             managedPolicy.AllowWebSearch,
@@ -170,6 +173,7 @@ internal static class Program
             client,
             hooks,
             agentTaskRuntime,
+            agentTeamRuntime,
             agentSettings.Settings.BackgroundRunConcurrency);
         var commandRegistry = BuildCommandRegistry();
         await using var mcpRuntime = managedPolicy.AllowExternalMcpServers
@@ -210,7 +214,8 @@ internal static class Program
                     managedSettings: managedSettings.Settings,
                     activeTokenSource: managedPolicy.ActiveTokenSource,
                     mcpConnectionManager: mcpRuntime.ConnectionManager,
-                    agentTaskRuntime: agentTaskRuntime));
+                    agentTaskRuntime: agentTaskRuntime,
+                    agentTeamRuntime: agentTeamRuntime));
                 await appStateBridge.PublishAsync();
             }
             catch
@@ -260,6 +265,7 @@ internal static class Program
             queryEngine,
             permissionContext,
             agentTaskRuntime,
+            agentTeamRuntime,
             startupNote,
             PublishAppStateAsync);
 
@@ -289,6 +295,7 @@ internal static class Program
         AnthropicClient client,
         IHookRuntime hooks,
         IAgentTaskRuntime agentTaskRuntime,
+        IAgentTeamRuntime agentTeamRuntime,
         int backgroundRunConcurrency)
     {
         var registry = new ToolRegistry();
@@ -300,6 +307,9 @@ internal static class Program
         registry.Register(new FileEditTool());
         registry.Register(new GlobTool());
         registry.Register(new GrepTool());
+        registry.Register(new TeamCreateTool(agentTeamRuntime));
+        registry.Register(new TeamStatusTool(agentTeamRuntime));
+        registry.Register(new TeamDissolveTool(agentTeamRuntime));
         registry.Register(new WebFetchTool());
         if (allowWebSearch)
             registry.Register(new WebSearchTool(providerRouter, currentModelAccessor));
@@ -307,6 +317,7 @@ internal static class Program
             new QueryEngineAgentRunner(client, hooks: hooks),
             providerRouter,
             agentTaskRuntime,
+            agentTeamRuntime,
             hooks,
             backgroundRunScheduler));
         registry.Register(new AgentStatusTool(agentTaskRuntime));
@@ -359,6 +370,7 @@ internal static class Program
         registry.Register(new PartialCompactCommand());
         registry.Register(new SessionCommand());
         registry.Register(new SessionMemoryCompactCommand());
+        registry.Register(new TeamCommand());
         registry.Register(new TitleCommand());
         registry.Register(new TagCommand());
         return registry;
@@ -391,6 +403,7 @@ Options:
         private readonly QueryEngine _queryEngine;
         private readonly PermissionContext _permissionContext;
         private readonly IAgentTaskRuntime _agentTaskRuntime;
+        private readonly IAgentTeamRuntime _agentTeamRuntime;
         private readonly string? _startupNote;
         private readonly Func<Task>? _afterInputAsync;
         private bool _exitRequested;
@@ -403,6 +416,7 @@ Options:
             QueryEngine queryEngine,
             PermissionContext permissionContext,
             IAgentTaskRuntime agentTaskRuntime,
+            IAgentTeamRuntime agentTeamRuntime,
             string? startupNote,
             Func<Task>? afterInputAsync = null)
         {
@@ -413,6 +427,7 @@ Options:
             _queryEngine = queryEngine;
             _permissionContext = permissionContext;
             _agentTaskRuntime = agentTaskRuntime;
+            _agentTeamRuntime = agentTeamRuntime;
             _startupNote = startupNote;
             _afterInputAsync = afterInputAsync;
         }
@@ -430,6 +445,7 @@ Options:
                 QueryEngine = _queryEngine,
                 PermissionContext = _permissionContext,
                 AgentTaskRuntime = _agentTaskRuntime,
+                AgentTeamRuntime = _agentTeamRuntime,
                 Commands = _commandRegistry.GetAll(),
                 DelayAsync = static (delay, cancellationToken) => Task.Delay(delay, cancellationToken),
                 CancellationToken = CancellationToken.None,

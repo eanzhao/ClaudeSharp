@@ -143,7 +143,7 @@ public sealed class CoreUtilityCoverageTests
             new GrepTool(),
             new WebFetchTool(),
             new WebSearchTool(new DefaultProviderCapabilityRouter(), () => ClaudeModels.DefaultMainModel),
-            new AgentTool(new NoOpAgentRunner(), new DefaultProviderCapabilityRouter(), runtime, HookRuntime.Empty),
+            new AgentTool(new NoOpAgentRunner(), new DefaultProviderCapabilityRouter(), runtime, hooks: HookRuntime.Empty),
             new AgentStatusTool(runtime),
             new AgentStopTool(runtime),
             new AgentWaitTool(runtime),

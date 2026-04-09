@@ -21,4 +21,6 @@ public sealed record AppStateSnapshot
         new Dictionary<string, McpConnectionState>(StringComparer.OrdinalIgnoreCase);
     public IReadOnlyDictionary<string, AgentWorkItemStatus> WorkItems { get; init; } =
         new Dictionary<string, AgentWorkItemStatus>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyList<AppStateTeamSnapshot> Teams { get; init; } = [];
+    public IReadOnlyList<AppStateMailboxSnapshot> Mailboxes { get; init; } = [];
 }
