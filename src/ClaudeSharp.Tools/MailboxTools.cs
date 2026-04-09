@@ -49,6 +49,15 @@ public sealed class MailboxStatusToolInput
 }
 
 /// <summary>
+/// Represents the top-level mailbox respond tool input.
+/// </summary>
+public sealed class MailboxRespondToolInput
+{
+    [JsonPropertyName("request")]
+    public MailboxRespondRequestInput? Request { get; set; }
+}
+
+/// <summary>
 /// Represents a mailbox status query request.
 /// </summary>
 public sealed class MailboxStatusRequestInput
@@ -82,6 +91,27 @@ public sealed class MailboxStatusRequestInput
 }
 
 /// <summary>
+/// Represents a mailbox action response request.
+/// </summary>
+public sealed class MailboxRespondRequestInput
+{
+    [JsonPropertyName("message_id")]
+    public string? MessageId { get; set; }
+
+    [JsonPropertyName("decision")]
+    public string? Decision { get; set; }
+
+    [JsonPropertyName("responder")]
+    public string? Responder { get; set; }
+
+    [JsonPropertyName("note")]
+    public string? Note { get; set; }
+
+    [JsonPropertyName("mark_original_as_read")]
+    public bool MarkOriginalAsRead { get; set; } = true;
+}
+
+/// <summary>
 /// Sends structured or plain-text mailbox messages between agents.
 /// </summary>
 public sealed class SendMessageTool : ITool
@@ -89,15 +119,18 @@ public sealed class SendMessageTool : ITool
     private readonly IAgentMessageRuntime _messageRuntime;
     private readonly IAgentTeamRuntime? _teamRuntime;
     private readonly IAgentMessageActivationRuntime? _activationRuntime;
+    private readonly IAgentTaskRuntime? _taskRuntime;
 
     public SendMessageTool(
         IAgentMessageRuntime messageRuntime,
         IAgentTeamRuntime? teamRuntime = null,
-        IAgentMessageActivationRuntime? activationRuntime = null)
+        IAgentMessageActivationRuntime? activationRuntime = null,
+        IAgentTaskRuntime? taskRuntime = null)
     {
         _messageRuntime = messageRuntime;
         _teamRuntime = teamRuntime;
         _activationRuntime = activationRuntime;
+        _taskRuntime = taskRuntime;
     }
 
     public string Name => "SendMessage";
@@ -225,6 +258,8 @@ public sealed class SendMessageTool : ITool
             return ToolResult.Error(ex.Message);
         }
 
+        _ = TrySynchronizeApprovalTasks();
+
         var lines = new List<string>
         {
             $"Delivered {delivered.Count} message(s).",
@@ -236,6 +271,21 @@ public sealed class SendMessageTool : ITool
             lines.Add(FormatActivationLine(activation));
 
         return ToolResult.Success(string.Join(Environment.NewLine, lines));
+    }
+
+    private AgentMailboxTaskProjectionResult? TrySynchronizeApprovalTasks()
+    {
+        if (_taskRuntime == null)
+            return null;
+
+        try
+        {
+            return AgentMailboxTaskProjector.Synchronize(_messageRuntime, _taskRuntime);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<IReadOnlyList<AgentMessageActivationResult>> ActivateRecipientsAsync(
@@ -396,6 +446,9 @@ public sealed class SendMessageTool : ITool
         return true;
     }
 
+    internal static string FormatActivationLineForSharedUse(AgentMessageActivationResult result) =>
+        FormatActivationLine(result);
+
     private static string FormatActivationLine(AgentMessageActivationResult result)
     {
         return result.Status switch
@@ -443,7 +496,7 @@ public sealed class MailboxStatusTool : ITool
                   "properties": {
                 "view": {
                   "type": "string",
-                  "enum": ["overview", "list", "inbox", "outbox", "thread"]
+                  "enum": ["overview", "list", "inbox", "outbox", "thread", "pending"]
                 },
                 "message_id": { "type": "string" },
                 "thread_id": { "type": "string" },
@@ -469,7 +522,7 @@ public sealed class MailboxStatusTool : ITool
             Use this after SendMessage, or when you need to check whether a teammate or local agent has unread messages.
             Set request.message_id to inspect one message in detail. Set mark_as_read=true to acknowledge it.
             Otherwise you can filter by participant, sender, recipient, and unread_only, or set
-            request.view to "inbox", "outbox", or "thread" for a focused mailbox view.
+            request.view to "inbox", "outbox", "thread", or "pending" for a focused mailbox view.
             """);
 
     public Task<ValidationResult> ValidateInputAsync(JsonElement input, ToolExecutionContext context)
@@ -482,12 +535,19 @@ public sealed class MailboxStatusTool : ITool
             return Task.FromResult(ValidationResult.Invalid("request.limit must be greater than 0."));
 
         if (!IsSupportedView(parsed.Request.View))
-            return Task.FromResult(ValidationResult.Invalid("request.view must be one of overview, list, inbox, outbox, or thread."));
+            return Task.FromResult(ValidationResult.Invalid("request.view must be one of overview, list, inbox, outbox, thread, or pending."));
 
         if (IsThreadView(parsed.Request.View) &&
             string.IsNullOrWhiteSpace(parsed.Request.ThreadId))
         {
             return Task.FromResult(ValidationResult.Invalid("request.thread_id is required when request.view is thread."));
+        }
+
+        if (IsPendingView(parsed.Request.View) &&
+            string.IsNullOrWhiteSpace(parsed.Request.Participant) &&
+            string.IsNullOrWhiteSpace(parsed.Request.Recipient))
+        {
+            return Task.FromResult(ValidationResult.Invalid("request.participant or request.recipient is required when request.view is pending."));
         }
 
         return Task.FromResult(ValidationResult.Valid());
@@ -542,6 +602,23 @@ public sealed class MailboxStatusTool : ITool
 
             return Task.FromResult(ToolResult.Success(
                 AgentMessageFormatter.FormatThread(threadId, thread)));
+        }
+
+        if (IsPendingView(request.View))
+        {
+            var participant = ResolveInboxParticipant(request);
+            if (string.IsNullOrWhiteSpace(participant))
+                return Task.FromResult(ToolResult.Error("request.participant or request.recipient is required for pending view."));
+
+            var pending = AgentMessageWorkflow.ListPendingActions(_messageRuntime, participant, request.Limit);
+            if (request.MarkAsRead)
+            {
+                foreach (var item in pending)
+                    _messageRuntime.MarkMessageRead(item.TriggerMessage.Id);
+            }
+
+            return Task.FromResult(ToolResult.Success(
+                AgentMessageFormatter.FormatPendingActions(participant, pending)));
         }
 
         if (IsInboxView(request.View))
@@ -621,7 +698,8 @@ public sealed class MailboxStatusTool : ITool
         view.Equals("list", StringComparison.OrdinalIgnoreCase) ||
         view.Equals("inbox", StringComparison.OrdinalIgnoreCase) ||
         view.Equals("outbox", StringComparison.OrdinalIgnoreCase) ||
-        view.Equals("thread", StringComparison.OrdinalIgnoreCase);
+        view.Equals("thread", StringComparison.OrdinalIgnoreCase) ||
+        view.Equals("pending", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsInboxView(string? view) =>
         view?.Equals("inbox", StringComparison.OrdinalIgnoreCase) == true;
@@ -631,6 +709,9 @@ public sealed class MailboxStatusTool : ITool
 
     private static bool IsThreadView(string? view) =>
         view?.Equals("thread", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsPendingView(string? view) =>
+        view?.Equals("pending", StringComparison.OrdinalIgnoreCase) == true;
 
     private static bool ShouldMarkMessageAsRead(
         AgentMessage message,
@@ -667,4 +748,158 @@ public sealed class MailboxStatusTool : ITool
         string.IsNullOrWhiteSpace(request.Sender)
             ? request.Participant?.Trim()
             : request.Sender.Trim();
+}
+
+/// <summary>
+/// Responds to actionable mailbox messages such as approvals, shutdown requests, and follow-ups.
+/// </summary>
+public sealed class MailboxRespondTool : ITool
+{
+    private readonly IAgentMessageRuntime _messageRuntime;
+    private readonly IAgentMessageActivationRuntime? _activationRuntime;
+    private readonly IAgentTaskRuntime? _taskRuntime;
+
+    public MailboxRespondTool(
+        IAgentMessageRuntime messageRuntime,
+        IAgentMessageActivationRuntime? activationRuntime = null,
+        IAgentTaskRuntime? taskRuntime = null)
+    {
+        _messageRuntime = messageRuntime;
+        _activationRuntime = activationRuntime;
+        _taskRuntime = taskRuntime;
+    }
+
+    public string Name => "MailboxRespond";
+
+    public Task<string> GetDescriptionAsync() =>
+        Task.FromResult("Respond to approvals, shutdown requests, or structured follow-up messages in the mailbox.");
+
+    public JsonElement GetInputSchema() =>
+        JsonDocument.Parse("""
+        {
+          "type": "object",
+          "properties": {
+            "request": {
+              "type": "object",
+              "properties": {
+                "message_id": { "type": "string" },
+                "decision": { "type": "string" },
+                "responder": { "type": "string" },
+                "note": { "type": "string" },
+                "mark_original_as_read": { "type": "boolean" }
+              },
+              "required": ["message_id", "decision"],
+              "additionalProperties": false
+            }
+          },
+          "required": ["request"],
+          "additionalProperties": false
+        }
+        """).RootElement.Clone();
+
+    public Task<string> GetPromptAsync(ToolPromptContext context) =>
+        Task.FromResult("""
+            Respond to an actionable mailbox message.
+
+            Use this for:
+            - plan approval requests
+            - shutdown requests
+            - follow-up messages that explicitly require a response
+
+            Provide request.message_id and a request.decision such as approve, reject, ack, decline, reply, or done.
+            """);
+
+    public Task<ValidationResult> ValidateInputAsync(JsonElement input, ToolExecutionContext context)
+    {
+        var parsed = JsonSerializer.Deserialize<MailboxRespondToolInput>(input);
+        if (parsed?.Request == null ||
+            string.IsNullOrWhiteSpace(parsed.Request.MessageId) ||
+            string.IsNullOrWhiteSpace(parsed.Request.Decision))
+        {
+            return Task.FromResult(ValidationResult.Invalid("request.message_id and request.decision are required."));
+        }
+
+        return Task.FromResult(ValidationResult.Valid());
+    }
+
+    public Task<PermissionResult> CheckPermissionsAsync(JsonElement input, ToolExecutionContext context) =>
+        Task.FromResult(PermissionResult.Allow());
+
+    public bool IsReadOnly(JsonElement input) => false;
+    public bool IsConcurrencySafe(JsonElement input) => false;
+    public string GetUserFacingName(JsonElement? input = null) => "Mailbox respond";
+    public string? GetActivityDescription(JsonElement? input) => "Responding to mailbox action";
+
+    public async Task<ToolResult> ExecuteAsync(
+        JsonElement input,
+        ToolExecutionContext context,
+        IProgress<ToolProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var parsed = JsonSerializer.Deserialize<MailboxRespondToolInput>(input);
+        if (parsed?.Request == null)
+            return ToolResult.Error("request.message_id and request.decision are required.");
+
+        var request = parsed.Request;
+        var triggerMessage = _messageRuntime.GetMessage(request.MessageId!);
+        if (triggerMessage == null)
+            return ToolResult.Error($"Message '{request.MessageId!.Trim()}' was not found.");
+
+        var responder = string.IsNullOrWhiteSpace(request.Responder)
+            ? triggerMessage.To
+            : request.Responder.Trim();
+        if (!AgentMessageWorkflow.TryBuildResponse(
+                triggerMessage,
+                responder,
+                request.Decision!,
+                request.Note,
+                out var response,
+                out var error))
+        {
+            return ToolResult.Error(error!);
+        }
+
+        var delivered = _messageRuntime.SendMessage(
+            response!.From,
+            response.To,
+            response.Kind,
+            response.Body,
+            response.Subject,
+            response.RelatedMessageId,
+            response.Protocol);
+        if (request.MarkOriginalAsRead)
+            _messageRuntime.MarkMessageRead(triggerMessage.Id);
+        _ = TrySynchronizeApprovalTasks();
+
+        var lines = new List<string>
+        {
+            $"Responded to {triggerMessage.Id} with {delivered.Id}.",
+            $"- Decision: {request.Decision!.Trim().ToLowerInvariant()}",
+            $"- {AgentMessageFormatter.FormatSummaryLine(delivered)}",
+        };
+
+        if (_activationRuntime != null)
+        {
+            var activation = await _activationRuntime.TryActivateAsync(delivered, cancellationToken);
+            if (activation.Status != AgentMessageActivationStatus.NotRegistered)
+                lines.Add(SendMessageTool.FormatActivationLineForSharedUse(activation));
+        }
+
+        return ToolResult.Success(string.Join(Environment.NewLine, lines));
+    }
+
+    private AgentMailboxTaskProjectionResult? TrySynchronizeApprovalTasks()
+    {
+        if (_taskRuntime == null)
+            return null;
+
+        try
+        {
+            return AgentMailboxTaskProjector.Synchronize(_messageRuntime, _taskRuntime);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

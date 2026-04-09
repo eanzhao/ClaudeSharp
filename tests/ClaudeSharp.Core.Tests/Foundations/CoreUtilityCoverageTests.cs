@@ -149,6 +149,7 @@ public sealed class CoreUtilityCoverageTests
             new AgentWaitTool(runtime),
             new SendMessageTool(new InMemoryAgentMessageRuntime()),
             new MailboxStatusTool(new InMemoryAgentMessageRuntime()),
+            new MailboxRespondTool(new InMemoryAgentMessageRuntime()),
         };
 
         var totalOptionalParameters = tools.Sum(CountOptionalParameters);

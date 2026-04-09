@@ -148,6 +148,7 @@ public sealed class AppStateProjector
                     .OrderByDescending(message => message.CreatedAt)
                     .ThenByDescending(message => message.Id, StringComparer.OrdinalIgnoreCase)
                     .FirstOrDefault();
+                var pendingActions = AgentMessageWorkflow.ListPendingActions(runtime, participant);
                 var latestCounterparty = latest == null
                     ? null
                     : string.Equals(latest.From, participant, StringComparison.OrdinalIgnoreCase)
@@ -164,6 +165,9 @@ public sealed class AppStateProjector
                         .Select(message => message.ThreadId)
                         .Distinct(StringComparer.OrdinalIgnoreCase)
                         .Count(),
+                    PendingActionCount = pendingActions.Count,
+                    PendingPlanApprovalCount = pendingActions.Count(item =>
+                        item.ActionType == AgentMessageActionType.PlanApproval),
                     LatestThreadId = latest?.ThreadId,
                     LatestSubject = latest?.Subject,
                     LatestCounterparty = latestCounterparty,

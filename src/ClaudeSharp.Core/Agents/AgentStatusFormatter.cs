@@ -177,7 +177,7 @@ public static class AgentStatusFormatter
             builder.AppendLine();
             builder.AppendLine("Recent work items:");
             foreach (var item in recentWorkItems)
-                builder.AppendLine($"- {item.Id} [{item.Status}] {item.Title}");
+                builder.AppendLine($"- {item.Id} [{item.Status}] {item.Title}{FormatWorkItemSourceSuffix(item)}");
         }
 
         return builder.ToString().TrimEnd();
@@ -290,6 +290,8 @@ public static class AgentStatusFormatter
             builder.AppendLine($"Description: {item.Description}");
         if (!string.IsNullOrWhiteSpace(item.Owner))
             builder.AppendLine($"Owner: {item.Owner}");
+        if (!string.IsNullOrWhiteSpace(item.SourceKind))
+            builder.AppendLine($"Source: {FormatWorkItemSource(item)}");
         builder.AppendLine($"Status: {item.Status}");
         builder.AppendLine($"Created: {item.CreatedAt:O}");
         builder.AppendLine($"Updated: {item.UpdatedAt:O}");
@@ -397,7 +399,7 @@ public static class AgentStatusFormatter
         builder.AppendLine("Work items:");
         builder.AppendLine(FormatPaginationMessage("work item", items.Count, options.Offset, page.Count));
         foreach (var item in page)
-            builder.AppendLine($"- {item.Id} [{item.Status}] {item.Title}");
+            builder.AppendLine($"- {item.Id} [{item.Status}] {item.Title}{FormatWorkItemSourceSuffix(item)}");
     }
 
     private static void AppendBackgroundRuns(
@@ -474,6 +476,24 @@ public static class AgentStatusFormatter
         string.IsNullOrWhiteSpace(workItemId)
             ? string.Empty
             : $" -> {workItemId}";
+
+    private static string FormatWorkItemSource(AgentWorkItem item)
+    {
+        var ids = new List<string>();
+        if (!string.IsNullOrWhiteSpace(item.SourceId))
+            ids.Add(item.SourceId!);
+        if (!string.IsNullOrWhiteSpace(item.SourceThreadId))
+            ids.Add(item.SourceThreadId!);
+
+        return ids.Count == 0
+            ? item.SourceKind!
+            : $"{item.SourceKind} ({string.Join(", ", ids)})";
+    }
+
+    private static string FormatWorkItemSourceSuffix(AgentWorkItem item) =>
+        string.IsNullOrWhiteSpace(item.SourceKind)
+            ? string.Empty
+            : $" [{item.SourceKind}]";
 
     private static bool MatchesOwner(string? owner, string? filterOwner) =>
         string.IsNullOrWhiteSpace(filterOwner) ||

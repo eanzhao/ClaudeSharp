@@ -118,6 +118,9 @@ public sealed class AgentToolTests
         Assert.Contains(
             request.Tools.GetAllTools().Select(tool => tool.Name),
             name => string.Equals(name, "MailboxStatus", StringComparison.Ordinal));
+        Assert.Contains(
+            request.Tools.GetAllTools().Select(tool => tool.Name),
+            name => string.Equals(name, "MailboxRespond", StringComparison.Ordinal));
 
         var workItem = Assert.Single(taskRuntime.ListWorkItems());
         Assert.Equal("Platform/Ada", workItem.Owner);

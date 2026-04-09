@@ -445,13 +445,23 @@ public class MailboxCommand : ICommand
             return ShowThreadAsync(runtime, remainder, context);
         }
 
+        if (action.Equals("pending", StringComparison.OrdinalIgnoreCase))
+        {
+            return ShowPendingActionsAsync(runtime, remainder, context);
+        }
+
+        if (action.Equals("respond", StringComparison.OrdinalIgnoreCase))
+        {
+            return RespondToMessageAsync(runtime, remainder, context);
+        }
+
         if (runtime.GetMessage(trimmed) is { } direct)
         {
             context.WriteLine(AgentMessageFormatter.FormatDetails(direct));
             return Task.CompletedTask;
         }
 
-        context.WriteLine("  Usage: /mailbox [list|status], /mailbox show <message-id>, /mailbox read <message-id>, /mailbox for <participant>, /mailbox inbox <participant>, /mailbox outbox <participant>, /mailbox thread <thread-id>");
+        context.WriteLine("  Usage: /mailbox [list|status], /mailbox show <message-id>, /mailbox read <message-id>, /mailbox for <participant>, /mailbox inbox <participant>, /mailbox outbox <participant>, /mailbox thread <thread-id>, /mailbox pending <participant>, /mailbox respond <message-id> <decision> [note]");
         return Task.CompletedTask;
     }
 
@@ -570,6 +580,70 @@ public class MailboxCommand : ICommand
         }
 
         context.WriteLine(AgentMessageFormatter.FormatThread(threadId, runtime.ListThread(threadId)));
+        return Task.CompletedTask;
+    }
+
+    private static Task ShowPendingActionsAsync(
+        IAgentMessageRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        var participant = args.Trim();
+        if (string.IsNullOrWhiteSpace(participant))
+        {
+            context.WriteLine("  Usage: /mailbox pending <participant>");
+            return Task.CompletedTask;
+        }
+
+        context.WriteLine(AgentMessageFormatter.FormatPendingActions(
+            participant,
+            AgentMessageWorkflow.ListPendingActions(runtime, participant)));
+        return Task.CompletedTask;
+    }
+
+    private static Task RespondToMessageAsync(
+        IAgentMessageRuntime runtime,
+        string args,
+        CommandContext context)
+    {
+        var parts = args.Split(' ', 3, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2)
+        {
+            context.WriteLine("  Usage: /mailbox respond <message-id> <decision> [note]");
+            return Task.CompletedTask;
+        }
+
+        var trigger = runtime.GetMessage(parts[0]);
+        if (trigger == null)
+        {
+            context.WriteLine($"  Message '{parts[0]}' was not found.");
+            return Task.CompletedTask;
+        }
+
+        if (!AgentMessageWorkflow.TryBuildResponse(
+                trigger,
+                trigger.To,
+                parts[1],
+                parts.Length > 2 ? parts[2] : null,
+                out var response,
+                out var error))
+        {
+            context.WriteLine($"  {error}");
+            return Task.CompletedTask;
+        }
+
+        var delivered = runtime.SendMessage(
+            response!.From,
+            response.To,
+            response.Kind,
+            response.Body,
+            response.Subject,
+            response.RelatedMessageId,
+            response.Protocol);
+        runtime.MarkMessageRead(trigger.Id);
+        AgentMailboxTaskProjector.Synchronize(runtime, context.AgentTaskRuntime);
+        context.WriteLine($"Responded to {trigger.Id} with {delivered.Id}.");
+        context.WriteLine(AgentMessageFormatter.FormatDetails(delivered));
         return Task.CompletedTask;
     }
 

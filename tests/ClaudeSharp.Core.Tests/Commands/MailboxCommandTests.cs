@@ -52,14 +52,37 @@ public sealed class MailboxCommandTests
         Assert.Contains("Timeline:", output, StringComparison.Ordinal);
     }
 
-    private static CommandContext CreateContext(List<string> lines) =>
+    [Fact]
+    public async Task ExecuteAsync_CanRenderPendingActionsAndRespond()
+    {
+        var runtime = new InMemoryAgentMessageRuntime();
+        var taskRuntime = new InMemoryAgentTaskRuntime();
+        var trigger = runtime.SendMessage("lead", "Platform/Ada", AgentMessageKind.PlanApprovalRequest, "Approve this plan", subject: "Plan");
+        AgentMailboxTaskProjector.Synchronize(runtime, taskRuntime);
+        var lines = new List<string>();
+        var command = new MailboxCommand(runtime);
+
+        await command.ExecuteAsync("pending Platform/Ada", CreateContext(lines, taskRuntime));
+        await command.ExecuteAsync($"respond {trigger.Id} approve Looks good", CreateContext(lines, taskRuntime));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Mailbox pending actions: Platform/Ada", output, StringComparison.Ordinal);
+        Assert.Contains($"Responded to {trigger.Id}", output, StringComparison.Ordinal);
+        Assert.Equal(AgentMessageStatus.Read, runtime.GetMessage(trigger.Id)?.Status);
+        Assert.Contains(runtime.ListThread(trigger.ThreadId), message => message.Kind == AgentMessageKind.PlanApprovalResponse);
+        Assert.Equal(AgentWorkItemStatus.Completed, Assert.Single(taskRuntime.ListWorkItems()).Status);
+    }
+
+    private static CommandContext CreateContext(
+        List<string> lines,
+        IAgentTaskRuntime? taskRuntime = null) =>
         new()
         {
             WriteLine = lines.Add,
             Tools = new ToolRegistry(),
             QueryEngine = null!,
             PermissionContext = new PermissionContext(),
-            AgentTaskRuntime = new InMemoryAgentTaskRuntime(),
+            AgentTaskRuntime = taskRuntime ?? new InMemoryAgentTaskRuntime(),
             AgentMessageRuntime = null,
             Commands = [],
             CancellationToken = CancellationToken.None,

@@ -37,6 +37,9 @@ public sealed class AgentWorkItem
     public required string Title { get; set; }
     public string? Description { get; set; }
     public string? Owner { get; set; }
+    public string? SourceKind { get; set; }
+    public string? SourceId { get; set; }
+    public string? SourceThreadId { get; set; }
     public AgentWorkItemStatus Status { get; set; } = AgentWorkItemStatus.Pending;
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -64,6 +67,9 @@ public sealed class AgentWorkItem
             Title = Title,
             Description = Description,
             Owner = Owner,
+            SourceKind = SourceKind,
+            SourceId = SourceId,
+            SourceThreadId = SourceThreadId,
             Status = Status,
             CreatedAt = CreatedAt,
             UpdatedAt = UpdatedAt,

@@ -7,6 +7,33 @@ namespace ClaudeSharp.Core.Agents;
 /// </summary>
 public static class AgentMessageFormatter
 {
+    public static string FormatPendingActions(
+        string participant,
+        IReadOnlyList<AgentMessageActionItem> items)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Mailbox pending actions: {participant}");
+        builder.AppendLine($"  Pending: {items.Count}");
+
+        if (items.Count == 0)
+        {
+            builder.AppendLine("  Items: (none)");
+            return builder.ToString().TrimEnd();
+        }
+
+        builder.AppendLine("  Items:");
+        foreach (var item in items)
+        {
+            var message = item.TriggerMessage;
+            var decisions = string.Join(", ", item.Decisions);
+            builder.AppendLine(
+                $"  - {message.Id} | {item.ActionType} | from {message.From} | decisions: {decisions}");
+            builder.AppendLine($"    {TruncatePreview(message.Body)}");
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
     public static string FormatInbox(
         string participant,
         IReadOnlyList<AgentMessage> messages)
@@ -196,12 +223,15 @@ public static class AgentMessageFormatter
 
     public static string FormatSummaryLine(AgentMessage message)
     {
-        var preview = message.Body.Length <= 48
-            ? message.Body
-            : $"{message.Body[..45]}...";
+        var preview = TruncatePreview(message.Body);
         var protocolNote = FormatProtocolSummary(message.Protocol);
         return $"{message.Id} | {message.From} -> {message.To} | {message.Kind} | {message.Status}{protocolNote} | {preview}";
     }
+
+    private static string TruncatePreview(string text) =>
+        text.Length <= 48
+            ? text
+            : $"{text[..45]}...";
 
     private static string FormatProtocolSummary(AgentMessageProtocol? protocol)
     {

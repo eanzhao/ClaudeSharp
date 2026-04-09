@@ -34,6 +34,9 @@ public static class AgentTaskPersistence
                 Title = item.Title,
                 Description = item.Description,
                 Owner = item.Owner,
+                SourceKind = item.SourceKind,
+                SourceId = item.SourceId,
+                SourceThreadId = item.SourceThreadId,
                 Status = item.Status,
                 CreatedAt = item.CreatedAt,
                 UpdatedAt = item.UpdatedAt,
@@ -193,6 +196,9 @@ public static class AgentTaskPersistence
             Title = payload.Title,
             Description = payload.Description,
             Owner = payload.Owner,
+            SourceKind = payload.SourceKind,
+            SourceId = payload.SourceId,
+            SourceThreadId = payload.SourceThreadId,
             Status = payload.Status,
             CreatedAt = payload.CreatedAt,
             UpdatedAt = payload.UpdatedAt,
@@ -246,6 +252,9 @@ public static class AgentTaskPersistence
         public required string Title { get; init; }
         public string? Description { get; init; }
         public string? Owner { get; init; }
+        public string? SourceKind { get; init; }
+        public string? SourceId { get; init; }
+        public string? SourceThreadId { get; init; }
         public AgentWorkItemStatus Status { get; init; }
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset UpdatedAt { get; init; }

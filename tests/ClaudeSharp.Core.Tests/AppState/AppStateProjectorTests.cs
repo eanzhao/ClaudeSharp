@@ -12,12 +12,25 @@ namespace ClaudeSharp.Core.Tests.AppState;
 public sealed class AppStateProjectorTests
 {
     [Fact]
-    public void CreateSnapshot_ProjectsMcpConnectionsAgentWorkItemsAndTeams()
+    public void CreateSnapshot_ProjectsMcpConnectionsAgentWorkItemsTeamsAndMailboxes()
     {
         var runtime = new InMemoryAgentTaskRuntime();
         var pending = runtime.CreateWorkItem("pending");
         var active = runtime.CreateWorkItem("active");
         runtime.UpdateWorkItem(active.Id, item => item.Status = AgentWorkItemStatus.InProgress);
+        var messageRuntime = new InMemoryAgentMessageRuntime();
+        messageRuntime.SendMessage("lead", "Ada", AgentMessageKind.PlanApprovalRequest, "Approve launch", subject: "Launch");
+        messageRuntime.SendMessage(
+            "lead",
+            "Ada",
+            "Please confirm the rollout",
+            AgentMessageKind.Note,
+            subject: "Launch",
+            protocol: new AgentMessageProtocol
+            {
+                ActionName = "follow-up-request",
+                RequiresResponse = true,
+            });
         var teamRuntime = new InMemoryAgentTeamRuntime();
         var team = teamRuntime.CreateTeam("Platform", leadName: "Ada");
         teamRuntime.AddMember(team.Id, "Bob");
@@ -49,7 +62,8 @@ public sealed class AppStateProjectorTests
             },
             mcpConnectionManager: mcp,
             agentTaskRuntime: runtime,
-            agentTeamRuntime: teamRuntime);
+            agentTeamRuntime: teamRuntime,
+            agentMessageRuntime: messageRuntime);
 
         Assert.Equal("session-1", snapshot.SessionId);
         Assert.Equal("/workspace", snapshot.WorkingDirectory);
@@ -66,5 +80,11 @@ public sealed class AppStateProjectorTests
         Assert.Equal("Platform", projectedTeam.Name);
         Assert.Equal("Ada", projectedTeam.LeadName);
         Assert.Equal(["Ada", "Bob"], projectedTeam.Members);
+        var adaMailbox = Assert.Single(snapshot.Mailboxes, mailbox =>
+            string.Equals(mailbox.Participant, "Ada", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(2, adaMailbox.PendingActionCount);
+        Assert.Equal(1, adaMailbox.PendingPlanApprovalCount);
+        Assert.Equal(2, adaMailbox.InboxCount);
+        Assert.Equal(2, adaMailbox.UnreadCount);
     }
 }

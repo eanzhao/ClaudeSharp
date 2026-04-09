@@ -10,6 +10,8 @@ public sealed record AppStateMailboxSnapshot
     public int UnreadCount { get; init; }
     public int OutboxCount { get; init; }
     public int ThreadCount { get; init; }
+    public int PendingActionCount { get; init; }
+    public int PendingPlanApprovalCount { get; init; }
     public string? LatestThreadId { get; init; }
     public string? LatestSubject { get; init; }
     public string? LatestCounterparty { get; init; }

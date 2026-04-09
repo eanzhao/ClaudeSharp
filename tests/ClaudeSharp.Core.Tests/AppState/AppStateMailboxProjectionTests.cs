@@ -10,13 +10,22 @@ namespace ClaudeSharp.Core.Tests.AppState;
 public sealed class AppStateMailboxProjectionTests
 {
     [Fact]
-    public void CreateSnapshot_ProjectsMailboxSummaries()
+    public void CreateSnapshot_ProjectsPendingMailboxActionsAndPlanApprovals()
     {
         var runtime = new InMemoryAgentMessageRuntime();
-        var launch = runtime.SendMessage("Ada", "Bob", "Inspect launch", AgentMessageKind.Note, subject: "Launch");
-        runtime.SendMessage("Ada", "Bob", "Follow up", AgentMessageKind.PlanApprovalRequest, subject: "Launch");
-        runtime.SendMessage("Bob", "Ada", "Looks good", AgentMessageKind.PlanApprovalResponse, subject: "Re: Launch", relatedMessageId: launch.Id);
-        runtime.MarkRead(launch.Id);
+        runtime.SendMessage("lead", "Ada", AgentMessageKind.PlanApprovalRequest, "Approve launch", subject: "Launch");
+        runtime.SendMessage("lead", "Ada", AgentMessageKind.ShutdownRequest, "Pause rollout", subject: "Launch");
+        runtime.SendMessage(
+            "lead",
+            "Ada",
+            "Please confirm the rollout",
+            AgentMessageKind.Note,
+            subject: "Launch",
+            protocol: new AgentMessageProtocol
+            {
+                ActionName = "follow-up-request",
+                RequiresResponse = true,
+            });
 
         var projector = new AppStateProjector();
         var snapshot = projector.CreateSnapshot(
@@ -26,20 +35,50 @@ public sealed class AppStateMailboxProjectionTests
 
         var ada = Assert.Single(snapshot.Mailboxes, mailbox =>
             string.Equals(mailbox.Participant, "Ada", StringComparison.OrdinalIgnoreCase));
-        var bob = Assert.Single(snapshot.Mailboxes, mailbox =>
-            string.Equals(mailbox.Participant, "Bob", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal(3, ada.InboxCount);
+        Assert.Equal(3, ada.UnreadCount);
+        Assert.Equal(0, ada.OutboxCount);
+        Assert.Equal(3, ada.ThreadCount);
+        Assert.Equal(3, ada.PendingActionCount);
+        Assert.Equal(1, ada.PendingPlanApprovalCount);
+        Assert.Equal("lead", ada.LatestCounterparty);
+    }
+
+    [Fact]
+    public void CreateSnapshot_ExcludesResolvedPlanApprovalsFromPendingCounts()
+    {
+        var runtime = new InMemoryAgentMessageRuntime();
+        var request = runtime.SendMessage(
+            "lead",
+            "Ada",
+            AgentMessageKind.PlanApprovalRequest,
+            "Approve launch",
+            subject: "Launch");
+        runtime.SendMessage(
+            "Ada",
+            "lead",
+            AgentMessageKind.PlanApprovalResponse,
+            "Approved",
+            subject: "Re: Launch",
+            relatedMessageId: request.Id);
+
+        var projector = new AppStateProjector();
+        var snapshot = projector.CreateSnapshot(
+            "/workspace",
+            PermissionMode.Plan,
+            agentMessageRuntime: runtime);
+
+        var ada = Assert.Single(snapshot.Mailboxes, mailbox =>
+            string.Equals(mailbox.Participant, "Ada", StringComparison.OrdinalIgnoreCase));
 
         Assert.Equal(1, ada.InboxCount);
         Assert.Equal(1, ada.UnreadCount);
-        Assert.Equal(2, ada.OutboxCount);
-        Assert.Equal(2, ada.ThreadCount);
-        Assert.Equal("Bob", ada.LatestCounterparty);
-
-        Assert.Equal(2, bob.InboxCount);
-        Assert.Equal(1, bob.UnreadCount);
-        Assert.Equal(1, bob.OutboxCount);
-        Assert.Equal(2, bob.ThreadCount);
-        Assert.Equal("Ada", bob.LatestCounterparty);
+        Assert.Equal(1, ada.OutboxCount);
+        Assert.Equal(1, ada.ThreadCount);
+        Assert.Equal(0, ada.PendingActionCount);
+        Assert.Equal(0, ada.PendingPlanApprovalCount);
+        Assert.Equal("lead", ada.LatestCounterparty);
     }
 
     [Fact]

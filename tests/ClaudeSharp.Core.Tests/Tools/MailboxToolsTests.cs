@@ -113,6 +113,38 @@ public sealed class MailboxToolsTests
     }
 
     [Fact]
+    public async Task SendMessageTool_ExecuteAsync_SynchronizesPlanApprovalTodo()
+    {
+        var messages = new InMemoryAgentMessageRuntime();
+        var tasks = new InMemoryAgentTaskRuntime();
+        var tool = new SendMessageTool(messages, taskRuntime: tasks);
+
+        var result = await tool.ExecuteAsync(
+            Json(new
+            {
+                request = new
+                {
+                    to = "Platform/Ada",
+                    from = "lead",
+                    message = new
+                    {
+                        kind = "PlanApprovalRequest",
+                        body = "Approve this launch plan",
+                        subject = "Launch",
+                    },
+                },
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        var workItem = Assert.Single(tasks.ListWorkItems());
+        Assert.Equal("Approval: Launch", workItem.Title);
+        Assert.Equal(AgentWorkItemStatus.Pending, workItem.Status);
+        Assert.Equal("Platform/Ada", workItem.Owner);
+        Assert.Equal(AgentWorkItemSourceKinds.MailboxPlanApproval, workItem.SourceKind);
+    }
+
+    [Fact]
     public async Task MailboxStatusTool_ExecuteAsync_RendersOverviewFiltersAndDetails()
     {
         var runtime = new InMemoryAgentMessageRuntime();
@@ -211,6 +243,64 @@ public sealed class MailboxToolsTests
     }
 
     [Fact]
+    public async Task MailboxStatusTool_ExecuteAsync_RendersPendingActions()
+    {
+        var runtime = new InMemoryAgentMessageRuntime();
+        runtime.SendMessage("lead", "Platform/Ada", AgentMessageKind.PlanApprovalRequest, "Approve this plan", subject: "Plan");
+        runtime.SendMessage(
+            "lead",
+            "Platform/Ada",
+            AgentMessageKind.Note,
+            "Need a follow-up",
+            protocol: new AgentMessageProtocol
+            {
+                RequiresResponse = true,
+            });
+        var tool = new MailboxStatusTool(runtime);
+
+        var result = await tool.ExecuteAsync(
+            Json(new { request = new { view = "pending", participant = "Platform/Ada" } }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("Mailbox pending actions: Platform/Ada", result.Data, StringComparison.Ordinal);
+        Assert.Contains("PlanApproval", result.Data, StringComparison.Ordinal);
+        Assert.Contains("FollowUp", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MailboxRespondTool_ExecuteAsync_SendsResponseAndMarksOriginalRead()
+    {
+        var runtime = new InMemoryAgentMessageRuntime();
+        var tasks = new InMemoryAgentTaskRuntime();
+        var trigger = runtime.SendMessage("lead", "Platform/Ada", AgentMessageKind.PlanApprovalRequest, "Approve this plan", subject: "Plan");
+        AgentMailboxTaskProjector.Synchronize(runtime, tasks);
+        var tool = new MailboxRespondTool(runtime, taskRuntime: tasks);
+
+        var result = await tool.ExecuteAsync(
+            Json(new
+            {
+                request = new
+                {
+                    message_id = trigger.Id,
+                    decision = "approve",
+                    note = "Looks good",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains($"Responded to {trigger.Id}", result.Data, StringComparison.Ordinal);
+        var all = runtime.ListThread(trigger.ThreadId);
+        Assert.Equal(2, all.Count);
+        Assert.Equal(AgentMessageKind.PlanApprovalResponse, all[0].Kind == AgentMessageKind.PlanApprovalRequest ? all[1].Kind : all[0].Kind);
+        Assert.Equal(AgentMessageStatus.Read, runtime.GetMessage(trigger.Id)?.Status);
+        var workItem = Assert.Single(tasks.ListWorkItems());
+        Assert.Equal(AgentWorkItemStatus.Completed, workItem.Status);
+        Assert.Contains("Decision: approved.", workItem.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MailboxStatusTool_ValidateInputAsync_RequiresThreadIdForThreadView()
     {
         var tool = new MailboxStatusTool(new InMemoryAgentMessageRuntime());
@@ -221,6 +311,19 @@ public sealed class MailboxToolsTests
 
         Assert.False(result.IsValid);
         Assert.Contains("thread_id", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MailboxStatusTool_ValidateInputAsync_RequiresParticipantForPendingView()
+    {
+        var tool = new MailboxStatusTool(new InMemoryAgentMessageRuntime());
+
+        var result = await tool.ValidateInputAsync(
+            Json(new { request = new { view = "pending" } }),
+            CreateContext());
+
+        Assert.False(result.IsValid);
+        Assert.Contains("participant", result.Message, StringComparison.Ordinal);
     }
 
     private static JsonElement Json(object value) =>

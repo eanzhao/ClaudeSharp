@@ -417,7 +417,8 @@ public sealed class AgentTool : ITool
         if (_messageRuntime != null)
         {
             registry.Register(new MailboxStatusTool(_messageRuntime));
-            registry.Register(new SendMessageTool(_messageRuntime, _teamRuntime, _messageActivationRuntime));
+            registry.Register(new MailboxRespondTool(_messageRuntime, _messageActivationRuntime, _taskRuntime));
+            registry.Register(new SendMessageTool(_messageRuntime, _teamRuntime, _messageActivationRuntime, _taskRuntime));
         }
         registry.Register(new WebFetchTool());
         registry.Register(new WebSearchTool(_providerCapabilityRouter, () => model));

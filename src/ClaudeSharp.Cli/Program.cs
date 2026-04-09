@@ -205,6 +205,7 @@ internal static class Program
             appStateStore,
             new JsonFileAppStateBoundary(CreateAppStatePath()));
         var appStateProjector = new AppStateProjector();
+        AgentMailboxTaskProjector.Synchronize(agentMessageRuntime, agentTaskRuntime);
 
         async Task PublishAppStateAsync()
         {
@@ -318,8 +319,9 @@ internal static class Program
         registry.Register(new TeamCreateTool(agentTeamRuntime));
         registry.Register(new TeamStatusTool(agentTeamRuntime));
         registry.Register(new TeamDissolveTool(agentTeamRuntime));
-        registry.Register(new SendMessageTool(agentMessageRuntime, agentTeamRuntime, messageActivationRuntime));
+        registry.Register(new SendMessageTool(agentMessageRuntime, agentTeamRuntime, messageActivationRuntime, agentTaskRuntime));
         registry.Register(new MailboxStatusTool(agentMessageRuntime));
+        registry.Register(new MailboxRespondTool(agentMessageRuntime, messageActivationRuntime, agentTaskRuntime));
         registry.Register(new WebFetchTool());
         if (allowWebSearch)
             registry.Register(new WebSearchTool(providerRouter, currentModelAccessor));

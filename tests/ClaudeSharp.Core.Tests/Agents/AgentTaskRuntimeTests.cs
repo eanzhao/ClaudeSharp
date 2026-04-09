@@ -16,6 +16,9 @@ public sealed class AgentTaskRuntimeTests
         runtime.UpdateWorkItem(workItem.Id, item =>
         {
             item.Owner = "alice";
+            item.SourceKind = AgentWorkItemSourceKinds.MailboxPlanApproval;
+            item.SourceId = "agent-message-7";
+            item.SourceThreadId = "thread-2";
             item.Status = AgentWorkItemStatus.InProgress;
             item.AddBlock("task-2");
             item.AddBlockedBy("task-1");
@@ -31,6 +34,9 @@ public sealed class AgentTaskRuntimeTests
 
         var fetchedWorkItem = Assert.Single(runtime.ListWorkItems());
         Assert.Equal("alice", fetchedWorkItem.Owner);
+        Assert.Equal(AgentWorkItemSourceKinds.MailboxPlanApproval, fetchedWorkItem.SourceKind);
+        Assert.Equal("agent-message-7", fetchedWorkItem.SourceId);
+        Assert.Equal("thread-2", fetchedWorkItem.SourceThreadId);
         Assert.Equal(AgentWorkItemStatus.InProgress, fetchedWorkItem.Status);
         Assert.Equal(["task-2"], fetchedWorkItem.Blocks);
         Assert.Equal(["task-1"], fetchedWorkItem.BlockedBy);
