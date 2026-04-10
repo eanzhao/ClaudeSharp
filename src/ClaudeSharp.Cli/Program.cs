@@ -169,6 +169,7 @@ internal static class Program
         var agentMessageRuntime = await PersistentAgentMessageRuntime.CreateAsync(
             journal,
             agentMetadataEntries);
+        var messageActivationRuntime = new InMemoryAgentMessageActivationRuntime();
         var toolRegistry = BuildToolRegistry(
             providerRouter,
             managedPolicy.AllowWebSearch,
@@ -178,6 +179,7 @@ internal static class Program
             agentTaskRuntime,
             agentTeamRuntime,
             agentMessageRuntime,
+            messageActivationRuntime,
             agentSettings.Settings.BackgroundRunConcurrency);
         var commandRegistry = BuildCommandRegistry();
         await using var mcpRuntime = managedPolicy.AllowExternalMcpServers
@@ -273,6 +275,7 @@ internal static class Program
             agentTaskRuntime,
             agentTeamRuntime,
             agentMessageRuntime,
+            messageActivationRuntime,
             startupNote,
             PublishAppStateAsync);
 
@@ -304,12 +307,12 @@ internal static class Program
         IAgentTaskRuntime agentTaskRuntime,
         IAgentTeamRuntime agentTeamRuntime,
         IAgentMessageRuntime agentMessageRuntime,
+        IAgentMessageActivationRuntime messageActivationRuntime,
         int backgroundRunConcurrency)
     {
         var registry = new ToolRegistry();
         var backgroundRunScheduler = new BackgroundAgentRunScheduler(
             maxConcurrency: backgroundRunConcurrency);
-        var messageActivationRuntime = new InMemoryAgentMessageActivationRuntime();
         registry.Register(new BashTool());
         registry.Register(new FileReadTool());
         registry.Register(new FileWriteTool());
@@ -335,6 +338,7 @@ internal static class Program
             backgroundRunScheduler,
             messageActivationRuntime));
         registry.Register(new AgentStatusTool(agentTaskRuntime));
+        registry.Register(new AgentResumeTool(agentTaskRuntime, agentMessageRuntime, messageActivationRuntime));
         registry.Register(new AgentStopTool(agentTaskRuntime));
         registry.Register(new AgentWaitTool(agentTaskRuntime));
         return registry;
@@ -420,6 +424,7 @@ Options:
         private readonly IAgentTaskRuntime _agentTaskRuntime;
         private readonly IAgentTeamRuntime _agentTeamRuntime;
         private readonly IAgentMessageRuntime _agentMessageRuntime;
+        private readonly IAgentMessageActivationRuntime _agentMessageActivationRuntime;
         private readonly string? _startupNote;
         private readonly Func<Task>? _afterInputAsync;
         private bool _exitRequested;
@@ -434,6 +439,7 @@ Options:
             IAgentTaskRuntime agentTaskRuntime,
             IAgentTeamRuntime agentTeamRuntime,
             IAgentMessageRuntime agentMessageRuntime,
+            IAgentMessageActivationRuntime agentMessageActivationRuntime,
             string? startupNote,
             Func<Task>? afterInputAsync = null)
         {
@@ -446,6 +452,7 @@ Options:
             _agentTaskRuntime = agentTaskRuntime;
             _agentTeamRuntime = agentTeamRuntime;
             _agentMessageRuntime = agentMessageRuntime;
+            _agentMessageActivationRuntime = agentMessageActivationRuntime;
             _startupNote = startupNote;
             _afterInputAsync = afterInputAsync;
         }
@@ -465,6 +472,7 @@ Options:
                 AgentTaskRuntime = _agentTaskRuntime,
                 AgentTeamRuntime = _agentTeamRuntime,
                 AgentMessageRuntime = _agentMessageRuntime,
+                AgentMessageActivationRuntime = _agentMessageActivationRuntime,
                 Commands = _commandRegistry.GetAll(),
                 DelayAsync = static (delay, cancellationToken) => Task.Delay(delay, cancellationToken),
                 CancellationToken = CancellationToken.None,

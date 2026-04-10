@@ -105,7 +105,7 @@ public sealed class AgentsCommandTests
         Assert.Contains(awaiting.Id, output, StringComparison.Ordinal);
         Assert.Contains(awaitingResume.Id, output, StringComparison.Ordinal);
         Assert.Contains("Needs attention:", output, StringComparison.Ordinal);
-        Assert.Contains("Resume subagent so the approved work item can continue.", output, StringComparison.Ordinal);
+        Assert.Contains("Wait for subagent to finish background-run-1", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -159,6 +159,75 @@ public sealed class AgentsCommandTests
         var output = string.Join(Environment.NewLine, lines);
         Assert.Contains("--limit must be a positive integer", output, StringComparison.Ordinal);
         Assert.Contains("Usage: /agents attention", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CanResumeApprovedWorkItem()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var messages = new InMemoryAgentMessageRuntime();
+        var activations = new InMemoryAgentMessageActivationRuntime();
+        var request = messages.SendMessage(
+            "subagent",
+            "main",
+            AgentMessageKind.PlanApprovalRequest,
+            "Approve this runtime plan",
+            subject: "Runtime plan");
+        var approval = messages.SendMessage(
+            "main",
+            "subagent",
+            AgentMessageKind.PlanApprovalResponse,
+            "Looks good",
+            relatedMessageId: request.Id,
+            protocol: new AgentMessageProtocol
+            {
+                ActionName = "plan-approval-approved",
+            });
+        var workItem = runtime.CreateWorkItem("Inspect runtime", owner: "subagent");
+        runtime.UpdateWorkItem(workItem.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingResume;
+            item.ApprovalRequestId = request.Id;
+            item.ApprovalThreadId = request.ThreadId;
+        });
+        activations.RegisterOwner(
+            "subagent",
+            (trigger, _) =>
+            {
+                Assert.Equal(approval.Id, trigger.Message.Id);
+                AgentWorkItemApprovalCoordinator.TryResumeApprovedWorkItem(runtime, workItem.Id);
+                return Task.FromResult(AgentMessageActivationResult.Reactivated(
+                    "subagent",
+                    "background-run-9",
+                    workItem.Id,
+                    "Triggered by approval."));
+            });
+
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            $"resume {workItem.Id}",
+            CreateContext(runtime, lines, messageRuntime: messages, activationRuntime: activations));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains($"Resumed {workItem.Id}.", output, StringComparison.Ordinal);
+        Assert.Contains("Reactivated subagent as background-run-9", output, StringComparison.Ordinal);
+        Assert.Equal(AgentWorkItemStatus.InProgress, runtime.GetWorkItem(workItem.Id)!.Status);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReportsInvalidResumeArguments()
+    {
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "resume",
+            CreateContext(new InMemoryAgentTaskRuntime(), lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Usage: /agents resume <work-item-id>", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -426,7 +495,9 @@ public sealed class AgentsCommandTests
     private static CommandContext CreateContext(
         IAgentTaskRuntime runtime,
         List<string> lines,
-        Func<TimeSpan, CancellationToken, Task>? delayAsync = null) =>
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
+        IAgentMessageRuntime? messageRuntime = null,
+        IAgentMessageActivationRuntime? activationRuntime = null) =>
         new()
         {
             WriteLine = lines.Add,
@@ -434,6 +505,8 @@ public sealed class AgentsCommandTests
             QueryEngine = null!,
             PermissionContext = new PermissionContext(),
             AgentTaskRuntime = runtime,
+            AgentMessageRuntime = messageRuntime,
+            AgentMessageActivationRuntime = activationRuntime,
             Commands = [],
             DelayAsync = delayAsync,
             CancellationToken = CancellationToken.None,

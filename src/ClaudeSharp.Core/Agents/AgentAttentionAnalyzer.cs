@@ -68,9 +68,7 @@ public static class AgentAttentionAnalyzer
             AgentWorkItemStatus.AwaitingResume when activeOwnerRun != null =>
                 $"Wait for {activeOwnerRun.Owner} to finish {activeOwnerRun.Id}, or inspect that run before resuming this work item.",
             AgentWorkItemStatus.AwaitingResume =>
-                string.IsNullOrWhiteSpace(item.Owner)
-                    ? "Resume the approved agent task."
-                    : $"Resume {item.Owner} so the approved work item can continue.",
+                $"Run /agents resume {item.Id} to continue the approved work item.",
             _ => null,
         };
     }

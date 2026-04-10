@@ -145,6 +145,7 @@ public sealed class CoreUtilityCoverageTests
             new WebSearchTool(new DefaultProviderCapabilityRouter(), () => ClaudeModels.DefaultMainModel),
             new AgentTool(new NoOpAgentRunner(), new DefaultProviderCapabilityRouter(), runtime, hooks: HookRuntime.Empty),
             new AgentStatusTool(runtime),
+            new AgentResumeTool(runtime, new InMemoryAgentMessageRuntime(), new InMemoryAgentMessageActivationRuntime()),
             new AgentStopTool(runtime),
             new AgentWaitTool(runtime),
             new SendMessageTool(new InMemoryAgentMessageRuntime()),

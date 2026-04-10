@@ -727,6 +727,12 @@ public class AgentsCommand : ICommand
         }
 
         if (parts.Length > 0 &&
+            parts[0].Equals("resume", StringComparison.OrdinalIgnoreCase))
+        {
+            return ResumeWorkItemAsync(trimmed, context);
+        }
+
+        if (parts.Length > 0 &&
             parts[0].Equals("wait", StringComparison.OrdinalIgnoreCase))
         {
             return WaitForBackgroundRunAsync(trimmed, context);
@@ -758,7 +764,7 @@ public class AgentsCommand : ICommand
             if (!TryParseSummaryOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents summary arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents resume <work-item-id>, /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -772,7 +778,7 @@ public class AgentsCommand : ICommand
             if (!TryParseOverviewOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents resume <work-item-id>, /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -793,8 +799,34 @@ public class AgentsCommand : ICommand
         }
 
         context.WriteLine(details);
-        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents resume <work-item-id>, /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
         return Task.CompletedTask;
+    }
+
+    private static async Task ResumeWorkItemAsync(
+        string args,
+        CommandContext context)
+    {
+        var parts = args.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length != 2)
+        {
+            context.WriteLine("  Usage: /agents resume <work-item-id>");
+            return;
+        }
+
+        if (context.AgentMessageRuntime == null || context.AgentMessageActivationRuntime == null)
+        {
+            context.WriteLine("  Mailbox resume is not configured in this runtime.");
+            return;
+        }
+
+        var result = await AgentWorkItemResumer.TryResumeAsync(
+            context.AgentTaskRuntime,
+            context.AgentMessageRuntime,
+            context.AgentMessageActivationRuntime,
+            parts[1],
+            context.CancellationToken);
+        context.WriteLine(AgentWorkItemResumeFormatter.Format(result));
     }
 
     private static async Task WaitForBackgroundRunAsync(

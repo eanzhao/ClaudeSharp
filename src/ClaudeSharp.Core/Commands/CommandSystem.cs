@@ -34,6 +34,7 @@ public class CommandContext
     public required IAgentTaskRuntime AgentTaskRuntime { get; init; }
     public IAgentTeamRuntime? AgentTeamRuntime { get; init; }
     public IAgentMessageRuntime? AgentMessageRuntime { get; init; }
+    public IAgentMessageActivationRuntime? AgentMessageActivationRuntime { get; init; }
     public required IReadOnlyList<ICommand> Commands { get; init; }
     public Func<TimeSpan, CancellationToken, Task>? DelayAsync { get; init; }
     public CancellationToken CancellationToken { get; init; }

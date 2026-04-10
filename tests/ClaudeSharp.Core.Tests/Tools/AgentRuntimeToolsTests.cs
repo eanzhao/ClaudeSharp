@@ -142,6 +142,73 @@ public sealed class AgentRuntimeToolsTests
     }
 
     [Fact]
+    public async Task AgentResumeTool_ValidateAndExecute_CoversSuccessAndErrors()
+    {
+        var messages = new InMemoryAgentMessageRuntime();
+        var request = messages.SendMessage(
+            "subagent",
+            "main",
+            AgentMessageKind.PlanApprovalRequest,
+            "Approve this runtime plan",
+            subject: "Runtime plan");
+        var approval = messages.SendMessage(
+            "main",
+            "subagent",
+            AgentMessageKind.PlanApprovalResponse,
+            "Looks good",
+            relatedMessageId: request.Id,
+            protocol: new AgentMessageProtocol
+            {
+                ActionName = "plan-approval-approved",
+            });
+
+        var tasks = new InMemoryAgentTaskRuntime();
+        var workItem = tasks.CreateWorkItem("Inspect runtime", owner: "subagent");
+        tasks.UpdateWorkItem(workItem.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingResume;
+            item.ApprovalRequestId = request.Id;
+            item.ApprovalThreadId = request.ThreadId;
+        });
+
+        var activations = new InMemoryAgentMessageActivationRuntime();
+        activations.RegisterOwner(
+            "subagent",
+            (trigger, _) =>
+            {
+                Assert.Equal(approval.Id, trigger.Message.Id);
+                AgentWorkItemApprovalCoordinator.TryResumeApprovedWorkItem(tasks, workItem.Id);
+                return Task.FromResult(AgentMessageActivationResult.Reactivated(
+                    "subagent",
+                    "background-run-3",
+                    workItem.Id,
+                    "Triggered by approval."));
+            });
+
+        var tool = new AgentResumeTool(tasks, messages, activations);
+        var context = CreateContext();
+
+        var invalid = await tool.ValidateInputAsync(Json(new { id = "" }), context);
+        var success = await tool.ExecuteAsync(
+            Json(new { id = workItem.Id }),
+            context);
+        var missing = await tool.ExecuteAsync(
+            Json(new { id = "missing-work-item" }),
+            context);
+
+        Assert.Equal("id is required.", invalid.Message);
+        Assert.False(success.IsError);
+        Assert.Contains($"Resumed {workItem.Id}.", success.Data, StringComparison.Ordinal);
+        Assert.Contains("Reactivated subagent as background-run-3", success.Data, StringComparison.Ordinal);
+        Assert.True(missing.IsError);
+        Assert.Contains("No work item matched id 'missing-work-item'.", missing.Data, StringComparison.Ordinal);
+        Assert.False(tool.IsReadOnly(default));
+        Assert.False(tool.IsConcurrencySafe(default));
+        Assert.Equal("Resume subagent", tool.GetUserFacingName());
+        Assert.Equal("Resuming subagent", tool.GetActivityDescription(null));
+    }
+
+    [Fact]
     public async Task AgentWaitTool_ValidateAndExecute_CoverSuccessTimeoutAndMissingRuns()
     {
         var runtime = new InMemoryAgentTaskRuntime();

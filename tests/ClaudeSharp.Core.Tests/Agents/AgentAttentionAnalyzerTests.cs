@@ -34,7 +34,7 @@ public sealed class AgentAttentionAnalyzerTests
         Assert.Contains(items, item =>
             item.WorkItem.Id == awaitingResume.Id &&
             item.Summary == "Approved and ready to resume." &&
-            item.NextAction.Contains("Resume agent-b", StringComparison.Ordinal));
+            item.NextAction.Contains($"/agents resume {awaitingResume.Id}", StringComparison.Ordinal));
     }
 
     [Fact]
