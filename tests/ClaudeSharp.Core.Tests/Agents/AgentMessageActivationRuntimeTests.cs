@@ -54,6 +54,38 @@ public sealed class AgentMessageActivationRuntimeTests
         });
     }
 
+    [Fact]
+    public async Task TryActivateAsync_DoesNotReuseCompletedAlreadyActiveResult()
+    {
+        var runtime = new InMemoryAgentMessageActivationRuntime();
+        var calls = 0;
+
+        runtime.RegisterOwner(
+            "Platform/Ada",
+            (request, _) =>
+            {
+                calls++;
+                return Task.FromResult(
+                    calls == 1
+                        ? AgentMessageActivationResult.AlreadyActive(
+                            "Platform/Ada",
+                            $"Trigger {request.Message.Id} is waiting.")
+                        : AgentMessageActivationResult.Reactivated(
+                            "Platform/Ada",
+                            "background-run-8",
+                            "work-item-2",
+                            "Triggered later."));
+            });
+
+        var first = await runtime.TryActivateAsync(CreateMessage("Platform/Ada"));
+        var second = await runtime.TryActivateAsync(CreateMessage("Platform/Ada"));
+
+        Assert.Equal(2, calls);
+        Assert.Equal(AgentMessageActivationStatus.AlreadyActive, first.Status);
+        Assert.Equal(AgentMessageActivationStatus.Reactivated, second.Status);
+        Assert.Equal("background-run-8", second.BackgroundRunId);
+    }
+
     private static AgentMessage CreateMessage(string recipient, string? resumeReason = null) =>
         new()
         {

@@ -128,14 +128,20 @@ public sealed class InMemoryAgentMessageActivationRuntime : IAgentMessageActivat
                 return Task.FromResult(AgentMessageActivationResult.NotRegistered(normalizedOwner));
 
             if (_inFlightActivations.TryGetValue(normalizedOwner, out var inFlight))
-                return inFlight;
+            {
+                if (!inFlight.IsCompleted)
+                    return inFlight;
+
+                _inFlightActivations.Remove(normalizedOwner);
+            }
 
             var activationTask = ExecuteActivationAsync(
                 normalizedOwner,
                 activateAsync,
                 request,
                 cancellationToken);
-            _inFlightActivations[normalizedOwner] = activationTask;
+            if (!activationTask.IsCompleted)
+                _inFlightActivations[normalizedOwner] = activationTask;
             return activationTask;
         }
     }

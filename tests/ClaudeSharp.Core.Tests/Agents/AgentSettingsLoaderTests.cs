@@ -16,7 +16,8 @@ public sealed class AgentSettingsLoaderTests
 {
   "agents": {
     "backgroundConcurrency": 2,
-    "retainCompletedBackgroundRuns": 12
+    "retainCompletedBackgroundRuns": 12,
+    "autoResumeMode": "latest"
   }
 }
 """);
@@ -38,6 +39,7 @@ public sealed class AgentSettingsLoaderTests
         Assert.Equal(4, result.Settings.BackgroundRunConcurrency);
         Assert.Equal(6, result.Settings.RetainCompletedBackgroundRuns);
         Assert.Equal(8, result.Settings.RetainCompletedWorkItems);
+        Assert.Equal(AgentAutoResumeMode.Latest, result.Settings.AutoResumeMode);
         Assert.Equal(
             [Path.GetFullPath(globalConfig), Path.GetFullPath(projectConfig)],
             result.SourcePaths);
@@ -77,5 +79,43 @@ public sealed class AgentSettingsLoaderTests
         Assert.Contains(
             result.Diagnostics,
             diagnostic => diagnostic.Contains("invalid completed work-item retention", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void LoadFromFiles_ParsesAutoResumeAliasesAndRejectsInvalidValues()
+    {
+        using var temp = new TempDirectory();
+        var globalConfig = temp.WriteFile("global/settings.json", """
+{
+  "agents": {
+    "auto_resume_policy": "serial"
+  }
+}
+""");
+
+        var projectConfig = temp.WriteFile("project/.claude/settings.json", """
+{
+  "agents": {
+    "auto_resume_mode": "manual"
+  }
+}
+""");
+
+        var badConfig = temp.WriteFile("project/.claude/override.json", """
+{
+  "agents": {
+    "autoResumeMode": "mystery"
+  }
+}
+""");
+
+        var result = AgentSettingsLoader.LoadFromFiles(
+            [globalConfig, projectConfig, badConfig],
+            temp.FullPath("project"));
+
+        Assert.Equal(AgentAutoResumeMode.Disabled, result.Settings.AutoResumeMode);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Contains("invalid auto-resume mode", StringComparison.OrdinalIgnoreCase));
     }
 }

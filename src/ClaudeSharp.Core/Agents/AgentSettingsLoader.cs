@@ -66,6 +66,7 @@ public static class AgentSettingsLoader
         var backgroundRunConcurrency = current.BackgroundRunConcurrency;
         var retainCompletedBackgroundRuns = current.RetainCompletedBackgroundRuns;
         var retainCompletedWorkItems = current.RetainCompletedWorkItems;
+        var autoResumeMode = current.AutoResumeMode;
         if (TryGetProperty(agentsElement, "backgroundRunConcurrency", out var concurrencyElement) ||
             TryGetProperty(agentsElement, "background_run_concurrency", out concurrencyElement) ||
             TryGetProperty(agentsElement, "backgroundConcurrency", out concurrencyElement) ||
@@ -116,12 +117,67 @@ public static class AgentSettingsLoader
             }
         }
 
+        if (TryGetProperty(agentsElement, "autoResumeMode", out var autoResumeElement) ||
+            TryGetProperty(agentsElement, "auto_resume_mode", out autoResumeElement) ||
+            TryGetProperty(agentsElement, "autoResumePolicy", out autoResumeElement) ||
+            TryGetProperty(agentsElement, "auto_resume_policy", out autoResumeElement))
+        {
+            if (TryParseAutoResumeMode(autoResumeElement, out var parsed))
+            {
+                autoResumeMode = parsed;
+            }
+            else
+            {
+                diagnostics.Add(
+                    $"Agent settings: invalid auto-resume mode in {configPath}; using {autoResumeMode.ToString().ToLowerInvariant()}.");
+            }
+        }
+
         return current with
         {
             BackgroundRunConcurrency = backgroundRunConcurrency,
             RetainCompletedBackgroundRuns = retainCompletedBackgroundRuns,
             RetainCompletedWorkItems = retainCompletedWorkItems,
+            AutoResumeMode = autoResumeMode,
         };
+    }
+
+    private static bool TryParseAutoResumeMode(
+        JsonElement element,
+        out AgentAutoResumeMode mode)
+    {
+        mode = default;
+        if (element.ValueKind != JsonValueKind.String)
+            return false;
+
+        var value = element.GetString()?.Trim();
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        switch (value.ToLowerInvariant())
+        {
+            case "queue":
+            case "serial":
+            case "oldest":
+            case "oldest-first":
+                mode = AgentAutoResumeMode.Queue;
+                return true;
+
+            case "latest":
+            case "newest":
+            case "recent":
+                mode = AgentAutoResumeMode.Latest;
+                return true;
+
+            case "disabled":
+            case "off":
+            case "manual":
+                mode = AgentAutoResumeMode.Disabled;
+                return true;
+
+            default:
+                return false;
+        }
     }
 
     private static bool TryParseNonNegativeInt(JsonElement element, out int value)

@@ -180,6 +180,7 @@ internal static class Program
             agentTeamRuntime,
             agentMessageRuntime,
             messageActivationRuntime,
+            agentSettings.Settings.AutoResumeMode,
             agentSettings.Settings.BackgroundRunConcurrency);
         var commandRegistry = BuildCommandRegistry();
         await using var mcpRuntime = managedPolicy.AllowExternalMcpServers
@@ -308,6 +309,7 @@ internal static class Program
         IAgentTeamRuntime agentTeamRuntime,
         IAgentMessageRuntime agentMessageRuntime,
         IAgentMessageActivationRuntime messageActivationRuntime,
+        AgentAutoResumeMode autoResumeMode,
         int backgroundRunConcurrency)
     {
         var registry = new ToolRegistry();
@@ -336,7 +338,8 @@ internal static class Program
             agentMessageRuntime,
             hooks,
             backgroundRunScheduler,
-            messageActivationRuntime));
+            messageActivationRuntime,
+            autoResumeMode));
         registry.Register(new AgentStatusTool(agentTaskRuntime));
         registry.Register(new AgentResumeTool(agentTaskRuntime, agentMessageRuntime, messageActivationRuntime));
         registry.Register(new AgentStopTool(agentTaskRuntime));

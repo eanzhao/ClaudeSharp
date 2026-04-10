@@ -1,6 +1,16 @@
 namespace ClaudeSharp.Core.Agents;
 
 /// <summary>
+/// Defines how approved work items should be resumed automatically.
+/// </summary>
+public enum AgentAutoResumeMode
+{
+    Queue = 0,
+    Latest = 1,
+    Disabled = 2,
+}
+
+/// <summary>
 /// Represents configurable subagent runtime settings.
 /// </summary>
 public sealed record AgentSettings
@@ -8,6 +18,7 @@ public sealed record AgentSettings
     public int BackgroundRunConcurrency { get; init; } = 1;
     public int RetainCompletedBackgroundRuns { get; init; } = 100;
     public int RetainCompletedWorkItems { get; init; } = 100;
+    public AgentAutoResumeMode AutoResumeMode { get; init; } = AgentAutoResumeMode.Queue;
 
     public AgentRetentionPolicy BuildRetentionPolicy() =>
         new()
@@ -42,6 +53,12 @@ public sealed record AgentSettingsLoadResult(
             {
                 messages.Add(
                     $"Agents: retain {Settings.RetainCompletedBackgroundRuns} completed background runs and {Settings.RetainCompletedWorkItems} completed work items.");
+            }
+
+            if (SourcePaths.Count > 0 || Settings.AutoResumeMode != AgentAutoResumeMode.Queue)
+            {
+                messages.Add(
+                    $"Agents: auto-resume mode set to {Settings.AutoResumeMode.ToString().ToLowerInvariant()}.");
             }
 
             return messages.Count == 0

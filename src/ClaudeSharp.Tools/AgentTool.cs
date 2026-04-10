@@ -56,6 +56,7 @@ public sealed class AgentTool : ITool
     private readonly IAgentMessageActivationRuntime? _messageActivationRuntime;
     private readonly IHookRuntime _hooks;
     private readonly BackgroundAgentRunScheduler _backgroundRunScheduler;
+    private readonly AgentAutoResumeMode _autoResumeMode;
     private string? _assignmentErrorMessage;
 
     public AgentTool(
@@ -66,7 +67,8 @@ public sealed class AgentTool : ITool
         IAgentMessageRuntime? messageRuntime = null,
         IHookRuntime? hooks = null,
         BackgroundAgentRunScheduler? backgroundRunScheduler = null,
-        IAgentMessageActivationRuntime? messageActivationRuntime = null)
+        IAgentMessageActivationRuntime? messageActivationRuntime = null,
+        AgentAutoResumeMode autoResumeMode = AgentAutoResumeMode.Queue)
     {
         _runner = runner;
         _providerCapabilityRouter = providerCapabilityRouter ?? new DefaultProviderCapabilityRouter();
@@ -76,6 +78,7 @@ public sealed class AgentTool : ITool
         _messageActivationRuntime = messageActivationRuntime;
         _hooks = hooks ?? HookRuntime.Empty;
         _backgroundRunScheduler = backgroundRunScheduler ?? new BackgroundAgentRunScheduler();
+        _autoResumeMode = autoResumeMode;
     }
 
     public string Name => "Agent";
@@ -345,6 +348,10 @@ public sealed class AgentTool : ITool
                                 backgroundRun.Id,
                                 FormatResult(assignment, workItem.Id, input, result));
                             _taskRuntime.StopBackgroundRun(backgroundRun.Id, "completed");
+                            await TryAutoResumeAwaitingWorkItemsAsync(
+                                assignment.Owner,
+                                backgroundRun.Id,
+                                cancellationToken);
                             return;
                         }
 
@@ -355,6 +362,10 @@ public sealed class AgentTool : ITool
                             backgroundRun.Id,
                             $"{assignment.SubjectLabel} {workItem.Id} failed: {error}");
                         _taskRuntime.FailBackgroundRun(backgroundRun.Id, error);
+                        await TryAutoResumeAwaitingWorkItemsAsync(
+                            assignment.Owner,
+                            backgroundRun.Id,
+                            cancellationToken);
                     }
                     catch (OperationCanceledException)
                     {
@@ -365,6 +376,10 @@ public sealed class AgentTool : ITool
                             backgroundRun.Id,
                             $"{assignment.SubjectLabel} {workItem.Id} was cancelled.");
                         _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
+                        await TryAutoResumeAwaitingWorkItemsAsync(
+                            assignment.Owner,
+                            backgroundRun.Id,
+                            cancellationToken);
                     }
                     catch (Exception ex)
                     {
@@ -375,6 +390,10 @@ public sealed class AgentTool : ITool
                             backgroundRun.Id,
                             $"{assignment.SubjectLabel} {workItem.Id} failed: {ex.Message}");
                         _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
+                        await TryAutoResumeAwaitingWorkItemsAsync(
+                            assignment.Owner,
+                            backgroundRun.Id,
+                            cancellationToken);
                     }
                     finally
                     {
@@ -564,6 +583,36 @@ public sealed class AgentTool : ITool
                     MemberName = input.Teammate.MemberName,
                 },
         };
+
+    private async Task TryAutoResumeAwaitingWorkItemsAsync(
+        string? owner,
+        string backgroundRunId,
+        CancellationToken cancellationToken)
+    {
+        if (_messageRuntime == null ||
+            _messageActivationRuntime == null ||
+            string.IsNullOrWhiteSpace(owner))
+        {
+            return;
+        }
+
+        var results = await AgentAutoResumePolicy.TryResumeEligibleAsync(
+            _taskRuntime,
+            _messageRuntime,
+            _messageActivationRuntime,
+            _autoResumeMode,
+            owner,
+            limit: 1,
+            cancellationToken);
+        foreach (var result in results)
+        {
+            foreach (var line in AgentWorkItemResumeFormatter.Format(result)
+                         .Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                _taskRuntime.AppendBackgroundRunOutput(backgroundRunId, $"[auto-resume] {line}");
+            }
+        }
+    }
 
     private static PermissionContext ClonePermissionContext(PermissionContext source)
     {

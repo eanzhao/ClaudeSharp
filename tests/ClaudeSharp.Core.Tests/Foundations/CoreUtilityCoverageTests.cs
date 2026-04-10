@@ -43,6 +43,7 @@ public sealed class CoreUtilityCoverageTests
             BackgroundRunConcurrency = 3,
             RetainCompletedBackgroundRuns = 5,
             RetainCompletedWorkItems = 7,
+            AutoResumeMode = AgentAutoResumeMode.Latest,
         };
 
         var policy = settings.BuildRetentionPolicy();
@@ -57,6 +58,7 @@ public sealed class CoreUtilityCoverageTests
         Assert.Contains("Loaded diagnostics", summary, StringComparison.Ordinal);
         Assert.Contains("background concurrency set to 3", summary, StringComparison.Ordinal);
         Assert.Contains("retain 5 completed background runs and 7 completed work items", summary, StringComparison.Ordinal);
+        Assert.Contains("auto-resume mode set to latest", summary, StringComparison.Ordinal);
         Assert.Null(emptySummary);
     }
 
