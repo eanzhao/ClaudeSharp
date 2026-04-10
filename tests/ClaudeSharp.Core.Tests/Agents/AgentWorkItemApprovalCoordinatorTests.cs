@@ -31,7 +31,7 @@ public sealed class AgentWorkItemApprovalCoordinatorTests
     }
 
     [Fact]
-    public void TryApplyApprovalResponse_ApproveKeepsWorkItemAwaitingApprovalUntilResume()
+    public void TryApplyApprovalResponse_ApproveMarksWorkItemAwaitingResume()
     {
         var runtime = new InMemoryAgentTaskRuntime();
         var messages = new InMemoryAgentMessageRuntime();
@@ -64,7 +64,7 @@ public sealed class AgentWorkItemApprovalCoordinatorTests
         Assert.True(changed);
         var stored = runtime.GetWorkItem(workItem.Id);
         Assert.NotNull(stored);
-        Assert.Equal(AgentWorkItemStatus.AwaitingApproval, stored!.Status);
+        Assert.Equal(AgentWorkItemStatus.AwaitingResume, stored!.Status);
         Assert.Equal(request.Id, stored.ApprovalRequestId);
         Assert.Equal(request.ThreadId, stored.ApprovalThreadId);
     }
@@ -109,19 +109,19 @@ public sealed class AgentWorkItemApprovalCoordinatorTests
     }
 
     [Fact]
-    public void SuccessfulRunCompletion_PreservesAwaitingApprovalAndResumeClearsIt()
+    public void SuccessfulRunCompletion_PreservesAwaitingStatesAndResumeClearsThem()
     {
         var runtime = new InMemoryAgentTaskRuntime();
         var workItem = runtime.CreateWorkItem("Inspect runtime", owner: "subagent");
         runtime.UpdateWorkItem(workItem.Id, item =>
         {
-            item.Status = AgentWorkItemStatus.AwaitingApproval;
+            item.Status = AgentWorkItemStatus.AwaitingResume;
             item.ApprovalRequestId = "agent-message-1";
             item.ApprovalThreadId = "thread-1";
         });
 
         Assert.True(AgentWorkItemApprovalCoordinator.TryCompleteSuccessfulRun(runtime, workItem.Id));
-        Assert.Equal(AgentWorkItemStatus.AwaitingApproval, runtime.GetWorkItem(workItem.Id)?.Status);
+        Assert.Equal(AgentWorkItemStatus.AwaitingResume, runtime.GetWorkItem(workItem.Id)?.Status);
 
         Assert.True(AgentWorkItemApprovalCoordinator.TryResumeApprovedWorkItem(runtime, workItem.Id));
         var resumed = runtime.GetWorkItem(workItem.Id);
@@ -134,5 +134,26 @@ public sealed class AgentWorkItemApprovalCoordinatorTests
         var completed = runtime.GetWorkItem(workItem.Id);
         Assert.NotNull(completed);
         Assert.Equal(AgentWorkItemStatus.Completed, completed!.Status);
+    }
+
+    [Fact]
+    public void DescribeApprovalState_ReturnsFriendlyLabelsForWaitingStates()
+    {
+        Assert.Equal(
+            "Waiting for approval",
+            AgentWorkItemApprovalCoordinator.DescribeApprovalState(new AgentWorkItem
+            {
+                Id = "work-item-1",
+                Title = "Inspect runtime",
+                Status = AgentWorkItemStatus.AwaitingApproval,
+            }));
+        Assert.Equal(
+            "Approved, waiting to resume",
+            AgentWorkItemApprovalCoordinator.DescribeApprovalState(new AgentWorkItem
+            {
+                Id = "work-item-2",
+                Title = "Inspect runtime",
+                Status = AgentWorkItemStatus.AwaitingResume,
+            }));
     }
 }

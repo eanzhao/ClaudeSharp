@@ -272,6 +272,11 @@ public sealed class SendMessageTool : ITool
         };
         foreach (var message in delivered)
             lines.Add($"- {AgentMessageFormatter.FormatSummaryLine(message)}");
+        foreach (var message in delivered)
+        {
+            if (TryFormatOriginalWorkItemLine(message) is { } workItemLine)
+                lines.Add(workItemLine);
+        }
 
         foreach (var activation in await ActivateRecipientsAsync(delivered, sender, cancellationToken))
             lines.Add(FormatActivationLine(activation));
@@ -303,6 +308,20 @@ public sealed class SendMessageTool : ITool
         {
             // Approval tracking is best-effort; the mailbox message itself was delivered successfully.
         }
+    }
+
+    private string? TryFormatOriginalWorkItemLine(AgentMessage requestMessage)
+    {
+        if (_taskRuntime == null ||
+            requestMessage.Kind != AgentMessageKind.PlanApprovalRequest)
+        {
+            return null;
+        }
+
+        var workItem = AgentWorkItemApprovalCoordinator.FindTrackedWorkItem(_taskRuntime, requestMessage);
+        return workItem == null
+            ? null
+            : $"- Original work item: {workItem.Id} [{workItem.Status}]";
     }
 
     private AgentMailboxTaskProjectionResult? TrySynchronizeApprovalTasks()
@@ -891,6 +910,9 @@ public sealed class MailboxRespondTool : ITool
             return ToolResult.Error(error!);
         }
 
+        var originalWorkItemId = _taskRuntime == null
+            ? null
+            : AgentWorkItemApprovalCoordinator.FindTrackedWorkItem(_taskRuntime, triggerMessage)?.Id;
         var delivered = _messageRuntime.SendMessage(
             response!.From,
             response.To,
@@ -917,6 +939,9 @@ public sealed class MailboxRespondTool : ITool
             if (activation.Status != AgentMessageActivationStatus.NotRegistered)
                 lines.Add(SendMessageTool.FormatActivationLineForSharedUse(activation));
         }
+
+        if (TryFormatOriginalWorkItemLine(triggerMessage, originalWorkItemId) is { } workItemLine)
+            lines.Add(workItemLine);
 
         return ToolResult.Success(string.Join(Environment.NewLine, lines));
     }
@@ -952,6 +977,24 @@ public sealed class MailboxRespondTool : ITool
                    responseMessage.Protocol?.ActionName,
                    "plan-approval-rejected",
                    StringComparison.OrdinalIgnoreCase);
+    }
+
+    private string? TryFormatOriginalWorkItemLine(
+        AgentMessage requestMessage,
+        string? knownWorkItemId = null)
+    {
+        if (_taskRuntime == null ||
+            requestMessage.Kind != AgentMessageKind.PlanApprovalRequest)
+        {
+            return null;
+        }
+
+        var workItem = string.IsNullOrWhiteSpace(knownWorkItemId)
+            ? AgentWorkItemApprovalCoordinator.FindTrackedWorkItem(_taskRuntime, requestMessage)
+            : _taskRuntime.GetWorkItem(knownWorkItemId);
+        return workItem == null
+            ? null
+            : $"- Original work item: {workItem.Id} [{workItem.Status}]";
     }
 
     private AgentMailboxTaskProjectionResult? TrySynchronizeApprovalTasks()

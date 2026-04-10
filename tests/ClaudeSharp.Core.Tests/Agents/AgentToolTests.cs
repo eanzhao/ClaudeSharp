@@ -480,6 +480,87 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_ApprovedPlanResponseWithoutActivationLeavesOriginalWorkItemAwaitingResume()
+    {
+        var taskRuntime = new InMemoryAgentTaskRuntime();
+        var messageRuntime = new InMemoryAgentMessageRuntime();
+        var runner = new AsyncRecordingRunner(async (request, cancellationToken) =>
+        {
+            if (request.Tools.Get("SendMessage") is { } sendTool)
+            {
+                var sendResult = await sendTool.ExecuteAsync(
+                    JsonSerializer.SerializeToElement(new
+                    {
+                        request = new
+                        {
+                            to = "main",
+                            from = "subagent",
+                            message = new
+                            {
+                                kind = "PlanApprovalRequest",
+                                body = "Approve this runtime plan",
+                                subject = "Runtime plan",
+                            },
+                        },
+                    }),
+                    CreateToolContext(request, cancellationToken),
+                    cancellationToken: cancellationToken);
+
+                Assert.False(sendResult.IsError);
+            }
+
+            return new AgentExecutionResult(
+                Summary: "waiting for approval",
+                Success: true,
+                Usage: TokenUsage.Empty,
+                TurnCount: 1);
+        });
+
+        var agentTool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            taskRuntime,
+            messageRuntime: messageRuntime,
+            hooks: HookRuntime.Empty);
+
+        var launch = await agentTool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "Inspect the runtime",
+                run_in_background = true,
+            }),
+            CreateContext());
+
+        Assert.False(launch.IsError);
+        await WaitForAsync(() =>
+            taskRuntime.GetBackgroundRun("background-run-1")?.Status == AgentBackgroundRunStatus.Stopped);
+
+        var approvalRequest = Assert.Single(
+            messageRuntime.ListMessages(),
+            message => message.Kind == AgentMessageKind.PlanApprovalRequest);
+        var respondTool = new MailboxRespondTool(messageRuntime, taskRuntime: taskRuntime);
+        var response = await respondTool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                request = new
+                {
+                    message_id = approvalRequest.Id,
+                    decision = "approve",
+                    responder = "main",
+                    note = "Approved. Continue.",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(response.IsError);
+        Assert.Contains("Original work item: work-item-1 [AwaitingResume]", response.Data, StringComparison.Ordinal);
+        var original = taskRuntime.GetWorkItem("work-item-1");
+        Assert.NotNull(original);
+        Assert.Equal(AgentWorkItemStatus.AwaitingResume, original!.Status);
+        Assert.Single(runner.Requests);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ReportsRunnerFailuresAndMarksWorkItemBlocked()
     {
         var runtime = new InMemoryAgentTaskRuntime();

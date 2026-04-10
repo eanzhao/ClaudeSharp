@@ -180,6 +180,7 @@ public sealed class MailboxToolsTests
         Assert.Equal(AgentWorkItemStatus.AwaitingApproval, updated!.Status);
         Assert.Equal("agent-message-1", updated.ApprovalRequestId);
         Assert.Equal("thread-1", updated.ApprovalThreadId);
+        Assert.Contains("Original work item: work-item-1 [AwaitingApproval]", result.Data, StringComparison.Ordinal);
         var approvalTodo = tasks.ListWorkItems().Single(item => item.Id != original.Id);
         Assert.Equal(AgentWorkItemStatus.Pending, approvalTodo.Status);
     }
@@ -389,6 +390,7 @@ public sealed class MailboxToolsTests
 
         Assert.False(result.IsError);
         Assert.False(activationAttempted);
+        Assert.Contains("Original work item: work-item-1 [Blocked]", result.Data, StringComparison.Ordinal);
         var updatedOriginal = tasks.GetWorkItem(original.Id);
         Assert.NotNull(updatedOriginal);
         Assert.Equal(AgentWorkItemStatus.Blocked, updatedOriginal!.Status);
@@ -396,6 +398,51 @@ public sealed class MailboxToolsTests
         Assert.Null(updatedOriginal.ApprovalThreadId);
         var approvalTodo = tasks.ListWorkItems().Single(item => item.SourceKind == AgentWorkItemSourceKinds.MailboxPlanApproval);
         Assert.Equal(AgentWorkItemStatus.Cancelled, approvalTodo.Status);
+    }
+
+    [Fact]
+    public async Task MailboxRespondTool_ExecuteAsync_ApprovedApprovalLeavesOriginalTaskAwaitingResumeWhenNotActivated()
+    {
+        var runtime = new InMemoryAgentMessageRuntime();
+        var tasks = new InMemoryAgentTaskRuntime();
+        var trigger = runtime.SendMessage(
+            "subagent",
+            "main",
+            AgentMessageKind.PlanApprovalRequest,
+            "Approve this plan",
+            subject: "Plan");
+        var original = tasks.CreateWorkItem("Inspect runtime", owner: "subagent");
+        tasks.UpdateWorkItem(original.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingApproval;
+            item.ApprovalRequestId = trigger.Id;
+            item.ApprovalThreadId = trigger.ThreadId;
+        });
+        AgentMailboxTaskProjector.Synchronize(runtime, tasks);
+        var tool = new MailboxRespondTool(runtime, taskRuntime: tasks);
+
+        var result = await tool.ExecuteAsync(
+            Json(new
+            {
+                request = new
+                {
+                    message_id = trigger.Id,
+                    decision = "approve",
+                    responder = "main",
+                    note = "Looks good",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Contains("Original work item: work-item-1 [AwaitingResume]", result.Data, StringComparison.Ordinal);
+        var updatedOriginal = tasks.GetWorkItem(original.Id);
+        Assert.NotNull(updatedOriginal);
+        Assert.Equal(AgentWorkItemStatus.AwaitingResume, updatedOriginal!.Status);
+        Assert.Equal(trigger.Id, updatedOriginal.ApprovalRequestId);
+        Assert.Equal(trigger.ThreadId, updatedOriginal.ApprovalThreadId);
+        var approvalTodo = tasks.ListWorkItems().Single(item => item.SourceKind == AgentWorkItemSourceKinds.MailboxPlanApproval);
+        Assert.Equal(AgentWorkItemStatus.Completed, approvalTodo.Status);
     }
 
     [Fact]

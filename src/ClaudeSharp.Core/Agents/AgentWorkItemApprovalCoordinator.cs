@@ -5,6 +5,21 @@ namespace ClaudeSharp.Core.Agents;
 /// </summary>
 public static class AgentWorkItemApprovalCoordinator
 {
+    public static AgentWorkItem? FindTrackedWorkItem(
+        IAgentTaskRuntime runtime,
+        AgentMessage requestMessage)
+    {
+        ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentNullException.ThrowIfNull(requestMessage);
+
+        return runtime.ListWorkItems()
+            .FirstOrDefault(item =>
+                string.Equals(item.ApprovalRequestId, requestMessage.Id, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrWhiteSpace(item.ApprovalThreadId) &&
+                 string.Equals(item.ApprovalThreadId, requestMessage.ThreadId, StringComparison.OrdinalIgnoreCase) &&
+                 item.Status is AgentWorkItemStatus.AwaitingApproval or AgentWorkItemStatus.AwaitingResume));
+    }
+
     public static bool TryMarkAwaitingApproval(
         IAgentTaskRuntime runtime,
         string? workItemId,
@@ -42,12 +57,7 @@ public static class AgentWorkItemApprovalCoordinator
             return false;
         }
 
-        var workItem = runtime.ListWorkItems()
-            .FirstOrDefault(item =>
-                string.Equals(item.ApprovalRequestId, requestMessage.Id, StringComparison.OrdinalIgnoreCase) ||
-                (!string.IsNullOrWhiteSpace(item.ApprovalThreadId) &&
-                 string.Equals(item.ApprovalThreadId, requestMessage.ThreadId, StringComparison.OrdinalIgnoreCase) &&
-                 item.Status == AgentWorkItemStatus.AwaitingApproval));
+        var workItem = FindTrackedWorkItem(runtime, requestMessage);
         if (workItem == null)
             return false;
 
@@ -66,7 +76,7 @@ public static class AgentWorkItemApprovalCoordinator
                 return;
             }
 
-            item.Status = AgentWorkItemStatus.AwaitingApproval;
+            item.Status = AgentWorkItemStatus.AwaitingResume;
         });
     }
 
@@ -97,7 +107,7 @@ public static class AgentWorkItemApprovalCoordinator
 
         return runtime.UpdateWorkItem(workItemId, item =>
         {
-            if (item.Status == AgentWorkItemStatus.AwaitingApproval)
+            if (item.Status is AgentWorkItemStatus.AwaitingApproval or AgentWorkItemStatus.AwaitingResume)
                 return;
 
             if (item.Status is AgentWorkItemStatus.Pending or AgentWorkItemStatus.InProgress)
@@ -114,5 +124,17 @@ public static class AgentWorkItemApprovalCoordinator
 
         item.ApprovalRequestId = null;
         item.ApprovalThreadId = null;
+    }
+
+    public static string? DescribeApprovalState(AgentWorkItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        return item.Status switch
+        {
+            AgentWorkItemStatus.AwaitingApproval => "Waiting for approval",
+            AgentWorkItemStatus.AwaitingResume => "Approved, waiting to resume",
+            _ => null,
+        };
     }
 }

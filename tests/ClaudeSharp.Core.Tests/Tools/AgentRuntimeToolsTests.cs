@@ -18,6 +18,7 @@ public sealed class AgentRuntimeToolsTests
         var context = CreateContext();
 
         var invalidView = await tool.ValidateInputAsync(Json(new { view = "detail" }), context);
+        var validAttention = await tool.ValidateInputAsync(Json(new { view = "attention" }), context);
         var invalidKind = await tool.ValidateInputAsync(Json(new { kind = "queues" }), context);
         var invalidOffset = await tool.ValidateInputAsync(Json(new { offset = -1 }), context);
         var invalidLimit = await tool.ValidateInputAsync(Json(new { limit = 0 }), context);
@@ -25,7 +26,8 @@ public sealed class AgentRuntimeToolsTests
         var invalidOutputOffset = await tool.ValidateInputAsync(Json(new { output_offset = -1 }), context);
         var invalidOutputLimit = await tool.ValidateInputAsync(Json(new { output_limit = 0 }), context);
 
-        Assert.Equal("view must be overview or summary.", invalidView.Message);
+        Assert.Equal("view must be overview, summary, or attention.", invalidView.Message);
+        Assert.True(validAttention.IsValid);
         Assert.Equal("kind must be all, work_items, or background_runs.", invalidKind.Message);
         Assert.Equal("offset must be 0 or greater.", invalidOffset.Message);
         Assert.Equal("limit must be greater than 0.", invalidLimit.Message);
@@ -40,6 +42,13 @@ public sealed class AgentRuntimeToolsTests
         var runtime = new InMemoryAgentTaskRuntime();
         var completedItem = runtime.CreateWorkItem("Done", owner: "agent-a");
         runtime.UpdateWorkItem(completedItem.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var awaitingApprovalItem = runtime.CreateWorkItem("Need approval", owner: "agent-a");
+        runtime.UpdateWorkItem(awaitingApprovalItem.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingApproval;
+            item.ApprovalRequestId = "agent-message-1";
+            item.ApprovalThreadId = "thread-1";
+        });
         var blockedItem = runtime.CreateWorkItem("Blocked", owner: "agent-a");
         runtime.UpdateWorkItem(blockedItem.Id, item => item.Status = AgentWorkItemStatus.Blocked);
 
@@ -76,7 +85,21 @@ public sealed class AgentRuntimeToolsTests
                 recent_limit = 2,
             }),
             CreateContext());
+        var attention = await tool.ExecuteAsync(
+            Json(new
+            {
+                view = "attention",
+                owner = "agent-a",
+                limit = 2,
+            }),
+            CreateContext());
         var details = await tool.ExecuteAsync(
+            Json(new
+            {
+                id = awaitingApprovalItem.Id,
+            }),
+            CreateContext());
+        var outputDetails = await tool.ExecuteAsync(
             Json(new
             {
                 id = stoppedRun.Id,
@@ -94,12 +117,22 @@ public sealed class AgentRuntimeToolsTests
         Assert.Contains(queuedRun.Id, overview.Data, StringComparison.Ordinal);
         Assert.False(summary.IsError);
         Assert.Contains("Agent summary (owner: agent-a):", summary.Data, StringComparison.Ordinal);
+        Assert.Contains("Needs attention:", summary.Data, StringComparison.Ordinal);
+        Assert.Contains("Run /mailbox respond agent-message-1 approve|reject", summary.Data, StringComparison.Ordinal);
         Assert.Contains("Background runs: 2", summary.Data, StringComparison.Ordinal);
+        Assert.False(attention.IsError);
+        Assert.Contains("Agent attention (owner: agent-a):", attention.Data, StringComparison.Ordinal);
+        Assert.Contains("Summary: Waiting for approval response.", attention.Data, StringComparison.Ordinal);
+        Assert.Contains("Next: Run /mailbox respond agent-message-1 approve|reject", attention.Data, StringComparison.Ordinal);
         Assert.False(details.IsError);
-        Assert.Contains($"Background run: {stoppedRun.Id}", details.Data, StringComparison.Ordinal);
-        Assert.Contains("Showing output entries 2-2 of 2.", details.Data, StringComparison.Ordinal);
-        Assert.DoesNotContain("line 1", details.Data, StringComparison.Ordinal);
-        Assert.Contains("line 2", details.Data, StringComparison.Ordinal);
+        Assert.Contains($"Work item: {awaitingApprovalItem.Id}", details.Data, StringComparison.Ordinal);
+        Assert.Contains("Approval state: Waiting for approval", details.Data, StringComparison.Ordinal);
+        Assert.Contains("Next action: Run /mailbox respond agent-message-1 approve|reject", details.Data, StringComparison.Ordinal);
+        Assert.False(outputDetails.IsError);
+        Assert.Contains($"Background run: {stoppedRun.Id}", outputDetails.Data, StringComparison.Ordinal);
+        Assert.Contains("Showing output entries 2-2 of 2.", outputDetails.Data, StringComparison.Ordinal);
+        Assert.DoesNotContain("line 1", outputDetails.Data, StringComparison.Ordinal);
+        Assert.Contains("line 2", outputDetails.Data, StringComparison.Ordinal);
         Assert.True(missing.IsError);
         Assert.Contains("No agent work item or background run matched", missing.Data, StringComparison.Ordinal);
         Assert.True(tool.IsReadOnly(default));

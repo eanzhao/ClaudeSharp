@@ -64,6 +64,8 @@ public sealed class AgentsCommandTests
         runtime.UpdateWorkItem(completed.Id, item => item.Status = AgentWorkItemStatus.Completed);
         var awaiting = runtime.CreateWorkItem("Awaiting approval", owner: "subagent");
         runtime.UpdateWorkItem(awaiting.Id, item => item.Status = AgentWorkItemStatus.AwaitingApproval);
+        var awaitingResume = runtime.CreateWorkItem("Awaiting resume", owner: "subagent");
+        runtime.UpdateWorkItem(awaitingResume.Id, item => item.Status = AgentWorkItemStatus.AwaitingResume);
         var blocked = runtime.CreateWorkItem("Blocked task", owner: "subagent");
         runtime.UpdateWorkItem(blocked.Id, item => item.Status = AgentWorkItemStatus.Blocked);
 
@@ -83,14 +85,15 @@ public sealed class AgentsCommandTests
         var command = new AgentsCommand();
 
         await command.ExecuteAsync(
-            "summary --owner subagent --recent-limit 2",
+            "summary --owner subagent --recent-limit 4",
             CreateContext(runtime, lines));
 
         var output = string.Join(Environment.NewLine, lines);
         Assert.Contains("Agent summary (owner: subagent):", output, StringComparison.Ordinal);
-        Assert.Contains("Work items: 3", output, StringComparison.Ordinal);
+        Assert.Contains("Work items: 4", output, StringComparison.Ordinal);
         Assert.Contains("- Completed: 1", output, StringComparison.Ordinal);
         Assert.Contains("- AwaitingApproval: 1", output, StringComparison.Ordinal);
+        Assert.Contains("- AwaitingResume: 1", output, StringComparison.Ordinal);
         Assert.Contains("- Blocked: 1", output, StringComparison.Ordinal);
         Assert.Contains("Background runs: 2", output, StringComparison.Ordinal);
         Assert.Contains("- Running: 1", output, StringComparison.Ordinal);
@@ -100,6 +103,62 @@ public sealed class AgentsCommandTests
         Assert.Contains("Recent finished background runs:", output, StringComparison.Ordinal);
         Assert.Contains(stopped.Id, output, StringComparison.Ordinal);
         Assert.Contains(awaiting.Id, output, StringComparison.Ordinal);
+        Assert.Contains(awaitingResume.Id, output, StringComparison.Ordinal);
+        Assert.Contains("Needs attention:", output, StringComparison.Ordinal);
+        Assert.Contains("Resume subagent so the approved work item can continue.", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_CanRenderAttentionView()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var awaitingApproval = runtime.CreateWorkItem("Awaiting approval", owner: "subagent");
+        runtime.UpdateWorkItem(awaitingApproval.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingApproval;
+            item.ApprovalRequestId = "agent-message-1";
+        });
+        var awaitingResume = runtime.CreateWorkItem("Awaiting resume", owner: "subagent");
+        runtime.UpdateWorkItem(awaitingResume.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingResume;
+            item.Owner = "subagent";
+        });
+        runtime.StartBackgroundRun(
+            "Current run",
+            owner: "subagent",
+            workItemId: awaitingResume.Id,
+            initialStatus: AgentBackgroundRunStatus.Running);
+
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "attention --owner subagent --limit 5",
+            CreateContext(runtime, lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Agent attention (owner: subagent):", output, StringComparison.Ordinal);
+        Assert.Contains(awaitingApproval.Id, output, StringComparison.Ordinal);
+        Assert.Contains("Summary: Waiting for approval response.", output, StringComparison.Ordinal);
+        Assert.Contains("Next: Run /mailbox respond agent-message-1 approve|reject", output, StringComparison.Ordinal);
+        Assert.Contains(awaitingResume.Id, output, StringComparison.Ordinal);
+        Assert.Contains("Active run: background-run-1", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReportsInvalidAttentionArguments()
+    {
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "attention --limit 0",
+            CreateContext(new InMemoryAgentTaskRuntime(), lines));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("--limit must be a positive integer", output, StringComparison.Ordinal);
+        Assert.Contains("Usage: /agents attention", output, StringComparison.Ordinal);
     }
 
     [Fact]

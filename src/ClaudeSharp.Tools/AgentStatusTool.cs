@@ -80,7 +80,7 @@ public sealed class AgentStatusTool : ITool
             },
             "view": {
               "type": "string",
-              "description": "For listings only: overview (default) or summary"
+              "description": "For listings only: overview (default), summary, or attention"
             },
             "filters": {
               "type": "string",
@@ -108,6 +108,7 @@ public sealed class AgentStatusTool : ITool
             Use this after Agent with run_in_background=true, or whenever you need to see whether a subagent has finished.
             For overview listings, filters can be packed into one string like "kind=background_runs status=queued owner=subagent offset=0 limit=5".
             Set view=summary when you want a concise rollup of queue state, recent runs, and recent work items.
+            Set view=attention when you want only the work items that still need approval or resume actions.
             When polling a long-running background run, use output_window like "10:20" to fetch only new output entries.
             """);
     }
@@ -150,15 +151,20 @@ public sealed class AgentStatusTool : ITool
 
         if (string.IsNullOrWhiteSpace(request.Id))
         {
-            var data = request.View == AgentStatusView.Summary
-                ? AgentStatusFormatter.FormatSummary(
+            var data = request.View switch
+            {
+                AgentStatusView.Summary => AgentStatusFormatter.FormatSummary(
                     _taskRuntime,
                     new AgentStatusSummaryOptions
                     {
                         Owner = request.Owner,
                         RecentLimit = request.RecentLimit,
-                    })
-                : AgentStatusFormatter.FormatOverview(
+                    }),
+                AgentStatusView.Attention => AgentStatusFormatter.FormatAttention(
+                    _taskRuntime,
+                    request.Owner,
+                    request.Limit ?? request.RecentLimit),
+                _ => AgentStatusFormatter.FormatOverview(
                     _taskRuntime,
                     new AgentStatusOverviewOptions
                     {
@@ -167,7 +173,8 @@ public sealed class AgentStatusTool : ITool
                         Owner = request.Owner,
                         Offset = request.Offset,
                         Limit = request.Limit,
-                    });
+                    }),
+            };
             return Task.FromResult(ToolResult.Success(data));
         }
 
@@ -197,7 +204,7 @@ public sealed class AgentStatusTool : ITool
             !AgentStatusFormatter.TryParseView(input.View, out view))
         {
             request = default;
-            error = "view must be overview or summary.";
+            error = "view must be overview, summary, or attention.";
             return false;
         }
 

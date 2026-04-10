@@ -739,12 +739,26 @@ public class AgentsCommand : ICommand
         }
 
         if (parts.Length > 0 &&
+            parts[0].Equals("attention", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!TryParseAttentionOptions(trimmed, out var owner, out var limit, out var error))
+            {
+                context.WriteLine(error ?? "  Invalid /agents attention arguments.");
+                context.WriteLine("  Usage: /agents attention [--owner <owner>] [--limit <n>]");
+                return Task.CompletedTask;
+            }
+
+            context.WriteLine(AgentStatusFormatter.FormatAttention(context.AgentTaskRuntime, owner, limit));
+            return Task.CompletedTask;
+        }
+
+        if (parts.Length > 0 &&
             parts[0].Equals("summary", StringComparison.OrdinalIgnoreCase))
         {
             if (!TryParseSummaryOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents summary arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -758,7 +772,7 @@ public class AgentsCommand : ICommand
             if (!TryParseOverviewOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -779,7 +793,7 @@ public class AgentsCommand : ICommand
         }
 
         context.WriteLine(details);
-        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
         return Task.CompletedTask;
     }
 
@@ -1046,6 +1060,64 @@ public class AgentsCommand : ICommand
             Owner = owner,
             RecentLimit = recentLimit,
         };
+        return true;
+    }
+
+    private static bool TryParseAttentionOptions(
+        string args,
+        out string? owner,
+        out int? limit,
+        out string? error)
+    {
+        owner = null;
+        limit = null;
+        error = null;
+
+        var tokens = args
+            .Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+        if (tokens.Count > 0 &&
+            tokens[0].Equals("attention", StringComparison.OrdinalIgnoreCase))
+        {
+            tokens.RemoveAt(0);
+        }
+
+        for (var i = 0; i < tokens.Count; i++)
+        {
+            var token = tokens[i];
+            if (!token.StartsWith("--", StringComparison.Ordinal))
+            {
+                error = $"  Unknown argument: {token}";
+                return false;
+            }
+
+            if (i + 1 >= tokens.Count)
+            {
+                error = $"  Missing value for {token}.";
+                return false;
+            }
+
+            var value = tokens[++i];
+            switch (token)
+            {
+                case "--owner":
+                    owner = value;
+                    break;
+                case "--limit":
+                    if (!int.TryParse(value, out var parsedLimit) || parsedLimit <= 0)
+                    {
+                        error = "  --limit must be a positive integer.";
+                        return false;
+                    }
+
+                    limit = parsedLimit;
+                    break;
+                default:
+                    error = $"  Unknown option: {token}";
+                    return false;
+            }
+        }
+
         return true;
     }
 

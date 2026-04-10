@@ -76,6 +76,8 @@ public sealed class AppStateProjectorTests
         Assert.Equal(McpConnectionState.Failed, snapshot.McpConnections["beta"]);
         Assert.Equal(AgentWorkItemStatus.Pending, snapshot.WorkItems[pending.Id]);
         Assert.Equal(AgentWorkItemStatus.InProgress, snapshot.WorkItems[active.Id]);
+        Assert.Equal(0, snapshot.TaskAttention.AwaitingApprovalCount);
+        Assert.Equal(0, snapshot.TaskAttention.AwaitingResumeCount);
         var projectedTeam = Assert.Single(snapshot.Teams);
         Assert.Equal("Platform", projectedTeam.Name);
         Assert.Equal("Ada", projectedTeam.LeadName);
@@ -94,7 +96,11 @@ public sealed class AppStateProjectorTests
         var runtime = new InMemoryAgentTaskRuntime();
         var pending = runtime.CreateWorkItem("pending");
         var awaiting = runtime.CreateWorkItem("awaiting");
-        runtime.UpdateWorkItem(awaiting.Id, item => item.Status = AgentWorkItemStatus.AwaitingApproval);
+        runtime.UpdateWorkItem(awaiting.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingApproval;
+            item.ApprovalRequestId = "agent-message-1";
+        });
 
         var projector = new AppStateProjector();
         var snapshot = projector.CreateSnapshot(
@@ -105,5 +111,37 @@ public sealed class AppStateProjectorTests
         Assert.Equal(awaiting.Id, snapshot.ActiveTaskId);
         Assert.Equal(AgentWorkItemStatus.Pending, snapshot.WorkItems[pending.Id]);
         Assert.Equal(AgentWorkItemStatus.AwaitingApproval, snapshot.WorkItems[awaiting.Id]);
+        Assert.Equal(1, snapshot.TaskAttention.AwaitingApprovalCount);
+        Assert.Equal(0, snapshot.TaskAttention.AwaitingResumeCount);
+    }
+
+    [Fact]
+    public void CreateSnapshot_PrefersAwaitingResumeOverAwaitingApprovalWhenIdle()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var awaitingApproval = runtime.CreateWorkItem("awaiting approval");
+        runtime.UpdateWorkItem(awaitingApproval.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingApproval;
+            item.ApprovalRequestId = "agent-message-1";
+        });
+        var awaitingResume = runtime.CreateWorkItem("awaiting resume");
+        runtime.UpdateWorkItem(awaitingResume.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingResume;
+            item.Owner = "subagent";
+        });
+
+        var projector = new AppStateProjector();
+        var snapshot = projector.CreateSnapshot(
+            "/workspace",
+            PermissionMode.Default,
+            agentTaskRuntime: runtime);
+
+        Assert.Equal(awaitingResume.Id, snapshot.ActiveTaskId);
+        Assert.Equal(AgentWorkItemStatus.AwaitingApproval, snapshot.WorkItems[awaitingApproval.Id]);
+        Assert.Equal(AgentWorkItemStatus.AwaitingResume, snapshot.WorkItems[awaitingResume.Id]);
+        Assert.Equal(1, snapshot.TaskAttention.AwaitingApprovalCount);
+        Assert.Equal(1, snapshot.TaskAttention.AwaitingResumeCount);
     }
 }

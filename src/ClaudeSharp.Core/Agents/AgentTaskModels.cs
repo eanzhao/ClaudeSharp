@@ -11,6 +11,7 @@ public enum AgentWorkItemStatus
     Completed = 3,
     Cancelled = 4,
     AwaitingApproval = 5,
+    AwaitingResume = 6,
 }
 
 /// <summary>

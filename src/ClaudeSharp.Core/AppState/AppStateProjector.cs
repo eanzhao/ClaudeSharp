@@ -35,6 +35,7 @@ public sealed class AppStateProjector
             ActiveTokenSource = activeTokenSource,
             McpConnections = SnapshotMcpConnections(mcpConnectionManager),
             WorkItems = workItems,
+            TaskAttention = SnapshotTaskAttention(agentTaskRuntime),
             Teams = SnapshotTeams(agentTeamRuntime),
             Mailboxes = SnapshotMailboxes(agentMessageRuntime),
         };
@@ -77,14 +78,15 @@ public sealed class AppStateProjector
             status switch
             {
                 AgentWorkItemStatus.InProgress => 0,
-                AgentWorkItemStatus.AwaitingApproval => 1,
-                AgentWorkItemStatus.Blocked => 2,
-                AgentWorkItemStatus.Pending => 3,
-                _ => 4,
+                AgentWorkItemStatus.AwaitingResume => 1,
+                AgentWorkItemStatus.AwaitingApproval => 2,
+                AgentWorkItemStatus.Blocked => 3,
+                AgentWorkItemStatus.Pending => 4,
+                _ => 5,
             };
 
         return workItems
-            .Where(entry => entry.Value is AgentWorkItemStatus.InProgress or AgentWorkItemStatus.AwaitingApproval or AgentWorkItemStatus.Blocked or AgentWorkItemStatus.Pending)
+            .Where(entry => entry.Value is AgentWorkItemStatus.InProgress or AgentWorkItemStatus.AwaitingResume or AgentWorkItemStatus.AwaitingApproval or AgentWorkItemStatus.Blocked or AgentWorkItemStatus.Pending)
             .OrderBy(entry => Rank(entry.Value))
             .ThenBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
             .Select(entry => entry.Key)
@@ -118,6 +120,20 @@ public sealed class AppStateProjector
                 };
             })
             .ToArray();
+    }
+
+    internal static AppStateTaskAttentionSnapshot SnapshotTaskAttention(
+        IAgentTaskRuntime? runtime)
+    {
+        if (runtime == null)
+            return new AppStateTaskAttentionSnapshot();
+
+        var workItems = runtime.ListWorkItems();
+        return new AppStateTaskAttentionSnapshot
+        {
+            AwaitingApprovalCount = workItems.Count(item => item.Status == AgentWorkItemStatus.AwaitingApproval),
+            AwaitingResumeCount = workItems.Count(item => item.Status == AgentWorkItemStatus.AwaitingResume),
+        };
     }
 
     internal static IReadOnlyList<AppStateMailboxSnapshot> SnapshotMailboxes(
@@ -177,4 +193,5 @@ public sealed class AppStateProjector
             })
             .ToArray();
     }
+
 }

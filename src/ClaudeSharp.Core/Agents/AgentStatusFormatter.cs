@@ -177,7 +177,54 @@ public static class AgentStatusFormatter
             builder.AppendLine();
             builder.AppendLine("Recent work items:");
             foreach (var item in recentWorkItems)
-                builder.AppendLine($"- {item.Id} [{item.Status}] {item.Title}{FormatWorkItemSourceSuffix(item)}");
+                builder.AppendLine($"- {item.Id} [{item.Status}] {item.Title}{FormatWorkItemSourceSuffix(item)}{FormatWorkItemActionSuffix(item)}");
+        }
+
+        var attentionItems = AgentAttentionAnalyzer.ListAttentionItems(
+                runtime,
+                resolvedOptions.Owner,
+                recentLimit)
+            .ToArray();
+        if (attentionItems.Length > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Needs attention:");
+            foreach (var item in attentionItems)
+            {
+                builder.AppendLine(
+                    $"- {item.WorkItem.Id} [{item.WorkItem.Status}] {item.WorkItem.Title}: {item.NextAction}");
+            }
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    public static string FormatAttention(
+        IAgentTaskRuntime runtime,
+        string? owner = null,
+        int? limit = null)
+    {
+        var items = AgentAttentionAnalyzer.ListAttentionItems(runtime, owner, limit);
+        var builder = new StringBuilder();
+        builder.AppendLine(string.IsNullOrWhiteSpace(owner)
+            ? "Agent attention:"
+            : $"Agent attention (owner: {owner.Trim()}):");
+        builder.AppendLine($"Items: {items.Count}");
+
+        if (items.Count == 0)
+        {
+            builder.AppendLine("Items: (none)");
+            return builder.ToString().TrimEnd();
+        }
+
+        foreach (var item in items)
+        {
+            builder.AppendLine(
+                $"- {item.WorkItem.Id} [{item.WorkItem.Status}] {item.WorkItem.Title}");
+            builder.AppendLine($"  Summary: {item.Summary}");
+            builder.AppendLine($"  Next: {item.NextAction}");
+            if (!string.IsNullOrWhiteSpace(item.ActiveBackgroundRunId))
+                builder.AppendLine($"  Active run: {item.ActiveBackgroundRunId}");
         }
 
         return builder.ToString().TrimEnd();
@@ -263,7 +310,7 @@ public static class AgentStatusFormatter
     {
         if (runtime.GetWorkItem(id) is { } workItem)
         {
-            details = FormatWorkItem(workItem);
+            details = FormatWorkItem(runtime, workItem);
             return true;
         }
 
@@ -281,9 +328,12 @@ public static class AgentStatusFormatter
         return false;
     }
 
-    private static string FormatWorkItem(AgentWorkItem item)
+    private static string FormatWorkItem(
+        IAgentTaskRuntime runtime,
+        AgentWorkItem item)
     {
         var builder = new StringBuilder();
+        var activeOwnerRun = FindActiveOwnerRun(runtime, item.Owner);
         builder.AppendLine($"Work item: {item.Id}");
         builder.AppendLine($"Title: {item.Title}");
         if (!string.IsNullOrWhiteSpace(item.Description))
@@ -296,6 +346,10 @@ public static class AgentStatusFormatter
             builder.AppendLine($"Approval request: {item.ApprovalRequestId}");
         if (!string.IsNullOrWhiteSpace(item.ApprovalThreadId))
             builder.AppendLine($"Approval thread: {item.ApprovalThreadId}");
+        if (AgentWorkItemApprovalCoordinator.DescribeApprovalState(item) is { } approvalState)
+            builder.AppendLine($"Approval state: {approvalState}");
+        if (AgentAttentionAnalyzer.DescribeNextAction(item, activeOwnerRun) is { } nextAction)
+            builder.AppendLine($"Next action: {nextAction}");
         builder.AppendLine($"Status: {item.Status}");
         builder.AppendLine($"Created: {item.CreatedAt:O}");
         builder.AppendLine($"Updated: {item.UpdatedAt:O}");
@@ -385,10 +439,11 @@ public static class AgentStatusFormatter
         {
             "overview" or "list" => AgentStatusView.Overview,
             "summary" => AgentStatusView.Summary,
+            "attention" => AgentStatusView.Attention,
             _ => default,
         };
 
-        return normalized is "overview" or "list" or "summary";
+        return normalized is "overview" or "list" or "summary" or "attention";
     }
 
     private static void AppendWorkItems(
@@ -403,7 +458,7 @@ public static class AgentStatusFormatter
         builder.AppendLine("Work items:");
         builder.AppendLine(FormatPaginationMessage("work item", items.Count, options.Offset, page.Count));
         foreach (var item in page)
-            builder.AppendLine($"- {item.Id} [{item.Status}] {item.Title}{FormatWorkItemSourceSuffix(item)}");
+            builder.AppendLine($"- {item.Id} [{item.Status}] {item.Title}{FormatWorkItemSourceSuffix(item)}{FormatWorkItemActionSuffix(item)}");
     }
 
     private static void AppendBackgroundRuns(
@@ -499,6 +554,30 @@ public static class AgentStatusFormatter
             ? string.Empty
             : $" [{item.SourceKind}]";
 
+    private static string FormatWorkItemActionSuffix(AgentWorkItem item)
+    {
+        return AgentWorkItemApprovalCoordinator.DescribeApprovalState(item) is { } approvalState
+            ? $" -> {approvalState}"
+            : string.Empty;
+    }
+
+    private static AgentBackgroundRun? FindActiveOwnerRun(
+        IAgentTaskRuntime runtime,
+        string? owner)
+    {
+        if (string.IsNullOrWhiteSpace(owner))
+            return null;
+
+        return runtime.ListBackgroundRuns()
+            .Where(run => string.Equals(run.Owner, owner, StringComparison.OrdinalIgnoreCase))
+            .Where(run => run.Status is AgentBackgroundRunStatus.Queued or
+                AgentBackgroundRunStatus.Running or
+                AgentBackgroundRunStatus.CancellationRequested)
+            .OrderByDescending(run => run.UpdatedAt)
+            .ThenBy(run => run.Id, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault();
+    }
+
     private static bool MatchesOwner(string? owner, string? filterOwner) =>
         string.IsNullOrWhiteSpace(filterOwner) ||
         string.Equals(owner, filterOwner.Trim(), StringComparison.OrdinalIgnoreCase);
@@ -533,4 +612,5 @@ public enum AgentStatusView
 {
     Overview,
     Summary,
+    Attention,
 }
