@@ -19,10 +19,12 @@ public sealed class PersistentAgentTaskRuntimeTests
         var workItem = runtime.CreateWorkItem("Inspect runtime", owner: "subagent");
         runtime.UpdateWorkItem(workItem.Id, item =>
         {
-            item.Status = AgentWorkItemStatus.Completed;
+            item.Status = AgentWorkItemStatus.AwaitingApproval;
             item.SourceKind = AgentWorkItemSourceKinds.MailboxPlanApproval;
             item.SourceId = "agent-message-11";
             item.SourceThreadId = "thread-9";
+            item.ApprovalRequestId = "agent-message-21";
+            item.ApprovalThreadId = "thread-11";
         });
 
         var backgroundRun = runtime.StartBackgroundRun(
@@ -42,11 +44,13 @@ public sealed class PersistentAgentTaskRuntimeTests
             journal.MetadataEntries);
 
         var restoredWorkItem = Assert.Single(restored.ListWorkItems());
-        Assert.Equal(AgentWorkItemStatus.Completed, restoredWorkItem.Status);
+        Assert.Equal(AgentWorkItemStatus.AwaitingApproval, restoredWorkItem.Status);
         Assert.Equal("Inspect runtime", restoredWorkItem.Title);
         Assert.Equal(AgentWorkItemSourceKinds.MailboxPlanApproval, restoredWorkItem.SourceKind);
         Assert.Equal("agent-message-11", restoredWorkItem.SourceId);
         Assert.Equal("thread-9", restoredWorkItem.SourceThreadId);
+        Assert.Equal("agent-message-21", restoredWorkItem.ApprovalRequestId);
+        Assert.Equal("thread-11", restoredWorkItem.ApprovalThreadId);
 
         var restoredRun = Assert.Single(restored.ListBackgroundRuns());
         Assert.Equal(AgentBackgroundRunStatus.Stopped, restoredRun.Status);

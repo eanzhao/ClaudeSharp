@@ -87,4 +87,23 @@ public sealed class AppStateProjectorTests
         Assert.Equal(2, adaMailbox.InboxCount);
         Assert.Equal(2, adaMailbox.UnreadCount);
     }
+
+    [Fact]
+    public void CreateSnapshot_SelectsAwaitingApprovalWhenNoTaskIsRunning()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+        var pending = runtime.CreateWorkItem("pending");
+        var awaiting = runtime.CreateWorkItem("awaiting");
+        runtime.UpdateWorkItem(awaiting.Id, item => item.Status = AgentWorkItemStatus.AwaitingApproval);
+
+        var projector = new AppStateProjector();
+        var snapshot = projector.CreateSnapshot(
+            "/workspace",
+            PermissionMode.Default,
+            agentTaskRuntime: runtime);
+
+        Assert.Equal(awaiting.Id, snapshot.ActiveTaskId);
+        Assert.Equal(AgentWorkItemStatus.Pending, snapshot.WorkItems[pending.Id]);
+        Assert.Equal(AgentWorkItemStatus.AwaitingApproval, snapshot.WorkItems[awaiting.Id]);
+    }
 }

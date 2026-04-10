@@ -145,6 +145,46 @@ public sealed class MailboxToolsTests
     }
 
     [Fact]
+    public async Task SendMessageTool_ExecuteAsync_MarksCurrentWorkItemAwaitingApproval()
+    {
+        var messages = new InMemoryAgentMessageRuntime();
+        var tasks = new InMemoryAgentTaskRuntime();
+        var original = tasks.CreateWorkItem("Inspect runtime", owner: "subagent");
+        tasks.UpdateWorkItem(original.Id, item => item.Status = AgentWorkItemStatus.InProgress);
+        var tool = new SendMessageTool(
+            messages,
+            taskRuntime: tasks,
+            currentWorkItemId: original.Id);
+
+        var result = await tool.ExecuteAsync(
+            Json(new
+            {
+                request = new
+                {
+                    to = "main",
+                    from = "subagent",
+                    message = new
+                    {
+                        kind = "PlanApprovalRequest",
+                        body = "Approve this runtime plan",
+                        subject = "Runtime plan",
+                    },
+                },
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Equal(2, tasks.ListWorkItems().Count);
+        var updated = tasks.GetWorkItem(original.Id);
+        Assert.NotNull(updated);
+        Assert.Equal(AgentWorkItemStatus.AwaitingApproval, updated!.Status);
+        Assert.Equal("agent-message-1", updated.ApprovalRequestId);
+        Assert.Equal("thread-1", updated.ApprovalThreadId);
+        var approvalTodo = tasks.ListWorkItems().Single(item => item.Id != original.Id);
+        Assert.Equal(AgentWorkItemStatus.Pending, approvalTodo.Status);
+    }
+
+    [Fact]
     public async Task MailboxStatusTool_ExecuteAsync_RendersOverviewFiltersAndDetails()
     {
         var runtime = new InMemoryAgentMessageRuntime();
@@ -298,6 +338,64 @@ public sealed class MailboxToolsTests
         var workItem = Assert.Single(tasks.ListWorkItems());
         Assert.Equal(AgentWorkItemStatus.Completed, workItem.Status);
         Assert.Contains("Decision: approved.", workItem.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MailboxRespondTool_ExecuteAsync_RejectedApprovalBlocksOriginalTaskWithoutReactivation()
+    {
+        var runtime = new InMemoryAgentMessageRuntime();
+        var tasks = new InMemoryAgentTaskRuntime();
+        var activations = new InMemoryAgentMessageActivationRuntime();
+        var activationAttempted = false;
+        activations.RegisterOwner(
+            "subagent",
+            (_, _) =>
+            {
+                activationAttempted = true;
+                return Task.FromResult(AgentMessageActivationResult.Reactivated(
+                    "subagent",
+                    "background-run-7",
+                    "work-item-9"));
+            });
+
+        var trigger = runtime.SendMessage(
+            "subagent",
+            "main",
+            AgentMessageKind.PlanApprovalRequest,
+            "Approve this plan",
+            subject: "Plan");
+        var original = tasks.CreateWorkItem("Inspect runtime", owner: "subagent");
+        tasks.UpdateWorkItem(original.Id, item =>
+        {
+            item.Status = AgentWorkItemStatus.AwaitingApproval;
+            item.ApprovalRequestId = trigger.Id;
+            item.ApprovalThreadId = trigger.ThreadId;
+        });
+        AgentMailboxTaskProjector.Synchronize(runtime, tasks);
+        var tool = new MailboxRespondTool(runtime, activations, tasks);
+
+        var result = await tool.ExecuteAsync(
+            Json(new
+            {
+                request = new
+                {
+                    message_id = trigger.Id,
+                    decision = "reject",
+                    responder = "main",
+                    note = "Needs changes",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.False(activationAttempted);
+        var updatedOriginal = tasks.GetWorkItem(original.Id);
+        Assert.NotNull(updatedOriginal);
+        Assert.Equal(AgentWorkItemStatus.Blocked, updatedOriginal!.Status);
+        Assert.Null(updatedOriginal.ApprovalRequestId);
+        Assert.Null(updatedOriginal.ApprovalThreadId);
+        var approvalTodo = tasks.ListWorkItems().Single(item => item.SourceKind == AgentWorkItemSourceKinds.MailboxPlanApproval);
+        Assert.Equal(AgentWorkItemStatus.Cancelled, approvalTodo.Status);
     }
 
     [Fact]

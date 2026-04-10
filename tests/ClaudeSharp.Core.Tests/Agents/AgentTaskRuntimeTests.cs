@@ -19,7 +19,9 @@ public sealed class AgentTaskRuntimeTests
             item.SourceKind = AgentWorkItemSourceKinds.MailboxPlanApproval;
             item.SourceId = "agent-message-7";
             item.SourceThreadId = "thread-2";
-            item.Status = AgentWorkItemStatus.InProgress;
+            item.ApprovalRequestId = "agent-message-9";
+            item.ApprovalThreadId = "thread-4";
+            item.Status = AgentWorkItemStatus.AwaitingApproval;
             item.AddBlock("task-2");
             item.AddBlockedBy("task-1");
         });
@@ -37,7 +39,9 @@ public sealed class AgentTaskRuntimeTests
         Assert.Equal(AgentWorkItemSourceKinds.MailboxPlanApproval, fetchedWorkItem.SourceKind);
         Assert.Equal("agent-message-7", fetchedWorkItem.SourceId);
         Assert.Equal("thread-2", fetchedWorkItem.SourceThreadId);
-        Assert.Equal(AgentWorkItemStatus.InProgress, fetchedWorkItem.Status);
+        Assert.Equal("agent-message-9", fetchedWorkItem.ApprovalRequestId);
+        Assert.Equal("thread-4", fetchedWorkItem.ApprovalThreadId);
+        Assert.Equal(AgentWorkItemStatus.AwaitingApproval, fetchedWorkItem.Status);
         Assert.Equal(["task-2"], fetchedWorkItem.Blocks);
         Assert.Equal(["task-1"], fetchedWorkItem.BlockedBy);
 
@@ -188,5 +192,25 @@ public sealed class AgentTaskRuntimeTests
         Assert.NotNull(runtime.GetWorkItem(newItem.Id));
         Assert.NotNull(runtime.GetBackgroundRun(activeRun.Id));
         Assert.NotNull(runtime.GetWorkItem(activeItem.Id));
+    }
+
+    [Fact]
+    public void PruneHistory_DoesNotRemoveAwaitingApprovalWorkItems()
+    {
+        var runtime = new InMemoryAgentTaskRuntime();
+
+        var terminal = runtime.CreateWorkItem("terminal");
+        runtime.UpdateWorkItem(terminal.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var awaiting = runtime.CreateWorkItem("awaiting");
+        runtime.UpdateWorkItem(awaiting.Id, item => item.Status = AgentWorkItemStatus.AwaitingApproval);
+
+        var result = runtime.PruneHistory(new AgentRetentionPolicy
+        {
+            RetainTerminalWorkItems = 0,
+        });
+
+        Assert.Equal([terminal.Id], result.RemovedWorkItemIds);
+        Assert.Null(runtime.GetWorkItem(terminal.Id));
+        Assert.NotNull(runtime.GetWorkItem(awaiting.Id));
     }
 }

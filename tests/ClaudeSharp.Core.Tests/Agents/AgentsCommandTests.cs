@@ -62,6 +62,8 @@ public sealed class AgentsCommandTests
         var runtime = new InMemoryAgentTaskRuntime();
         var completed = runtime.CreateWorkItem("Completed task", owner: "subagent");
         runtime.UpdateWorkItem(completed.Id, item => item.Status = AgentWorkItemStatus.Completed);
+        var awaiting = runtime.CreateWorkItem("Awaiting approval", owner: "subagent");
+        runtime.UpdateWorkItem(awaiting.Id, item => item.Status = AgentWorkItemStatus.AwaitingApproval);
         var blocked = runtime.CreateWorkItem("Blocked task", owner: "subagent");
         runtime.UpdateWorkItem(blocked.Id, item => item.Status = AgentWorkItemStatus.Blocked);
 
@@ -86,8 +88,9 @@ public sealed class AgentsCommandTests
 
         var output = string.Join(Environment.NewLine, lines);
         Assert.Contains("Agent summary (owner: subagent):", output, StringComparison.Ordinal);
-        Assert.Contains("Work items: 2", output, StringComparison.Ordinal);
+        Assert.Contains("Work items: 3", output, StringComparison.Ordinal);
         Assert.Contains("- Completed: 1", output, StringComparison.Ordinal);
+        Assert.Contains("- AwaitingApproval: 1", output, StringComparison.Ordinal);
         Assert.Contains("- Blocked: 1", output, StringComparison.Ordinal);
         Assert.Contains("Background runs: 2", output, StringComparison.Ordinal);
         Assert.Contains("- Running: 1", output, StringComparison.Ordinal);
@@ -96,6 +99,7 @@ public sealed class AgentsCommandTests
         Assert.Contains(running.Id, output, StringComparison.Ordinal);
         Assert.Contains("Recent finished background runs:", output, StringComparison.Ordinal);
         Assert.Contains(stopped.Id, output, StringComparison.Ordinal);
+        Assert.Contains(awaiting.Id, output, StringComparison.Ordinal);
     }
 
     [Fact]
