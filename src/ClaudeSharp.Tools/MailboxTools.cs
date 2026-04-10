@@ -120,17 +120,22 @@ public sealed class SendMessageTool : ITool
     private readonly IAgentTeamRuntime? _teamRuntime;
     private readonly IAgentMessageActivationRuntime? _activationRuntime;
     private readonly IAgentTaskRuntime? _taskRuntime;
+    private readonly string? _currentWorkItemId;
 
     public SendMessageTool(
         IAgentMessageRuntime messageRuntime,
         IAgentTeamRuntime? teamRuntime = null,
         IAgentMessageActivationRuntime? activationRuntime = null,
-        IAgentTaskRuntime? taskRuntime = null)
+        IAgentTaskRuntime? taskRuntime = null,
+        string? currentWorkItemId = null)
     {
         _messageRuntime = messageRuntime;
         _teamRuntime = teamRuntime;
         _activationRuntime = activationRuntime;
         _taskRuntime = taskRuntime;
+        _currentWorkItemId = string.IsNullOrWhiteSpace(currentWorkItemId)
+            ? null
+            : currentWorkItemId.Trim();
     }
 
     public string Name => "SendMessage";
@@ -258,6 +263,7 @@ public sealed class SendMessageTool : ITool
             return ToolResult.Error(ex.Message);
         }
 
+        TryTrackCurrentWorkItemApproval(delivered);
         _ = TrySynchronizeApprovalTasks();
 
         var lines = new List<string>
@@ -271,6 +277,32 @@ public sealed class SendMessageTool : ITool
             lines.Add(FormatActivationLine(activation));
 
         return ToolResult.Success(string.Join(Environment.NewLine, lines));
+    }
+
+    private void TryTrackCurrentWorkItemApproval(IReadOnlyList<AgentMessage> delivered)
+    {
+        if (_taskRuntime == null ||
+            string.IsNullOrWhiteSpace(_currentWorkItemId))
+        {
+            return;
+        }
+
+        var approvalRequest = delivered
+            .LastOrDefault(message => message.Kind == AgentMessageKind.PlanApprovalRequest);
+        if (approvalRequest == null)
+            return;
+
+        try
+        {
+            AgentWorkItemApprovalCoordinator.TryMarkAwaitingApproval(
+                _taskRuntime,
+                _currentWorkItemId,
+                approvalRequest);
+        }
+        catch
+        {
+            // Approval tracking is best-effort; the mailbox message itself was delivered successfully.
+        }
     }
 
     private AgentMailboxTaskProjectionResult? TrySynchronizeApprovalTasks()
@@ -869,6 +901,7 @@ public sealed class MailboxRespondTool : ITool
             response.Protocol);
         if (request.MarkOriginalAsRead)
             _messageRuntime.MarkMessageRead(triggerMessage.Id);
+        TryUpdateOriginalWorkItem(triggerMessage, delivered);
         _ = TrySynchronizeApprovalTasks();
 
         var lines = new List<string>
@@ -878,7 +911,7 @@ public sealed class MailboxRespondTool : ITool
             $"- {AgentMessageFormatter.FormatSummaryLine(delivered)}",
         };
 
-        if (_activationRuntime != null)
+        if (_activationRuntime != null && ShouldAttemptActivation(delivered))
         {
             var activation = await _activationRuntime.TryActivateAsync(delivered, cancellationToken);
             if (activation.Status != AgentMessageActivationStatus.NotRegistered)
@@ -886,6 +919,39 @@ public sealed class MailboxRespondTool : ITool
         }
 
         return ToolResult.Success(string.Join(Environment.NewLine, lines));
+    }
+
+    private void TryUpdateOriginalWorkItem(
+        AgentMessage triggerMessage,
+        AgentMessage responseMessage)
+    {
+        if (_taskRuntime == null ||
+            triggerMessage.Kind != AgentMessageKind.PlanApprovalRequest ||
+            responseMessage.Kind != AgentMessageKind.PlanApprovalResponse)
+        {
+            return;
+        }
+
+        try
+        {
+            AgentWorkItemApprovalCoordinator.TryApplyApprovalResponse(
+                _taskRuntime,
+                triggerMessage,
+                responseMessage);
+        }
+        catch
+        {
+            // Approval coordination is best-effort; the mailbox response still succeeds.
+        }
+    }
+
+    private static bool ShouldAttemptActivation(AgentMessage responseMessage)
+    {
+        return responseMessage.Kind != AgentMessageKind.PlanApprovalResponse ||
+               !string.Equals(
+                   responseMessage.Protocol?.ActionName,
+                   "plan-approval-rejected",
+                   StringComparison.OrdinalIgnoreCase);
     }
 
     private AgentMailboxTaskProjectionResult? TrySynchronizeApprovalTasks()

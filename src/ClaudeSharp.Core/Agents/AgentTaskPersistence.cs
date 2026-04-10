@@ -37,6 +37,8 @@ public static class AgentTaskPersistence
                 SourceKind = item.SourceKind,
                 SourceId = item.SourceId,
                 SourceThreadId = item.SourceThreadId,
+                ApprovalRequestId = item.ApprovalRequestId,
+                ApprovalThreadId = item.ApprovalThreadId,
                 Status = item.Status,
                 CreatedAt = item.CreatedAt,
                 UpdatedAt = item.UpdatedAt,
@@ -199,6 +201,8 @@ public static class AgentTaskPersistence
             SourceKind = payload.SourceKind,
             SourceId = payload.SourceId,
             SourceThreadId = payload.SourceThreadId,
+            ApprovalRequestId = payload.ApprovalRequestId,
+            ApprovalThreadId = payload.ApprovalThreadId,
             Status = payload.Status,
             CreatedAt = payload.CreatedAt,
             UpdatedAt = payload.UpdatedAt,
@@ -255,6 +259,8 @@ public static class AgentTaskPersistence
         public string? SourceKind { get; init; }
         public string? SourceId { get; init; }
         public string? SourceThreadId { get; init; }
+        public string? ApprovalRequestId { get; init; }
+        public string? ApprovalThreadId { get; init; }
         public AgentWorkItemStatus Status { get; init; }
         public DateTimeOffset CreatedAt { get; init; }
         public DateTimeOffset UpdatedAt { get; init; }

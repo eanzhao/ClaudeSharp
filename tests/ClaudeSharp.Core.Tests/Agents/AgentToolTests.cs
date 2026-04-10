@@ -208,13 +208,113 @@ public sealed class AgentToolTests
         Assert.Contains("Resume reason: The review thread has new work", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
         Assert.Contains("Unread mailbox messages:", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
         Assert.Contains("Please pick this back up", runner.Requests[1].SystemPromptAppendix, StringComparison.Ordinal);
+        Assert.Equal(["work-item-1"], taskRuntime.ListWorkItems().Select(item => item.Id));
+        Assert.Equal(AgentWorkItemStatus.Completed, taskRuntime.GetWorkItem("work-item-1")?.Status);
         var reactivatedRun = taskRuntime.GetBackgroundRun("background-run-2");
         Assert.NotNull(reactivatedRun);
+        Assert.Equal("work-item-1", reactivatedRun!.WorkItemId);
         Assert.Contains(reactivatedRun!.Output, chunk =>
             chunk.Contains("[resume] Triggered by agent-message-1 in thread-1 from main.", StringComparison.Ordinal));
         Assert.Contains(reactivatedRun.Output, chunk =>
             chunk.Contains("action=resume-review", StringComparison.Ordinal));
         Assert.Equal(AgentMessageStatus.Read, messageRuntime.GetMessage("agent-message-1")?.Status);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ApprovalResponseReusesOriginalBackgroundWorkItem()
+    {
+        var taskRuntime = new InMemoryAgentTaskRuntime();
+        var teamRuntime = new InMemoryAgentTeamRuntime();
+        var messageRuntime = new InMemoryAgentMessageRuntime();
+        var activationRuntime = new InMemoryAgentMessageActivationRuntime();
+        var team = teamRuntime.CreateTeam("Platform", leadName: "Ada");
+        teamRuntime.AddMember(team.Id, "Bob");
+        var runner = new AsyncRecordingRunner(async (_, cancellationToken) =>
+        {
+            await Task.Delay(10, cancellationToken);
+            return new AgentExecutionResult(
+                Summary: "teammate summary",
+                Success: true,
+                Usage: TokenUsage.Empty,
+                TurnCount: 1);
+        });
+
+        var agentTool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            taskRuntime,
+            teamRuntime,
+            messageRuntime,
+            hooks: HookRuntime.Empty,
+            messageActivationRuntime: activationRuntime);
+
+        var launch = await agentTool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "Inspect the teammate runtime",
+                run_in_background = true,
+                teammate = new
+                {
+                    team_name = "Platform",
+                    member_name = "Bob",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(launch.IsError);
+        await WaitForAsync(() =>
+            taskRuntime.GetBackgroundRun("background-run-1")?.Status == AgentBackgroundRunStatus.Stopped);
+
+        var sendTool = new SendMessageTool(messageRuntime, teamRuntime, activationRuntime, taskRuntime);
+        var request = await sendTool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                request = new
+                {
+                    to = "Ada",
+                    from = "Bob",
+                    team_name = "Platform",
+                    message = new
+                    {
+                        kind = "PlanApprovalRequest",
+                        body = "Approve this runtime plan",
+                        subject = "Runtime plan",
+                    },
+                },
+            }),
+            CreateContext());
+
+        Assert.False(request.IsError);
+        Assert.Equal(2, taskRuntime.ListWorkItems().Count);
+        Assert.Equal(
+            AgentWorkItemStatus.Pending,
+            taskRuntime.ListWorkItems().Single(item => item.SourceKind == AgentWorkItemSourceKinds.MailboxPlanApproval).Status);
+
+        var approvalRequest = messageRuntime.ListMessages().Single(message => message.Kind == AgentMessageKind.PlanApprovalRequest);
+        var respondTool = new MailboxRespondTool(messageRuntime, activationRuntime, taskRuntime);
+        var response = await respondTool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                request = new
+                {
+                    message_id = approvalRequest.Id,
+                    decision = "approve",
+                    responder = "Platform/Ada",
+                    note = "Approved. Please continue.",
+                },
+            }),
+            CreateContext());
+
+        Assert.False(response.IsError);
+        Assert.Contains("Reactivated Platform/Bob as background-run-2", response.Data, StringComparison.Ordinal);
+
+        await WaitForAsync(() =>
+            taskRuntime.GetBackgroundRun("background-run-2")?.Status == AgentBackgroundRunStatus.Stopped);
+
+        Assert.Equal(["work-item-1", "work-item-2"], taskRuntime.ListWorkItems().Select(item => item.Id));
+        Assert.Equal(AgentWorkItemStatus.Completed, taskRuntime.GetWorkItem("work-item-1")?.Status);
+        Assert.Equal(AgentWorkItemStatus.Completed, taskRuntime.GetWorkItem("work-item-2")?.Status);
+        Assert.Equal("work-item-1", taskRuntime.GetBackgroundRun("background-run-2")?.WorkItemId);
     }
 
     [Fact]

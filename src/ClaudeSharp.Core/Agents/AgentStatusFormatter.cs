@@ -292,6 +292,10 @@ public static class AgentStatusFormatter
             builder.AppendLine($"Owner: {item.Owner}");
         if (!string.IsNullOrWhiteSpace(item.SourceKind))
             builder.AppendLine($"Source: {FormatWorkItemSource(item)}");
+        if (!string.IsNullOrWhiteSpace(item.ApprovalRequestId))
+            builder.AppendLine($"Approval request: {item.ApprovalRequestId}");
+        if (!string.IsNullOrWhiteSpace(item.ApprovalThreadId))
+            builder.AppendLine($"Approval thread: {item.ApprovalThreadId}");
         builder.AppendLine($"Status: {item.Status}");
         builder.AppendLine($"Created: {item.CreatedAt:O}");
         builder.AppendLine($"Updated: {item.UpdatedAt:O}");

@@ -204,14 +204,21 @@ public sealed class AgentTool : ITool
 
         try
         {
-            var result = await RunSubagentAsync(parsed, assignment, executionContext, cancellationToken);
+            var result = await RunSubagentAsync(
+                parsed,
+                assignment,
+                executionContext,
+                workItem.Id,
+                cancellationToken);
 
-            _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+            if (result.Success)
             {
-                item.Status = result.Success
-                    ? AgentWorkItemStatus.Completed
-                    : AgentWorkItemStatus.Blocked;
-            });
+                AgentWorkItemApprovalCoordinator.TryCompleteSuccessfulRun(_taskRuntime, workItem.Id);
+            }
+            else
+            {
+                _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.Blocked);
+            }
 
             if (!result.Success)
             {
@@ -241,7 +248,7 @@ public sealed class AgentTool : ITool
     {
         try
         {
-            RegisterMailboxActivationIfNeeded(input, assignment, executionContext);
+            RegisterMailboxActivationIfNeeded(input, assignment, executionContext, workItem.Id);
             var backgroundRun = QueueBackgroundRun(workItem, assignment, input, executionContext);
             return ToolResult.Success(
                 $"{assignment.SubjectLabel} {workItem.Id} was queued in the background as {backgroundRun.Id}. " +
@@ -259,6 +266,7 @@ public sealed class AgentTool : ITool
         AgentToolInput input,
         AgentAssignment assignment,
         AgentExecutionContextSnapshot context,
+        string workItemId,
         IProgress<AgentExecutionProgress>? progress,
         CancellationToken cancellationToken,
         AgentMessageActivationRequest? activationRequest = null)
@@ -269,7 +277,7 @@ public sealed class AgentTool : ITool
                 Prompt = input.Prompt.Trim(),
                 WorkingDirectory = context.WorkingDirectory,
                 Model = context.MainLoopModel,
-                Tools = BuildReadOnlyToolRegistry(context.MainLoopModel),
+                Tools = BuildReadOnlyToolRegistry(context.MainLoopModel, workItemId),
                 PermissionContext = ClonePermissionContext(context.PermissionContext),
                 UseIsolatedWorkspace = input.UseIsolatedWorkspace,
                 Progress = progress,
@@ -283,8 +291,9 @@ public sealed class AgentTool : ITool
         AgentToolInput input,
         AgentAssignment assignment,
         AgentExecutionContextSnapshot context,
+        string workItemId,
         CancellationToken cancellationToken) =>
-        RunSubagentAsync(input, assignment, context, progress: null, cancellationToken);
+        RunSubagentAsync(input, assignment, context, workItemId, progress: null, cancellationToken);
 
     private AgentBackgroundRun QueueBackgroundRun(
         AgentWorkItem workItem,
@@ -324,14 +333,14 @@ public sealed class AgentTool : ITool
                             input,
                             assignment,
                             executionContext,
+                            workItem.Id,
                             logger,
                             cancellationToken,
                             activationRequest);
                         logger.Flush();
                         if (result.Success)
                         {
-                            _taskRuntime.UpdateWorkItem(workItem.Id, item =>
-                                item.Status = AgentWorkItemStatus.Completed);
+                            AgentWorkItemApprovalCoordinator.TryCompleteSuccessfulRun(_taskRuntime, workItem.Id);
                             _taskRuntime.AppendBackgroundRunOutput(
                                 backgroundRun.Id,
                                 FormatResult(assignment, workItem.Id, input, result));
@@ -406,7 +415,7 @@ public sealed class AgentTool : ITool
         }
     }
 
-    private ToolRegistry BuildReadOnlyToolRegistry(string model)
+    private ToolRegistry BuildReadOnlyToolRegistry(string model, string workItemId)
     {
         var registry = new ToolRegistry();
         registry.Register(new FileReadTool());
@@ -418,7 +427,12 @@ public sealed class AgentTool : ITool
         {
             registry.Register(new MailboxStatusTool(_messageRuntime));
             registry.Register(new MailboxRespondTool(_messageRuntime, _messageActivationRuntime, _taskRuntime));
-            registry.Register(new SendMessageTool(_messageRuntime, _teamRuntime, _messageActivationRuntime, _taskRuntime));
+            registry.Register(new SendMessageTool(
+                _messageRuntime,
+                _teamRuntime,
+                _messageActivationRuntime,
+                _taskRuntime,
+                workItemId));
         }
         registry.Register(new WebFetchTool());
         registry.Register(new WebSearchTool(_providerCapabilityRouter, () => model));
@@ -428,7 +442,8 @@ public sealed class AgentTool : ITool
     private void RegisterMailboxActivationIfNeeded(
         AgentToolInput input,
         AgentAssignment assignment,
-        AgentExecutionContextSnapshot executionContext)
+        AgentExecutionContextSnapshot executionContext,
+        string workItemId)
     {
         if (!input.RunInBackground ||
             _messageActivationRuntime == null ||
@@ -447,6 +462,7 @@ public sealed class AgentTool : ITool
                 capturedInput,
                 capturedAssignment,
                 capturedContext,
+                workItemId,
                 request,
                 cancellationToken));
     }
@@ -455,6 +471,7 @@ public sealed class AgentTool : ITool
         AgentToolInput input,
         AgentAssignment assignment,
         AgentExecutionContextSnapshot executionContext,
+        string originalWorkItemId,
         AgentMessageActivationRequest request,
         CancellationToken cancellationToken)
     {
@@ -467,11 +484,20 @@ public sealed class AgentTool : ITool
                 $"Trigger {request.Message.Id} is waiting because a queued or running background run already exists."));
         }
 
-        var workItem = _taskRuntime.CreateWorkItem(
+        var reusedWorkItem = TryReuseWorkItemForReactivation(
+            originalWorkItemId,
+            assignment);
+        var workItem = reusedWorkItem ?? _taskRuntime.CreateWorkItem(
             BuildTitle(input.Prompt),
             description: input.Prompt,
             owner: assignment.Owner);
-        _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.InProgress);
+        _taskRuntime.UpdateWorkItem(workItem.Id, item =>
+        {
+            item.Title = BuildTitle(input.Prompt);
+            item.Description = input.Prompt;
+            item.Owner = assignment.Owner;
+        });
+        AgentWorkItemApprovalCoordinator.TryResumeApprovedWorkItem(_taskRuntime, workItem.Id);
 
         try
         {
@@ -485,13 +511,33 @@ public sealed class AgentTool : ITool
                 assignment.Owner,
                 backgroundRun.Id,
                 workItem.Id,
-                $"Triggered by {request.Message.Id} in {request.Message.ThreadId}."));
+                reusedWorkItem == null
+                    ? $"Triggered by {request.Message.Id} in {request.Message.ThreadId}."
+                    : $"Triggered by {request.Message.Id} in {request.Message.ThreadId}. Reused {workItem.Id}."));
         }
         catch (Exception ex)
         {
             _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.Blocked);
             return Task.FromResult(AgentMessageActivationResult.Failed(assignment.Owner, ex.Message));
         }
+    }
+
+    private AgentWorkItem? TryReuseWorkItemForReactivation(
+        string originalWorkItemId,
+        AgentAssignment assignment)
+    {
+        if (string.IsNullOrWhiteSpace(originalWorkItemId))
+            return null;
+
+        var workItem = _taskRuntime.GetWorkItem(originalWorkItemId);
+        if (workItem == null ||
+            !string.Equals(workItem.Owner, assignment.Owner, StringComparison.OrdinalIgnoreCase) ||
+            workItem.Status == AgentWorkItemStatus.Cancelled)
+        {
+            return null;
+        }
+
+        return workItem;
     }
 
     private bool HasActiveBackgroundRun(string owner)

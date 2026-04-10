@@ -5,11 +5,12 @@ namespace ClaudeSharp.Core.Agents;
 /// </summary>
 public enum AgentWorkItemStatus
 {
-    Pending,
-    InProgress,
-    Blocked,
-    Completed,
-    Cancelled,
+    Pending = 0,
+    InProgress = 1,
+    Blocked = 2,
+    Completed = 3,
+    Cancelled = 4,
+    AwaitingApproval = 5,
 }
 
 /// <summary>
@@ -40,6 +41,8 @@ public sealed class AgentWorkItem
     public string? SourceKind { get; set; }
     public string? SourceId { get; set; }
     public string? SourceThreadId { get; set; }
+    public string? ApprovalRequestId { get; set; }
+    public string? ApprovalThreadId { get; set; }
     public AgentWorkItemStatus Status { get; set; } = AgentWorkItemStatus.Pending;
     public DateTimeOffset CreatedAt { get; init; } = DateTimeOffset.UtcNow;
     public DateTimeOffset UpdatedAt { get; set; } = DateTimeOffset.UtcNow;
@@ -70,6 +73,8 @@ public sealed class AgentWorkItem
             SourceKind = SourceKind,
             SourceId = SourceId,
             SourceThreadId = SourceThreadId,
+            ApprovalRequestId = ApprovalRequestId,
+            ApprovalThreadId = ApprovalThreadId,
             Status = Status,
             CreatedAt = CreatedAt,
             UpdatedAt = UpdatedAt,

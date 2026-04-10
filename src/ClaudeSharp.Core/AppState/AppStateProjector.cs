@@ -77,13 +77,14 @@ public sealed class AppStateProjector
             status switch
             {
                 AgentWorkItemStatus.InProgress => 0,
-                AgentWorkItemStatus.Blocked => 1,
-                AgentWorkItemStatus.Pending => 2,
-                _ => 3,
+                AgentWorkItemStatus.AwaitingApproval => 1,
+                AgentWorkItemStatus.Blocked => 2,
+                AgentWorkItemStatus.Pending => 3,
+                _ => 4,
             };
 
         return workItems
-            .Where(entry => entry.Value is AgentWorkItemStatus.InProgress or AgentWorkItemStatus.Blocked or AgentWorkItemStatus.Pending)
+            .Where(entry => entry.Value is AgentWorkItemStatus.InProgress or AgentWorkItemStatus.AwaitingApproval or AgentWorkItemStatus.Blocked or AgentWorkItemStatus.Pending)
             .OrderBy(entry => Rank(entry.Value))
             .ThenBy(entry => entry.Key, StringComparer.OrdinalIgnoreCase)
             .Select(entry => entry.Key)
