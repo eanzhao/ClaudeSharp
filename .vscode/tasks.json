@@ -7,19 +7,41 @@
             "type": "process",
             "args": [
                 "build",
-                "${workspaceFolder}/src/ClaudeSharp.Cli/ClaudeSharp.Cli.csproj",
+                "${workspaceFolder}/ClaudeSharp.slnx",
                 "/property:GenerateFullPaths=true",
                 "/consoleloggerparameters:NoSummary;ForceNoAlign"
             ],
             "problemMatcher": "$msCompile"
         },
         {
+            "label": "test",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "test",
+                "${workspaceFolder}/ClaudeSharp.slnx"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "format",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "format",
+                "${workspaceFolder}/ClaudeSharp.slnx"
+            ],
+            "problemMatcher": []
+        },
+        {
             "label": "publish",
             "command": "dotnet",
             "type": "process",
             "args": [
-                "publish",
+                "build",
                 "${workspaceFolder}/src/ClaudeSharp.Cli/ClaudeSharp.Cli.csproj",
+                "--configuration",
+                "Release",
                 "/property:GenerateFullPaths=true",
                 "/consoleloggerparameters:NoSummary;ForceNoAlign"
             ],
