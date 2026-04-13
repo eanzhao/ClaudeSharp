@@ -69,12 +69,12 @@ internal static class ChatMessageConverter
                     break;
 
                 case ToolUseBlock tub:
-                {
-                    var args = JsonSerializer.Deserialize<Dictionary<string, object?>>(
-                        tub.Input.GetRawText());
-                    contents.Add(new FunctionCallContent(tub.ToolUseId, tub.Name, args));
-                    break;
-                }
+                    {
+                        var args = JsonSerializer.Deserialize<Dictionary<string, object?>>(
+                            tub.Input.GetRawText());
+                        contents.Add(new FunctionCallContent(tub.ToolUseId, tub.Name, args));
+                        break;
+                    }
 
                 case ThinkingBlock thinking when !string.IsNullOrWhiteSpace(thinking.Signature):
                     contents.Add(new TextReasoningContent(thinking.Text)
@@ -137,22 +137,22 @@ internal static class ChatMessageConverter
                     break;
 
                 case FunctionCallContent fcc:
-                {
-                    var inputJson = fcc.Arguments != null
-                        ? JsonSerializer.SerializeToElement(fcc.Arguments)
-                        : JsonSerializer.SerializeToElement(new { });
-
-                    var block = new ToolUseBlock
                     {
-                        ToolUseId = fcc.CallId ?? string.Empty,
-                        Name = fcc.Name ?? string.Empty,
-                        Input = inputJson,
-                    };
-                    turn.ContentBlocks.Add(block);
-                    turn.ToolUseBlocks.Add(block);
-                    events.Add(new ToolUseStartEvent(block.ToolUseId, block.Name, block.Input));
-                    break;
-                }
+                        var inputJson = fcc.Arguments != null
+                            ? JsonSerializer.SerializeToElement(fcc.Arguments)
+                            : JsonSerializer.SerializeToElement(new { });
+
+                        var block = new ToolUseBlock
+                        {
+                            ToolUseId = fcc.CallId ?? string.Empty,
+                            Name = fcc.Name ?? string.Empty,
+                            Input = inputJson,
+                        };
+                        turn.ContentBlocks.Add(block);
+                        turn.ToolUseBlocks.Add(block);
+                        events.Add(new ToolUseStartEvent(block.ToolUseId, block.Name, block.Input));
+                        break;
+                    }
             }
         }
 
@@ -254,21 +254,21 @@ internal static class ChatMessageConverter
                     break;
 
                 case FunctionCallContent fcc:
-                {
-                    var inputJson = fcc.Arguments != null
-                        ? JsonSerializer.SerializeToElement(fcc.Arguments)
-                        : JsonSerializer.SerializeToElement(new { });
-
-                    var block = new ToolUseBlock
                     {
-                        ToolUseId = fcc.CallId ?? string.Empty,
-                        Name = fcc.Name ?? string.Empty,
-                        Input = inputJson,
-                    };
-                    turn.ContentBlocks.Add(block);
-                    turn.ToolUseBlocks.Add(block);
-                    break;
-                }
+                        var inputJson = fcc.Arguments != null
+                            ? JsonSerializer.SerializeToElement(fcc.Arguments)
+                            : JsonSerializer.SerializeToElement(new { });
+
+                        var block = new ToolUseBlock
+                        {
+                            ToolUseId = fcc.CallId ?? string.Empty,
+                            Name = fcc.Name ?? string.Empty,
+                            Input = inputJson,
+                        };
+                        turn.ContentBlocks.Add(block);
+                        turn.ToolUseBlocks.Add(block);
+                        break;
+                    }
             }
         }
     }
