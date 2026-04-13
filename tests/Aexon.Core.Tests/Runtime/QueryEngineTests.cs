@@ -110,7 +110,7 @@ public class QueryEngineTests
         using var temp = new TempDirectory();
         var handler = new FakeAnthropicHandler();
         handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("hello"));
-        var client = TestSupport.CreateAnthropicClient(handler);
+        var client = TestSupport.CreateChatClient(handler);
         var engine = CreateEngine(
             temp.Root,
             new RecordingJournal(),
@@ -166,7 +166,7 @@ public class QueryEngineTests
     private static QueryEngine CreateEngine(
         string workingDirectory,
         RecordingJournal journal,
-        Anthropic.AnthropicClient? client = null,
+        Microsoft.Extensions.AI.IChatClient? client = null,
         IReadOnlyList<ConversationMessage>? initialMessages = null,
         QueryEngineConfig? config = null)
     {
@@ -178,10 +178,10 @@ public class QueryEngineTests
         var tools = new ToolRegistry();
         var permissions = new DefaultPermissionChecker();
         var httpHandler = new FakeAnthropicHandler();
-        var anthropicClient = client ?? TestSupport.CreateAnthropicClient(httpHandler);
+        var chatClient = client ?? TestSupport.CreateChatClient(httpHandler);
 
         return TestSupport.CreateQueryEngine(
-            anthropicClient,
+            chatClient,
             tools,
             provider,
             permissions,

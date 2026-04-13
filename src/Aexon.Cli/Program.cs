@@ -16,6 +16,7 @@ using Aexon.Core.Storage;
 using Aexon.Core.Tools;
 using Aexon.Tools;
 using Anthropic;
+using Microsoft.Extensions.AI;
 
 namespace Aexon.Cli;
 
@@ -113,7 +114,8 @@ internal static class Program
             rawAnthropicSettings,
             providerRouter.Resolve(model));
         var anthropicSettings = managedPolicy.AnthropicSettings;
-        using var client = CreateAnthropicClient(anthropicSettings);
+        using var anthropicClient = CreateAnthropicClient(anthropicSettings);
+        var chatClient = anthropicClient.AsIChatClient(model, defaultMaxOutputTokens: 16384);
         var agentSettings = AgentSettingsLoader.Load(
             workingDirectory,
             options.SettingsPath);
@@ -178,7 +180,7 @@ internal static class Program
             providerRouter,
             managedPolicy.AllowWebSearch,
             () => config.Model,
-            client,
+            chatClient,
             hooks,
             agentTaskRuntime,
             agentTeamRuntime,
@@ -195,7 +197,7 @@ internal static class Program
             : new McpRuntime();
 
         await using var queryEngine = new QueryEngine(
-            client,
+            chatClient,
             toolRegistry,
             new DefaultPermissionChecker(),
             config,
@@ -310,7 +312,7 @@ internal static class Program
         IProviderCapabilityRouter providerRouter,
         bool allowWebSearch,
         Func<string?> currentModelAccessor,
-        AnthropicClient client,
+        IChatClient chatClient,
         IHookRuntime hooks,
         IAgentTaskRuntime agentTaskRuntime,
         IAgentTeamRuntime agentTeamRuntime,
@@ -338,7 +340,7 @@ internal static class Program
         if (allowWebSearch)
             registry.Register(new WebSearchTool(providerRouter, currentModelAccessor));
         registry.Register(new AgentTool(
-            new QueryEngineAgentRunner(client, hooks: hooks),
+            new QueryEngineAgentRunner(chatClient, hooks: hooks),
             providerRouter,
             agentTaskRuntime,
             agentTeamRuntime,

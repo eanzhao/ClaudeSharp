@@ -4,7 +4,7 @@ using Aexon.Core.Hooks;
 using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
 using Aexon.Core.Query;
-using Anthropic;
+using Microsoft.Extensions.AI;
 
 namespace Aexon.Core.Agents;
 
@@ -13,18 +13,18 @@ namespace Aexon.Core.Agents;
 /// </summary>
 public sealed class QueryEngineAgentRunner : IAgentExecutionRunner
 {
-    private readonly AnthropicClient _client;
+    private readonly IChatClient _chatClient;
     private readonly IPermissionChecker _permissions;
     private readonly IHookRuntime _fallbackHooks;
     private readonly IAgentWorkspaceManager _workspaceManager;
 
     public QueryEngineAgentRunner(
-        AnthropicClient client,
+        IChatClient chatClient,
         IPermissionChecker? permissions = null,
         IHookRuntime? hooks = null,
         IAgentWorkspaceManager? workspaceManager = null)
     {
-        _client = client;
+        _chatClient = chatClient;
         _permissions = permissions ?? new DefaultPermissionChecker();
         _fallbackHooks = hooks ?? HookRuntime.Empty;
         _workspaceManager = workspaceManager ?? new GitWorktreeAgentWorkspaceManager();
@@ -64,7 +64,7 @@ public sealed class QueryEngineAgentRunner : IAgentExecutionRunner
         };
 
         await using var engine = new QueryEngine(
-            _client,
+            _chatClient,
             request.Tools,
             _permissions,
             config,

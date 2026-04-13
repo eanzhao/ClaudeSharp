@@ -11,6 +11,7 @@ using Aexon.Core.Storage;
 using Aexon.Core.Tests.Runtime;
 using Aexon.Core.Tools;
 using Anthropic;
+using Microsoft.Extensions.AI;
 
 namespace Aexon.Core.Tests.Hooks;
 
@@ -31,7 +32,7 @@ public sealed class QueryEngineHooksTests
             temp.Root,
             hooks,
             new RecordingJournal(),
-            client: TestSupport.CreateAnthropicClient(new SingleResponseHandler(FakeAnthropicHandler.CreateMessageResponse("hello"))));
+            client: TestSupport.CreateChatClient(new SingleResponseHandler(FakeAnthropicHandler.CreateMessageResponse("hello"))));
 
         var events = await CollectAsync(engine.SubmitMessageAsync("ping"));
         await engine.ClearMessagesAsync();
@@ -85,7 +86,7 @@ public sealed class QueryEngineHooksTests
             temp.Root,
             hooks,
             new RecordingJournal(),
-            client: TestSupport.CreateAnthropicClient(new SingleResponseHandler(FakeAnthropicHandler.CreateMessageResponse("hello"))),
+            client: TestSupport.CreateChatClient(new SingleResponseHandler(FakeAnthropicHandler.CreateMessageResponse("hello"))),
             initialMessages: BuildPressureMessages(),
             config: new QueryEngineConfig
             {
@@ -118,7 +119,7 @@ public sealed class QueryEngineHooksTests
         string workingDirectory,
         IHookRuntime hooks,
         RecordingJournal journal,
-        AnthropicClient? client = null,
+        IChatClient? client = null,
         IReadOnlyList<ConversationMessage>? initialMessages = null,
         QueryEngineConfig? config = null)
     {
@@ -128,7 +129,7 @@ public sealed class QueryEngineHooksTests
         };
 
         return TestSupport.CreateQueryEngine(
-            client ?? TestSupport.CreateAnthropicClient(new SingleResponseHandler(FakeAnthropicHandler.CreateMessageResponse("ok"))),
+            client ?? TestSupport.CreateChatClient(new SingleResponseHandler(FakeAnthropicHandler.CreateMessageResponse("ok"))),
             new ToolRegistry(),
             provider,
             new DefaultPermissionChecker(),

@@ -165,7 +165,7 @@ public sealed class QueryEngineFlowTests
             WorkingDirectory = workingDirectory,
         };
 
-        var client = TestSupport.CreateAnthropicClient(handler);
+        var client = TestSupport.CreateChatClient(handler);
         return TestSupport.CreateQueryEngine(
             client,
             tools,

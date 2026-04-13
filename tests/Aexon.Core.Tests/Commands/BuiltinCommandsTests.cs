@@ -367,7 +367,7 @@ public sealed class BuiltinCommandsTests
         };
 
         var engine = TestSupport.CreateQueryEngine(
-            TestSupport.CreateAnthropicClient(new FakeAnthropicHandler()),
+            TestSupport.CreateChatClient(new FakeAnthropicHandler()),
             new ToolRegistry(),
             provider,
             new DefaultPermissionChecker(),

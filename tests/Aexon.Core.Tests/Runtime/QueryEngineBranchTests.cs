@@ -7,6 +7,7 @@ using Aexon.Core.Query;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
 using Anthropic;
+using Microsoft.Extensions.AI;
 
 namespace Aexon.Core.Tests.Runtime;
 
@@ -28,7 +29,7 @@ public sealed class QueryEngineBranchTests
         var engine = CreateEngine(
             temp.Root,
             new RecordingJournal(),
-            client: TestSupport.CreateAnthropicClient(handler),
+            client: TestSupport.CreateChatClient(handler),
             initialMessages: BuildHistory(),
             config: new QueryEngineConfig
             {
@@ -62,7 +63,7 @@ public sealed class QueryEngineBranchTests
         var engine = CreateEngine(
             temp.Root,
             new RecordingJournal(),
-            client: TestSupport.CreateAnthropicClient(handler));
+            client: TestSupport.CreateChatClient(handler));
 
         var events = await CollectAsync(engine.SubmitMessageAsync("ping"));
 
@@ -81,7 +82,7 @@ public sealed class QueryEngineBranchTests
         var engine = CreateEngine(
             temp.Root,
             new RecordingJournal(),
-            client: TestSupport.CreateAnthropicClient(handler),
+            client: TestSupport.CreateChatClient(handler),
             initialMessages: [UserMessage.FromText("seed")],
             config: new QueryEngineConfig
             {
@@ -107,7 +108,7 @@ public sealed class QueryEngineBranchTests
         var engine = CreateEngine(
             temp.Root,
             new RecordingJournal(),
-            client: TestSupport.CreateAnthropicClient(handler),
+            client: TestSupport.CreateChatClient(handler),
             config: new QueryEngineConfig
             {
                 EnableAutoCompact = false,
@@ -167,7 +168,7 @@ public sealed class QueryEngineBranchTests
     private static QueryEngine CreateEngine(
         string workingDirectory,
         RecordingJournal journal,
-        AnthropicClient? client = null,
+        IChatClient? client = null,
         IReadOnlyList<ConversationMessage>? initialMessages = null,
         QueryEngineConfig? config = null,
         IContextPressurePipeline? contextPressurePipeline = null)
@@ -180,10 +181,10 @@ public sealed class QueryEngineBranchTests
         var tools = new ToolRegistry();
         var permissions = new DefaultPermissionChecker();
         var handler = new FakeAnthropicHandler();
-        var anthropicClient = client ?? TestSupport.CreateAnthropicClient(handler);
+        var chatClient = client ?? TestSupport.CreateChatClient(handler);
 
         return TestSupport.CreateQueryEngine(
-            anthropicClient,
+            chatClient,
             tools,
             provider,
             permissions,
