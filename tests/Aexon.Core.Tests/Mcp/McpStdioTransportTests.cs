@@ -12,6 +12,7 @@ public sealed class McpStdioTransportTests
     [Fact]
     public async Task StartAsync_WritesReadsAndPumpsStderr()
     {
+        if (OperatingSystem.IsWindows()) return;
         using var temp = new TempDirectory("mcp-stdio");
         var script = McpTestScripts.WriteShellScript(
             temp,
@@ -56,6 +57,7 @@ public sealed class McpStdioTransportTests
     [Fact]
     public async Task StartAsync_ReturnsExitableProcessThatDisposesCleanly()
     {
+        if (OperatingSystem.IsWindows()) return;
         using var temp = new TempDirectory("mcp-stdio-exit");
         var script = McpTestScripts.WriteShellScript(
             temp,

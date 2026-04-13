@@ -17,6 +17,7 @@ public static partial class FrontmatterParser
 
     public static ParsedMarkdown Parse(string markdown)
     {
+        markdown = markdown.ReplaceLineEndings("\n");
         var match = FrontmatterRegex.Match(markdown);
         if (!match.Success)
         {

@@ -20,7 +20,7 @@ public sealed class ProcessHookCommandRunnerTests
             new HookCommandDefinition
             {
                 EventKind = HookEventKind.SessionStart,
-                Command = BuildEchoCommand(),
+                Command = BuildEchoCommand(temp.Root),
                 WorkingDirectory = workDir,
                 TimeoutMs = 2_000,
             },
@@ -86,10 +86,19 @@ public sealed class ProcessHookCommandRunnerTests
         Assert.Equal(-1, result.ExitCode);
     }
 
-    private static string BuildEchoCommand() =>
-        OperatingSystem.IsWindows()
-            ? "set /p PAYLOAD= & echo %FOO%^|command^|%CD%^|%PAYLOAD%"
-            : "printf '%s|%s|%s|%s' \"$FOO\" \"command\" \"$(pwd)\" \"$(cat)\"";
+    private static string BuildEchoCommand(string tempDir)
+    {
+        if (!OperatingSystem.IsWindows())
+            return "printf '%s|%s|%s|%s' \"$FOO\" \"command\" \"$(pwd)\" \"$(cat)\"";
+
+        var script = Path.Combine(tempDir, "echo_hook.cmd");
+        File.WriteAllText(script,
+            "@echo off\r\n" +
+            "setlocal enabledelayedexpansion\r\n" +
+            "set /p PAYLOAD=\r\n" +
+            "echo %FOO%^|command^|%CD%^|!PAYLOAD!\r\n");
+        return script;
+    }
 
     private static string BuildFailureCommand() =>
         OperatingSystem.IsWindows()
