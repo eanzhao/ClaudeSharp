@@ -4,8 +4,8 @@
 
 ## 1. 权限规则匹配器
 
-- C# 实现：`src/ClaudeSharp.Core/Permissions/PermissionRules.cs`
-- 接入点：`src/ClaudeSharp.Core/Permissions/PermissionSystem.cs`
+- C# 实现：`src/Aexon.Core/Permissions/PermissionRules.cs`
+- 接入点：`src/Aexon.Core/Permissions/PermissionSystem.cs`
 - Claude Code 来源：
   - `claude-code/src/utils/permissions/PermissionRule.ts`
   - `claude-code/src/utils/permissions/shellRuleMatching.ts`
@@ -20,7 +20,7 @@
 
 ## 2. Markdown Frontmatter 解析器
 
-- C# 实现：`src/ClaudeSharp.Core/Markdown/FrontmatterParser.cs`
+- C# 实现：`src/Aexon.Core/Markdown/FrontmatterParser.cs`
 - Claude Code 来源：`claude-code/src/utils/frontmatterParser.ts`
 
 保留了几件很实用的能力：
@@ -34,8 +34,8 @@
 
 ## 3. 指令文件扫描器
 
-- C# 实现：`src/ClaudeSharp.Core/Context/MemoryInstructionScanner.cs`
-- 接入点：`src/ClaudeSharp.Core/Context/ContextProvider.cs`
+- C# 实现：`src/Aexon.Core/Context/MemoryInstructionScanner.cs`
+- 接入点：`src/Aexon.Core/Context/ContextProvider.cs`
 - Claude Code 来源：`claude-code/src/utils/claudemd.ts`
 
 现在 `ContextProvider` 不再只会傻读当前目录的 `CLAUDE.md`，而是会从根目录一路扫到当前目录，按顺序收集：
@@ -49,8 +49,8 @@
 
 ## 4. 模型目录
 
-- C# 实现：`src/ClaudeSharp.Core/Query/ClaudeModelCatalog.cs`
-- 接入点：`src/ClaudeSharp.Core/Query/ClaudeModels.cs`
+- C# 实现：`src/Aexon.Core/Query/ClaudeModelCatalog.cs`
+- 接入点：`src/Aexon.Core/Query/ClaudeModels.cs`
 - Claude Code 来源：
   - `claude-code/src/utils/model/configs.ts`
   - `claude-code/src/utils/model/aliases.ts`
@@ -67,8 +67,8 @@
 
 ## 5. Bash 退出码语义解释器
 
-- C# 实现：`src/ClaudeSharp.Tools/Shell/CommandSemantics.cs`
-- 接入点：`src/ClaudeSharp.Tools/BashTool.cs`
+- C# 实现：`src/Aexon.Tools/Shell/CommandSemantics.cs`
+- 接入点：`src/Aexon.Tools/BashTool.cs`
 - Claude Code 来源：`claude-code/src/tools/BashTool/commandSemantics.ts`
 
 以前 `BashTool` 只要退出码不是 0，就只能机械地把 `Exit code: N` 拼出来。现在会按命令语义解释：

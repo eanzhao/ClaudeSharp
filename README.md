@@ -1,10 +1,10 @@
-# ClaudeSharp
+# Aexon
 
 A .NET 10 reimplementation of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's agentic coding CLI — written in C#.
 
 ## Overview
 
-ClaudeSharp provides an interactive terminal REPL where Claude can execute tools (shell commands, file operations, code search) to assist with software engineering tasks. It faithfully reproduces the core agentic loop architecture of the original TypeScript implementation using idiomatic .NET patterns.
+Aexon provides an interactive terminal REPL where Claude can execute tools (shell commands, file operations, code search) to assist with software engineering tasks. It faithfully reproduces the core agentic loop architecture of the original TypeScript implementation using idiomatic .NET patterns.
 
 This project is maintained for **educational and security research** purposes, studying agentic developer tooling architecture and software supply-chain practices. See [`claude-code/README.md`](claude-code/README.md) for full research context.
 
@@ -26,10 +26,10 @@ This project is maintained for **educational and security research** purposes, s
 
 ```
 src/
-├── ClaudeSharp.Cli/          # Entry point, REPL shell, CLI option parsing
-├── ClaudeSharp.Core/         # QueryEngine, agents, hooks, MCP, permissions, context, storage
-├── ClaudeSharp.Tools/        # Built-in tools, web tools, and subagent-facing tools
-└── ClaudeSharp.Commands/     # Built-in slash commands (/help, /agents, /compact, /session, ...)
+├── Aexon.Cli/          # Entry point, REPL shell, CLI option parsing
+├── Aexon.Core/         # QueryEngine, agents, hooks, MCP, permissions, context, storage
+├── Aexon.Tools/        # Built-in tools, web tools, and subagent-facing tools
+└── Aexon.Commands/     # Built-in slash commands (/help, /agents, /compact, /session, ...)
 ```
 
 ## Prerequisites
@@ -39,7 +39,7 @@ src/
 
 ## Configuration
 
-ClaudeSharp resolves Anthropic settings in this order:
+Aexon resolves Anthropic settings in this order:
 
 1. `ANTHROPIC_API_KEY`
 2. `<working directory>/appsettings.secrets.json`
@@ -62,7 +62,7 @@ Both of the following JSON shapes are supported:
 
 ```json
 {
-  "ClaudeSharp": {
+  "Aexon": {
     "Anthropic": {
       "apiKey": "YOUR_ANTHROPIC_API_KEY",
       "baseUrl": "https://api.anthropic.com"
@@ -78,7 +78,7 @@ Both of the following JSON shapes are supported:
 dotnet build
 
 # Run (interactive mode)
-dotnet run --project src/ClaudeSharp.Cli
+dotnet run --project src/Aexon.Cli
 
 # Or place your key in ./appsettings.secrets.json first
 cat > appsettings.secrets.json <<'JSON'
@@ -90,13 +90,13 @@ cat > appsettings.secrets.json <<'JSON'
 JSON
 
 # Run with an initial prompt (non-interactive)
-dotnet run --project src/ClaudeSharp.Cli -- "explain this codebase"
+dotnet run --project src/Aexon.Cli -- "explain this codebase"
 
 # Specify working directory and model
-dotnet run --project src/ClaudeSharp.Cli -- --cwd /path/to/project --model opus "your prompt"
+dotnet run --project src/Aexon.Cli -- --cwd /path/to/project --model opus "your prompt"
 
 # Resume the latest session
-dotnet run --project src/ClaudeSharp.Cli -- --continue
+dotnet run --project src/Aexon.Cli -- --continue
 ```
 
 ## Hooks And MCP Settings
@@ -114,10 +114,10 @@ The current MCP implementation supports stdio servers and registers their tools 
 
 ```bash
 # Run the full test suite
-dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --no-restore
+dotnet test tests/Aexon.Core.Tests/Aexon.Core.Tests.csproj --no-restore
 
 # Enforce the total project line-coverage gate
-dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --configuration Release --no-restore \
+dotnet test tests/Aexon.Core.Tests/Aexon.Core.Tests.csproj --configuration Release --no-restore \
   /p:CollectCoverage=true \
   /p:CoverletOutputFormat=json \
   /p:CoverletOutput=TestResults/coverage-threshold/ \

@@ -21,14 +21,14 @@ jobs:
           global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore ClaudeSharp.slnx
+        run: dotnet restore Aexon.slnx
 
       - name: Build
-        run: dotnet build ClaudeSharp.slnx --configuration Release --no-restore
+        run: dotnet build Aexon.slnx --configuration Release --no-restore
 
       - name: Test With Coverage Gate
         run: >
-          dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj
+          dotnet test tests/Aexon.Core.Tests/Aexon.Core.Tests.csproj
           --configuration Release
           --no-restore
           /p:CollectCoverage=true
