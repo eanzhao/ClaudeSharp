@@ -1,0 +1,70 @@
+name: release
+
+on:
+  pull_request:
+    branches:
+      - dev
+    types:
+      - closed
+
+jobs:
+  publish:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Compute next patch version
+        id: version
+        run: |
+          # Find latest 0.1.x tag, default to 0.1.-1 if none
+          latest=$(git tag --list 'v0.1.*' --sort=-v:refname | head -1)
+          if [ -z "$latest" ]; then
+            patch=0
+          else
+            patch=$(echo "$latest" | sed 's/v0\.1\.//')
+            patch=$((patch + 1))
+          fi
+          version="0.1.${patch}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "📦 Next version: ${version}"
+
+      - name: Restore
+        run: dotnet restore Aexon.slnx
+
+      - name: Build
+        run: dotnet build Aexon.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Aexon.slnx --configuration Release --no-restore
+
+      - name: Pack
+        run: >
+          dotnet pack src/Aexon.Cli/Aexon.Cli.csproj
+          --configuration Release
+          --no-build
+          -p:Version=${{ steps.version.outputs.version }}
+          --output ./nupkg
+
+      - name: Push to NuGet
+        run: >
+          dotnet nuget push ./nupkg/Aexon.${{ steps.version.outputs.version }}.nupkg
+          --api-key ${{ secrets.NUGET_API_KEY }}
+          --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      - name: Tag release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"

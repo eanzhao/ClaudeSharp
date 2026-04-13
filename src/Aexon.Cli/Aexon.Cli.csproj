@@ -1,0 +1,39 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aexon.Core\Aexon.Core.csproj" />
+    <ProjectReference Include="..\Aexon.Tools\Aexon.Tools.csproj" />
+    <ProjectReference Include="..\Aexon.Commands\Aexon.Commands.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.5" />
+    <PackageReference Include="Spectre.Console" Version="0.54.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="appsettings.secrets.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>aexon</ToolCommandName>
+    <PackageId>Aexon</PackageId>
+    <Version>0.1.0</Version>
+    <VersionPrefix>0.1</VersionPrefix>
+    <Authors>eanzhao</Authors>
+    <Description>AI-powered CLI tool, inspired by claude-code source code</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/eanzhao/ClaudeSharp</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/eanzhao/ClaudeSharp</RepositoryUrl>
+    <PackageTags>ai;cli;claude;agent</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
