@@ -10,7 +10,10 @@ on:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -21,6 +24,14 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
       - name: Restore
         run: dotnet restore Aexon.slnx
 
@@ -29,7 +40,7 @@ jobs:
 
       - name: Test With Coverage Gate
         run: >
-          dotnet test tests/Aexon.Core.Tests/Aexon.Core.Tests.csproj
+          dotnet test Aexon.slnx
           --configuration Release
           --no-restore
           /p:CollectCoverage=true
