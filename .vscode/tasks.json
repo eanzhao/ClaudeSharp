@@ -38,7 +38,7 @@
             "command": "dotnet",
             "type": "process",
             "args": [
-                "build",
+                "publish",
                 "${workspaceFolder}/src/ClaudeSharp.Cli/ClaudeSharp.Cli.csproj",
                 "--configuration",
                 "Release",
