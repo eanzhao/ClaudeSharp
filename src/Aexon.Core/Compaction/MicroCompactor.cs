@@ -163,57 +163,57 @@ public sealed class TimeBasedMicroCompactor : IMicroCompactor
         switch (message)
         {
             case UserMessage user:
-            {
-                var rewritten = new List<ContentBlock>(user.Content.Count);
-                foreach (var block in user.Content)
                 {
-                    if (block is ToolResultBlock result &&
-                        !string.Equals(result.Content, MicrocompactPlaceholders.OldToolResult, StringComparison.Ordinal))
+                    var rewritten = new List<ContentBlock>(user.Content.Count);
+                    foreach (var block in user.Content)
                     {
-                        rewritten.Add(new ToolResultBlock(
-                            result.ToolUseId,
-                            MicrocompactPlaceholders.OldToolResult,
-                            result.IsError));
-                        clearedToolResult = true;
+                        if (block is ToolResultBlock result &&
+                            !string.Equals(result.Content, MicrocompactPlaceholders.OldToolResult, StringComparison.Ordinal))
+                        {
+                            rewritten.Add(new ToolResultBlock(
+                                result.ToolUseId,
+                                MicrocompactPlaceholders.OldToolResult,
+                                result.IsError));
+                            clearedToolResult = true;
+                        }
+                        else
+                        {
+                            rewritten.Add(block);
+                        }
                     }
-                    else
-                    {
-                        rewritten.Add(block);
-                    }
-                }
 
-                return clearedToolResult
-                    ? user with
-                    {
-                        Content = rewritten,
-                        ToolUseResult = string.IsNullOrWhiteSpace(user.ToolUseResult)
-                            ? user.ToolUseResult
-                            : MicrocompactPlaceholders.OldToolResult,
-                    }
-                    : user;
-            }
+                    return clearedToolResult
+                        ? user with
+                        {
+                            Content = rewritten,
+                            ToolUseResult = string.IsNullOrWhiteSpace(user.ToolUseResult)
+                                ? user.ToolUseResult
+                                : MicrocompactPlaceholders.OldToolResult,
+                        }
+                        : user;
+                }
 
             case AssistantMessage assistant when clearThinkingBlocks:
-            {
-                var rewritten = new List<ContentBlock>(assistant.Content.Count);
-                foreach (var block in assistant.Content)
                 {
-                    if (block is ThinkingBlock thinking &&
-                        !string.Equals(thinking.Text, MicrocompactPlaceholders.OldThinking, StringComparison.Ordinal))
+                    var rewritten = new List<ContentBlock>(assistant.Content.Count);
+                    foreach (var block in assistant.Content)
                     {
-                        rewritten.Add(new ThinkingBlock(MicrocompactPlaceholders.OldThinking));
-                        clearedThinking = true;
+                        if (block is ThinkingBlock thinking &&
+                            !string.Equals(thinking.Text, MicrocompactPlaceholders.OldThinking, StringComparison.Ordinal))
+                        {
+                            rewritten.Add(new ThinkingBlock(MicrocompactPlaceholders.OldThinking));
+                            clearedThinking = true;
+                        }
+                        else
+                        {
+                            rewritten.Add(block);
+                        }
                     }
-                    else
-                    {
-                        rewritten.Add(block);
-                    }
-                }
 
-                return clearedThinking
-                    ? assistant with { Content = rewritten }
-                    : assistant;
-            }
+                    return clearedThinking
+                        ? assistant with { Content = rewritten }
+                        : assistant;
+                }
 
             default:
                 return message;

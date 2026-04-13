@@ -1,6 +1,6 @@
 using System.Runtime.CompilerServices;
-using Aexon.Core.Messages;
 using Aexon.Core.Hooks;
+using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
 
 namespace Aexon.Core.Tools;

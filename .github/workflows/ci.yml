@@ -38,6 +38,9 @@ jobs:
       - name: Build
         run: dotnet build Aexon.slnx --configuration Release --no-restore
 
+      - name: Check formatting
+        run: dotnet format Aexon.slnx --verify-no-changes --no-restore --verbosity diagnostic --severity error
+
       - name: Test With Coverage Gate
         run: >
           dotnet test Aexon.slnx
@@ -49,3 +52,11 @@ jobs:
           /p:Threshold=80
           /p:ThresholdType=line
           /p:ThresholdStat=total
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ matrix.os }}
+          path: tests/**/TestResults/coverage-ci/
+          if-no-files-found: warn

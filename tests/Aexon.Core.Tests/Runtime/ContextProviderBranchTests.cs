@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Aexon.Core.Context;
-using Aexon.Core.Query;
 using Aexon.Core.Permissions;
+using Aexon.Core.Query;
 using Aexon.Core.Tools;
 
 namespace Aexon.Core.Tests.Runtime;

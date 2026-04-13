@@ -765,20 +765,20 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                 break;
 
             case "tag-add":
-            {
-                var tag = TryReadString(entry.Payload, "tag");
-                if (!string.IsNullOrWhiteSpace(tag))
-                    metadata.Tags.Add(tag);
-                break;
-            }
+                {
+                    var tag = TryReadString(entry.Payload, "tag");
+                    if (!string.IsNullOrWhiteSpace(tag))
+                        metadata.Tags.Add(tag);
+                    break;
+                }
 
             case "tag-remove":
-            {
-                var tag = TryReadString(entry.Payload, "tag");
-                if (!string.IsNullOrWhiteSpace(tag))
-                    metadata.Tags.Remove(tag);
-                break;
-            }
+                {
+                    var tag = TryReadString(entry.Payload, "tag");
+                    if (!string.IsNullOrWhiteSpace(tag))
+                        metadata.Tags.Remove(tag);
+                    break;
+                }
         }
     }
 

@@ -1,21 +1,21 @@
 using System.Text;
 using System.Text.Json;
-using Anthropic;
 using Aexon.Commands;
-using Aexon.Core.AppState;
 using Aexon.Core.Agents;
-using Aexon.Core.Hooks;
-using Aexon.Core.Memory;
+using Aexon.Core.AppState;
 using Aexon.Core.Commands;
 using Aexon.Core.Configuration;
 using Aexon.Core.Context;
+using Aexon.Core.Hooks;
 using Aexon.Core.Mcp;
+using Aexon.Core.Memory;
 using Aexon.Core.Permissions;
 using Aexon.Core.Providers;
 using Aexon.Core.Query;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
 using Aexon.Tools;
+using Anthropic;
 
 namespace Aexon.Cli;
 
