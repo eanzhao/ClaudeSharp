@@ -22,6 +22,7 @@
     <ToolCommandName>aexon</ToolCommandName>
     <PackageId>Aexon</PackageId>
     <Version>0.1.0</Version>
+    <VersionPrefix>0.1</VersionPrefix>
     <Authors>eanzhao</Authors>
     <Description>AI-powered CLI tool, inspired by claude-code source code</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
