@@ -2,8 +2,8 @@ using System.Text.Json;
 using Aexon.Core.Hooks;
 using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
-using Aexon.Core.Tools;
 using Aexon.Core.Tests.Runtime;
+using Aexon.Core.Tools;
 
 namespace Aexon.Core.Tests.Hooks;
 

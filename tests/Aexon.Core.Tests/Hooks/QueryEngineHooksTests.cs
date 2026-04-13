@@ -1,7 +1,6 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using Anthropic;
 using Aexon.Core.Compaction;
 using Aexon.Core.Context;
 using Aexon.Core.Hooks;
@@ -11,6 +10,7 @@ using Aexon.Core.Query;
 using Aexon.Core.Storage;
 using Aexon.Core.Tests.Runtime;
 using Aexon.Core.Tools;
+using Anthropic;
 
 namespace Aexon.Core.Tests.Hooks;
 

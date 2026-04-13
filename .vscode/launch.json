@@ -2,9 +2,6 @@
     "version": "0.2.0",
     "configurations": [
         {
-            // 使用 IntelliSense 找出 C# 调试存在哪些属性
-            // 将悬停用于现有属性的说明
-            // 有关详细信息，请访问 https://github.com/dotnet/vscode-csharp/blob/main/debugger-launchjson.md
             "name": ".NET Core Launch (console)",
             "type": "coreclr",
             "request": "launch",
@@ -13,8 +10,7 @@
             "program": "${workspaceFolder}/src/Aexon.Cli/bin/Debug/net10.0/Aexon.Cli.dll",
             "args": [],
             "cwd": "${workspaceFolder}/src/Aexon.Cli",
-            // 有关“控制台”字段的详细信息，请参阅 https://aka.ms/VSCode-CS-LaunchJson-Console
-            "console": "internalConsole",
+            "console": "integratedTerminal",
             "stopAtEntry": false
         },
         {

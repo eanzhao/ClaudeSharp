@@ -17,6 +17,7 @@ public static partial class FrontmatterParser
 
     public static ParsedMarkdown Parse(string markdown)
     {
+        markdown = markdown.ReplaceLineEndings("\n");
         var match = FrontmatterRegex.Match(markdown);
         if (!match.Success)
         {
@@ -106,27 +107,27 @@ public static partial class FrontmatterParser
                 or float or double or decimal:
                 return node;
             case IDictionary dictionary:
-            {
-                var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                foreach (DictionaryEntry entry in dictionary)
                 {
-                    var key = Convert.ToString(entry.Key);
-                    if (string.IsNullOrWhiteSpace(key))
-                        continue;
+                    var result = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                    foreach (DictionaryEntry entry in dictionary)
+                    {
+                        var key = Convert.ToString(entry.Key);
+                        if (string.IsNullOrWhiteSpace(key))
+                            continue;
 
-                    result[key] = NormalizeYamlNode(entry.Value);
+                        result[key] = NormalizeYamlNode(entry.Value);
+                    }
+
+                    return result;
                 }
-
-                return result;
-            }
             case IEnumerable enumerable:
-            {
-                var result = new List<object?>();
-                foreach (var item in enumerable)
-                    result.Add(NormalizeYamlNode(item));
+                {
+                    var result = new List<object?>();
+                    foreach (var item in enumerable)
+                        result.Add(NormalizeYamlNode(item));
 
-                return result;
-            }
+                    return result;
+                }
             default:
                 return Convert.ToString(node);
         }

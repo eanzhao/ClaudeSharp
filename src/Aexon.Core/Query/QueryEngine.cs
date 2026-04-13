@@ -1,7 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using Anthropic;
 using Aexon.Core.Compaction;
 using Aexon.Core.Hooks;
 using Aexon.Core.Memory;
@@ -9,6 +8,7 @@ using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
+using Anthropic;
 using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
 using ApiInputSchema = Anthropic.Models.Messages.InputSchema;
 using ApiMessageCreateParams = Anthropic.Models.Messages.MessageCreateParams;
@@ -296,40 +296,40 @@ public class QueryEngine : IAsyncDisposable
             switch (update)
             {
                 case ToolPermissionRequestUpdate request:
-                {
-                    var permissionEvent = new PermissionRequestEvent
                     {
-                        ToolName = request.Invocation.Name,
-                        Description = request.Description,
-                        Input = request.ObservedInput,
-                    };
+                        var permissionEvent = new PermissionRequestEvent
+                        {
+                            ToolName = request.Invocation.Name,
+                            Description = request.Description,
+                            Input = request.ObservedInput,
+                        };
 
-                    yield return permissionEvent;
-                    var approved = await permissionEvent.WaitForResponseAsync();
-                    request.SetResponse(approved);
-                    break;
-                }
+                        yield return permissionEvent;
+                        var approved = await permissionEvent.WaitForResponseAsync();
+                        request.SetResponse(approved);
+                        break;
+                    }
                 case ToolProgressUpdate progress:
-                {
-                    yield return new ToolProgressEvent(
-                        progress.ToolUseId,
-                        progress.Progress.Message ?? progress.Progress.Type);
-                    break;
-                }
+                    {
+                        yield return new ToolProgressEvent(
+                            progress.ToolUseId,
+                            progress.Progress.Message ?? progress.Progress.Type);
+                        break;
+                    }
                 case ToolCompletedUpdate completed:
-                {
-                    yield return new ToolResultEvent(
-                        completed.Outcome.Invocation.ToolUseId,
-                        completed.Outcome.Invocation.Name,
-                        completed.Outcome.Result.Data,
-                        completed.Outcome.Result.IsError);
+                    {
+                        yield return new ToolResultEvent(
+                            completed.Outcome.Invocation.ToolUseId,
+                            completed.Outcome.Invocation.Name,
+                            completed.Outcome.Result.Data,
+                            completed.Outcome.Result.IsError);
 
-                    await AddMessageAsync(UserMessage.FromToolResult(
-                        completed.Outcome.Invocation.ToolUseId,
-                        completed.Outcome.Result.Data,
-                        completed.Outcome.Result.IsError), ct);
-                    break;
-                }
+                        await AddMessageAsync(UserMessage.FromToolResult(
+                            completed.Outcome.Invocation.ToolUseId,
+                            completed.Outcome.Result.Data,
+                            completed.Outcome.Result.IsError), ct);
+                        break;
+                    }
             }
         }
     }

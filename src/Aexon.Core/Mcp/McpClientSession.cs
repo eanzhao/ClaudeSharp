@@ -221,24 +221,24 @@ public sealed class McpClientSession : IMcpClientSession
                 switch (type)
                 {
                     case "text":
-                    {
-                        var text = TryGetString(block, "text");
-                        if (!string.IsNullOrWhiteSpace(text))
-                            parts.Add(text);
-                        break;
-                    }
+                        {
+                            var text = TryGetString(block, "text");
+                            if (!string.IsNullOrWhiteSpace(text))
+                                parts.Add(text);
+                            break;
+                        }
                     case "image":
-                    {
-                        var mimeType = TryGetString(block, "mimeType") ?? "image";
-                        parts.Add($"[MCP image result: {mimeType}]");
-                        break;
-                    }
+                        {
+                            var mimeType = TryGetString(block, "mimeType") ?? "image";
+                            parts.Add($"[MCP image result: {mimeType}]");
+                            break;
+                        }
                     case "audio":
-                    {
-                        var mimeType = TryGetString(block, "mimeType") ?? "audio";
-                        parts.Add($"[MCP audio result: {mimeType}]");
-                        break;
-                    }
+                        {
+                            var mimeType = TryGetString(block, "mimeType") ?? "audio";
+                            parts.Add($"[MCP audio result: {mimeType}]");
+                            break;
+                        }
                     default:
                         parts.Add(block.GetRawText());
                         break;

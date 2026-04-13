@@ -1,10 +1,10 @@
 using System.Text;
-using Anthropic;
 using Aexon.Core.Context;
 using Aexon.Core.Hooks;
 using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
 using Aexon.Core.Query;
+using Anthropic;
 
 namespace Aexon.Core.Agents;
 

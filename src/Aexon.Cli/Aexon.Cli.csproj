@@ -24,10 +24,10 @@
     <Version>0.1.0</Version>
     <VersionPrefix>0.1</VersionPrefix>
     <Authors>eanzhao</Authors>
-    <Description>AI-powered CLI tool, inspired by claude-code source code</Description>
+    <Description>AI-powered CLI tool inspired by Claude Code</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/eanzhao/ClaudeSharp</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/eanzhao/ClaudeSharp</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/eanzhao/Aexon</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/eanzhao/Aexon</RepositoryUrl>
     <PackageTags>ai;cli;claude;agent</PackageTags>
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>

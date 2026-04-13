@@ -13,6 +13,7 @@ public sealed class McpClientSessionTests
     [Fact]
     public async Task ConnectAsync_InitializesListsToolsAndCallsToolsThroughTheStdioTransport()
     {
+        if (OperatingSystem.IsWindows()) return;
         using var temp = new TempDirectory("mcp-session");
         var script = McpTestScripts.WriteShellScript(
             temp,
@@ -107,6 +108,7 @@ public sealed class McpClientSessionTests
     [Fact]
     public async Task ConnectAsync_ThrowsWhenInitializeReturnsProtocolError()
     {
+        if (OperatingSystem.IsWindows()) return;
         using var temp = new TempDirectory("mcp-session-fail");
         var script = McpTestScripts.WriteShellScript(
             temp,

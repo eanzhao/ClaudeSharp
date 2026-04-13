@@ -728,13 +728,13 @@ public sealed class MailboxStatusTool : ITool
         }
 
         var messages = _messageRuntime.ListMessages(new AgentMessageListOptions
-            {
-                Sender = request.Sender,
-                Recipient = request.Recipient,
-                ThreadId = request.ThreadId,
-                Status = request.UnreadOnly ? AgentMessageStatus.Delivered : null,
-                Limit = request.Limit,
-            })
+        {
+            Sender = request.Sender,
+            Recipient = request.Recipient,
+            ThreadId = request.ThreadId,
+            Status = request.UnreadOnly ? AgentMessageStatus.Delivered : null,
+            Limit = request.Limit,
+        })
             .Where(message =>
                 string.IsNullOrWhiteSpace(request.Participant) ||
                 string.Equals(message.From, request.Participant.Trim(), StringComparison.OrdinalIgnoreCase) ||

@@ -12,6 +12,7 @@ public sealed class McpClientSessionFactoryTests
     [Fact]
     public async Task ConnectAsync_ForwardsStderrSinkAndReturnsConnectedSession()
     {
+        if (OperatingSystem.IsWindows()) return;
         using var temp = new TempDirectory("mcp-factory");
         var script = McpTestScripts.WriteShellScript(
             temp,

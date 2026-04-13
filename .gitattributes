@@ -1,0 +1,16 @@
+# Enforce LF line endings across all platforms to match .editorconfig
+* text=auto eol=lf
+
+# Explicitly mark binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.dll binary
+*.exe binary
+*.nupkg binary

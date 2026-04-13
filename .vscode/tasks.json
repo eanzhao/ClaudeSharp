@@ -7,11 +7,31 @@
             "type": "process",
             "args": [
                 "build",
-                "${workspaceFolder}/src/Aexon.Cli/Aexon.Cli.csproj",
+                "${workspaceFolder}/Aexon.slnx",
                 "/property:GenerateFullPaths=true",
                 "/consoleloggerparameters:NoSummary;ForceNoAlign"
             ],
             "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "test",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "test",
+                "${workspaceFolder}/Aexon.slnx"
+            ],
+            "problemMatcher": "$msCompile"
+        },
+        {
+            "label": "format",
+            "command": "dotnet",
+            "type": "process",
+            "args": [
+                "format",
+                "${workspaceFolder}/Aexon.slnx"
+            ],
+            "problemMatcher": []
         },
         {
             "label": "publish",
@@ -20,6 +40,8 @@
             "args": [
                 "publish",
                 "${workspaceFolder}/src/Aexon.Cli/Aexon.Cli.csproj",
+                "--configuration",
+                "Release",
                 "/property:GenerateFullPaths=true",
                 "/consoleloggerparameters:NoSummary;ForceNoAlign"
             ],

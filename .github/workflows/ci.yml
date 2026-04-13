@@ -10,7 +10,10 @@ on:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout
@@ -21,15 +24,26 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
       - name: Restore
         run: dotnet restore Aexon.slnx
 
       - name: Build
         run: dotnet build Aexon.slnx --configuration Release --no-restore
 
+      - name: Check formatting
+        run: dotnet format Aexon.slnx --verify-no-changes --no-restore --verbosity diagnostic --severity error
+
       - name: Test With Coverage Gate
         run: >
-          dotnet test tests/Aexon.Core.Tests/Aexon.Core.Tests.csproj
+          dotnet test Aexon.slnx
           --configuration Release
           --no-restore
           /p:CollectCoverage=true
@@ -38,3 +52,11 @@ jobs:
           /p:Threshold=80
           /p:ThresholdType=line
           /p:ThresholdStat=total
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ matrix.os }}
+          path: tests/**/TestResults/coverage-ci/
+          if-no-files-found: warn

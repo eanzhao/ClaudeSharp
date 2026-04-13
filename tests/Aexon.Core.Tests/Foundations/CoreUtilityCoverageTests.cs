@@ -5,9 +5,9 @@ using Aexon.Core.Hooks;
 using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
 using Aexon.Core.Providers;
-using Aexon.Core.Tools;
 using Aexon.Core.Query;
 using Aexon.Core.Tests.Runtime;
+using Aexon.Core.Tools;
 using Aexon.Tools;
 
 namespace Aexon.Core.Tests.Foundations;

@@ -125,11 +125,18 @@ public sealed class BashToolingTests
         using var temp = new TempDirectory();
         var tool = new BashTool();
 
+        var errorCommand = OperatingSystem.IsWindows()
+            ? "echo oops 1>&2 & exit /b 3"
+            : "printf 'oops\\n' 1>&2; exit 3";
+        var slowCommand = OperatingSystem.IsWindows()
+            ? "ping 127.0.0.1 -n 10 >nul"
+            : "sleep 1";
+
         var failed = await tool.ExecuteAsync(
-            Json(new { command = "printf 'oops\\n' 1>&2; exit 3" }),
+            Json(new { command = errorCommand }),
             CreateContext(temp.Root));
         var timedOut = await tool.ExecuteAsync(
-            Json(new { command = "sleep 1", timeout = 50 }),
+            Json(new { command = slowCommand, timeout = 50 }),
             CreateContext(temp.Root));
 
         Assert.True(failed.IsError);
