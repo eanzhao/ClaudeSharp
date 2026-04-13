@@ -32,6 +32,8 @@ public class CommandContext
     public required Query.QueryEngine QueryEngine { get; init; }
     public required Permissions.PermissionContext PermissionContext { get; init; }
     public required IAgentTaskRuntime AgentTaskRuntime { get; init; }
+    public AgentAutoResumeMode AgentAutoResumeMode { get; init; } = AgentAutoResumeMode.Queue;
+    public AgentRuntimeOptions? AgentRuntimeOptions { get; init; }
     public IAgentTeamRuntime? AgentTeamRuntime { get; init; }
     public IAgentMessageRuntime? AgentMessageRuntime { get; init; }
     public IAgentMessageActivationRuntime? AgentMessageActivationRuntime { get; init; }
@@ -40,6 +42,9 @@ public class CommandContext
     public CancellationToken CancellationToken { get; init; }
     public Action? RequestExit { get; init; }
     public Action? RequestClear { get; init; }
+
+    public AgentAutoResumeMode CurrentAgentAutoResumeMode =>
+        AgentRuntimeOptions?.AutoResumeMode ?? AgentAutoResumeMode;
 }
 
 /// <summary>

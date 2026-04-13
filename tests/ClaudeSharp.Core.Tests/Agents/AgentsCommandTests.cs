@@ -217,6 +217,49 @@ public sealed class AgentsCommandTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CanShowAndSetRuntimeConfig()
+    {
+        var lines = new List<string>();
+        var runtimeOptions = new AgentRuntimeOptions
+        {
+            AutoResumeMode = AgentAutoResumeMode.Queue,
+        };
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "config",
+            CreateContext(new InMemoryAgentTaskRuntime(), lines, runtimeOptions: runtimeOptions));
+        await command.ExecuteAsync(
+            "config auto-resume latest",
+            CreateContext(new InMemoryAgentTaskRuntime(), lines, runtimeOptions: runtimeOptions));
+        await command.ExecuteAsync(
+            "config auto-resume",
+            CreateContext(new InMemoryAgentTaskRuntime(), lines, runtimeOptions: runtimeOptions));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Agent runtime config:", output, StringComparison.Ordinal);
+        Assert.Contains("Auto-resume: queue", output, StringComparison.Ordinal);
+        Assert.Contains("Auto-resume mode set to latest for this session.", output, StringComparison.Ordinal);
+        Assert.Contains("Auto-resume: latest", output, StringComparison.Ordinal);
+        Assert.Equal(AgentAutoResumeMode.Latest, runtimeOptions.AutoResumeMode);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ReportsInvalidRuntimeConfigArguments()
+    {
+        var lines = new List<string>();
+        var command = new AgentsCommand();
+
+        await command.ExecuteAsync(
+            "config auto-resume mystery",
+            CreateContext(new InMemoryAgentTaskRuntime(), lines, runtimeOptions: new AgentRuntimeOptions()));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Unknown auto-resume mode: mystery", output, StringComparison.Ordinal);
+        Assert.Contains("Usage: /agents config auto-resume <queue|latest|disabled>", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ReportsInvalidResumeArguments()
     {
         var lines = new List<string>();
@@ -497,7 +540,8 @@ public sealed class AgentsCommandTests
         List<string> lines,
         Func<TimeSpan, CancellationToken, Task>? delayAsync = null,
         IAgentMessageRuntime? messageRuntime = null,
-        IAgentMessageActivationRuntime? activationRuntime = null) =>
+        IAgentMessageActivationRuntime? activationRuntime = null,
+        AgentRuntimeOptions? runtimeOptions = null) =>
         new()
         {
             WriteLine = lines.Add,
@@ -505,6 +549,7 @@ public sealed class AgentsCommandTests
             QueryEngine = null!,
             PermissionContext = new PermissionContext(),
             AgentTaskRuntime = runtime,
+            AgentRuntimeOptions = runtimeOptions,
             AgentMessageRuntime = messageRuntime,
             AgentMessageActivationRuntime = activationRuntime,
             Commands = [],

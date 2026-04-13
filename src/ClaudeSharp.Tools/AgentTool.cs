@@ -57,6 +57,7 @@ public sealed class AgentTool : ITool
     private readonly IHookRuntime _hooks;
     private readonly BackgroundAgentRunScheduler _backgroundRunScheduler;
     private readonly AgentAutoResumeMode _autoResumeMode;
+    private readonly AgentRuntimeOptions? _runtimeOptions;
     private string? _assignmentErrorMessage;
 
     public AgentTool(
@@ -68,7 +69,8 @@ public sealed class AgentTool : ITool
         IHookRuntime? hooks = null,
         BackgroundAgentRunScheduler? backgroundRunScheduler = null,
         IAgentMessageActivationRuntime? messageActivationRuntime = null,
-        AgentAutoResumeMode autoResumeMode = AgentAutoResumeMode.Queue)
+        AgentAutoResumeMode autoResumeMode = AgentAutoResumeMode.Queue,
+        AgentRuntimeOptions? runtimeOptions = null)
     {
         _runner = runner;
         _providerCapabilityRouter = providerCapabilityRouter ?? new DefaultProviderCapabilityRouter();
@@ -79,6 +81,7 @@ public sealed class AgentTool : ITool
         _hooks = hooks ?? HookRuntime.Empty;
         _backgroundRunScheduler = backgroundRunScheduler ?? new BackgroundAgentRunScheduler();
         _autoResumeMode = autoResumeMode;
+        _runtimeOptions = runtimeOptions;
     }
 
     public string Name => "Agent";
@@ -600,7 +603,7 @@ public sealed class AgentTool : ITool
             _taskRuntime,
             _messageRuntime,
             _messageActivationRuntime,
-            _autoResumeMode,
+            _runtimeOptions?.AutoResumeMode ?? _autoResumeMode,
             owner,
             limit: 1,
             cancellationToken);

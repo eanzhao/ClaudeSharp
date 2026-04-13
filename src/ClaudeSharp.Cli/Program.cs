@@ -117,6 +117,10 @@ internal static class Program
         var agentSettings = AgentSettingsLoader.Load(
             workingDirectory,
             options.SettingsPath);
+        var agentRuntimeOptions = new AgentRuntimeOptions
+        {
+            AutoResumeMode = agentSettings.Settings.AutoResumeMode,
+        };
         var hookBuild = managedPolicy.AllowPlugins
             ? HookRuntimeBuilder.Build(
                 workingDirectory,
@@ -180,7 +184,7 @@ internal static class Program
             agentTeamRuntime,
             agentMessageRuntime,
             messageActivationRuntime,
-            agentSettings.Settings.AutoResumeMode,
+            agentRuntimeOptions,
             agentSettings.Settings.BackgroundRunConcurrency);
         var commandRegistry = BuildCommandRegistry();
         await using var mcpRuntime = managedPolicy.AllowExternalMcpServers
@@ -217,6 +221,7 @@ internal static class Program
                 appStateStore.Reset(appStateProjector.CreateSnapshot(
                     workingDirectory,
                     permissionContext.Mode,
+                    agentRuntimeOptions.AutoResumeMode,
                     sessionId: session.SessionId,
                     memoryRootDirectory: memoryLayout.ProjectMemoryDirectory,
                     managedSettings: managedSettings.Settings,
@@ -224,7 +229,8 @@ internal static class Program
                     mcpConnectionManager: mcpRuntime.ConnectionManager,
                     agentTaskRuntime: agentTaskRuntime,
                     agentMessageRuntime: agentMessageRuntime,
-                    agentTeamRuntime: agentTeamRuntime));
+                    agentTeamRuntime: agentTeamRuntime,
+                    agentRuntimeOptions: agentRuntimeOptions));
                 await appStateBridge.PublishAsync();
             }
             catch
@@ -277,6 +283,7 @@ internal static class Program
             agentTeamRuntime,
             agentMessageRuntime,
             messageActivationRuntime,
+            agentRuntimeOptions,
             startupNote,
             PublishAppStateAsync);
 
@@ -309,7 +316,7 @@ internal static class Program
         IAgentTeamRuntime agentTeamRuntime,
         IAgentMessageRuntime agentMessageRuntime,
         IAgentMessageActivationRuntime messageActivationRuntime,
-        AgentAutoResumeMode autoResumeMode,
+        AgentRuntimeOptions agentRuntimeOptions,
         int backgroundRunConcurrency)
     {
         var registry = new ToolRegistry();
@@ -339,7 +346,7 @@ internal static class Program
             hooks,
             backgroundRunScheduler,
             messageActivationRuntime,
-            autoResumeMode));
+            runtimeOptions: agentRuntimeOptions));
         registry.Register(new AgentStatusTool(agentTaskRuntime));
         registry.Register(new AgentResumeTool(agentTaskRuntime, agentMessageRuntime, messageActivationRuntime));
         registry.Register(new AgentStopTool(agentTaskRuntime));
@@ -428,6 +435,7 @@ Options:
         private readonly IAgentTeamRuntime _agentTeamRuntime;
         private readonly IAgentMessageRuntime _agentMessageRuntime;
         private readonly IAgentMessageActivationRuntime _agentMessageActivationRuntime;
+        private readonly AgentRuntimeOptions _agentRuntimeOptions;
         private readonly string? _startupNote;
         private readonly Func<Task>? _afterInputAsync;
         private bool _exitRequested;
@@ -443,6 +451,7 @@ Options:
             IAgentTeamRuntime agentTeamRuntime,
             IAgentMessageRuntime agentMessageRuntime,
             IAgentMessageActivationRuntime agentMessageActivationRuntime,
+            AgentRuntimeOptions agentRuntimeOptions,
             string? startupNote,
             Func<Task>? afterInputAsync = null)
         {
@@ -456,6 +465,7 @@ Options:
             _agentTeamRuntime = agentTeamRuntime;
             _agentMessageRuntime = agentMessageRuntime;
             _agentMessageActivationRuntime = agentMessageActivationRuntime;
+            _agentRuntimeOptions = agentRuntimeOptions;
             _startupNote = startupNote;
             _afterInputAsync = afterInputAsync;
         }
@@ -473,6 +483,8 @@ Options:
                 QueryEngine = _queryEngine,
                 PermissionContext = _permissionContext,
                 AgentTaskRuntime = _agentTaskRuntime,
+                AgentAutoResumeMode = _agentRuntimeOptions.AutoResumeMode,
+                AgentRuntimeOptions = _agentRuntimeOptions,
                 AgentTeamRuntime = _agentTeamRuntime,
                 AgentMessageRuntime = _agentMessageRuntime,
                 AgentMessageActivationRuntime = _agentMessageActivationRuntime,

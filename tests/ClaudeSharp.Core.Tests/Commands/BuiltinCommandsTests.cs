@@ -139,11 +139,31 @@ public sealed class BuiltinCommandsTests
         Assert.Contains("Title: Sprint 7", output, StringComparison.Ordinal);
         Assert.Contains("Tags: beta", output, StringComparison.Ordinal);
         Assert.Contains("Mode: Plan", output, StringComparison.Ordinal);
+        Assert.Contains("Auto-resume: queue", output, StringComparison.Ordinal);
         Assert.Contains("Session title cleared.", output, StringComparison.Ordinal);
         Assert.Contains("Cleared all session tags.", output, StringComparison.Ordinal);
         Assert.Null(bundle.Engine.SessionMetadata.Title);
         Assert.Empty(bundle.Engine.SessionMetadata.Tags);
         Assert.Equal(PermissionMode.Plan, bundle.Engine.SessionMetadata.Mode);
+    }
+
+    [Fact]
+    public async Task SessionCommand_UsesRuntimeAutoResumeModeWhenAvailable()
+    {
+        using var temp = new TempDirectory();
+        using var bundle = CreateEngineBundle(temp.Root);
+        var lines = new List<string>();
+        var runtimeOptions = new AgentRuntimeOptions
+        {
+            AutoResumeMode = AgentAutoResumeMode.Disabled,
+        };
+
+        await new SessionCommand().ExecuteAsync(
+            "",
+            CreateContext(bundle.Engine, bundle.PermissionContext, lines, runtimeOptions: runtimeOptions));
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Auto-resume: disabled", output, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -316,7 +336,8 @@ public sealed class BuiltinCommandsTests
         QueryEngine engine,
         PermissionContext permissionContext,
         List<string> lines,
-        IReadOnlyList<ICommand>? commands = null) =>
+        IReadOnlyList<ICommand>? commands = null,
+        AgentRuntimeOptions? runtimeOptions = null) =>
         new()
         {
             WriteLine = lines.Add,
@@ -324,6 +345,7 @@ public sealed class BuiltinCommandsTests
             QueryEngine = engine,
             PermissionContext = permissionContext,
             AgentTaskRuntime = new InMemoryAgentTaskRuntime(),
+            AgentRuntimeOptions = runtimeOptions,
             Commands = commands ?? [],
             CancellationToken = CancellationToken.None,
         };

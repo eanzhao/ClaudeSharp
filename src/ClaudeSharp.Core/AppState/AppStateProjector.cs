@@ -13,6 +13,7 @@ public sealed class AppStateProjector
     public AppStateSnapshot CreateSnapshot(
         string workingDirectory,
         PermissionMode permissionMode,
+        AgentAutoResumeMode autoResumeMode = AgentAutoResumeMode.Queue,
         string? sessionId = null,
         string? memoryRootDirectory = null,
         ManagedSettingsSnapshot? managedSettings = null,
@@ -20,15 +21,18 @@ public sealed class AppStateProjector
         McpConnectionManager? mcpConnectionManager = null,
         IAgentTaskRuntime? agentTaskRuntime = null,
         IAgentTeamRuntime? agentTeamRuntime = null,
-        IAgentMessageRuntime? agentMessageRuntime = null)
+        IAgentMessageRuntime? agentMessageRuntime = null,
+        AgentRuntimeOptions? agentRuntimeOptions = null)
     {
         var workItems = SnapshotWorkItems(agentTaskRuntime);
+        var effectiveAutoResumeMode = agentRuntimeOptions?.AutoResumeMode ?? autoResumeMode;
 
         return new AppStateSnapshot
         {
             SessionId = sessionId,
             WorkingDirectory = workingDirectory,
             PermissionMode = permissionMode,
+            AutoResumeMode = effectiveAutoResumeMode,
             ActiveTaskId = SelectActiveTaskId(workItems),
             MemoryRootDirectory = memoryRootDirectory,
             ManagedSettings = managedSettings ?? ManagedSettingsSnapshot.Empty,

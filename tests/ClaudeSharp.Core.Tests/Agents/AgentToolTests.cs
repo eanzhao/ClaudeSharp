@@ -685,6 +685,10 @@ public sealed class AgentToolTests
         var taskRuntime = new InMemoryAgentTaskRuntime();
         var messageRuntime = new InMemoryAgentMessageRuntime();
         var activationRuntime = new InMemoryAgentMessageActivationRuntime();
+        var runtimeOptions = new AgentRuntimeOptions
+        {
+            AutoResumeMode = AgentAutoResumeMode.Queue,
+        };
         var firstRunMayFinish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var firstRunStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var runner = new AsyncRecordingRunner(async (request, cancellationToken) =>
@@ -728,7 +732,7 @@ public sealed class AgentToolTests
             messageRuntime: messageRuntime,
             hooks: HookRuntime.Empty,
             messageActivationRuntime: activationRuntime,
-            autoResumeMode: AgentAutoResumeMode.Disabled);
+            runtimeOptions: runtimeOptions);
 
         var launch = await agentTool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new
@@ -759,6 +763,7 @@ public sealed class AgentToolTests
             CreateContext());
 
         Assert.False(response.IsError);
+        runtimeOptions.AutoResumeMode = AgentAutoResumeMode.Disabled;
         firstRunMayFinish.TrySetResult();
 
         await WaitForAsync(() =>

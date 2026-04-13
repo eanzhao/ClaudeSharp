@@ -13,6 +13,7 @@ public sealed record AppStateSnapshot
     public string? SessionId { get; init; }
     public string WorkingDirectory { get; init; } = Environment.CurrentDirectory;
     public PermissionMode PermissionMode { get; init; } = PermissionMode.Default;
+    public AgentAutoResumeMode AutoResumeMode { get; init; } = AgentAutoResumeMode.Queue;
     public string? ActiveTaskId { get; init; }
     public string? MemoryRootDirectory { get; init; }
     public ManagedSettingsSnapshot ManagedSettings { get; init; } = ManagedSettingsSnapshot.Empty;

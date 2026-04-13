@@ -66,6 +66,10 @@ public sealed class CommandSystemTests
             QueryEngine = null!,
             PermissionContext = new ClaudeSharp.Core.Permissions.PermissionContext(),
             AgentTaskRuntime = new InMemoryAgentTaskRuntime(),
+            AgentRuntimeOptions = new AgentRuntimeOptions
+            {
+                AutoResumeMode = AgentAutoResumeMode.Latest,
+            },
             AgentTeamRuntime = new InMemoryAgentTeamRuntime(),
             Commands = [new TestCommand("alpha")],
             DelayAsync = (_, _) => Task.CompletedTask,
@@ -77,6 +81,7 @@ public sealed class CommandSystemTests
         Assert.Single(context.Commands);
         Assert.NotNull(context.AgentTaskRuntime);
         Assert.NotNull(context.AgentTeamRuntime);
+        Assert.Equal(AgentAutoResumeMode.Latest, context.CurrentAgentAutoResumeMode);
         Assert.NotNull(context.DelayAsync);
         Assert.NotNull(context.RequestExit);
         Assert.NotNull(context.RequestClear);

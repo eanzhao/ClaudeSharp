@@ -146,38 +146,13 @@ public static class AgentSettingsLoader
         JsonElement element,
         out AgentAutoResumeMode mode)
     {
-        mode = default;
         if (element.ValueKind != JsonValueKind.String)
-            return false;
-
-        var value = element.GetString()?.Trim();
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
-
-        switch (value.ToLowerInvariant())
         {
-            case "queue":
-            case "serial":
-            case "oldest":
-            case "oldest-first":
-                mode = AgentAutoResumeMode.Queue;
-                return true;
-
-            case "latest":
-            case "newest":
-            case "recent":
-                mode = AgentAutoResumeMode.Latest;
-                return true;
-
-            case "disabled":
-            case "off":
-            case "manual":
-                mode = AgentAutoResumeMode.Disabled;
-                return true;
-
-            default:
-                return false;
+            mode = default;
+            return false;
         }
+
+        return AgentAutoResumeModeParser.TryParse(element.GetString(), out mode);
     }
 
     private static bool TryParseNonNegativeInt(JsonElement element, out int value)

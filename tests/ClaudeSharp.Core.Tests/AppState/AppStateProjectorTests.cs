@@ -45,6 +45,7 @@ public sealed class AppStateProjectorTests
         var snapshot = projector.CreateSnapshot(
             "/workspace",
             PermissionMode.Plan,
+            AgentAutoResumeMode.Latest,
             sessionId: "session-1",
             memoryRootDirectory: "/memory/project",
             managedSettings: new ManagedSettingsSnapshot
@@ -68,6 +69,7 @@ public sealed class AppStateProjectorTests
         Assert.Equal("session-1", snapshot.SessionId);
         Assert.Equal("/workspace", snapshot.WorkingDirectory);
         Assert.Equal(PermissionMode.Plan, snapshot.PermissionMode);
+        Assert.Equal(AgentAutoResumeMode.Latest, snapshot.AutoResumeMode);
         Assert.Equal("/memory/project", snapshot.MemoryRootDirectory);
         Assert.Equal(active.Id, snapshot.ActiveTaskId);
         Assert.Equal("org-1", snapshot.ManagedSettings.OrganizationPolicy.OrganizationId);
@@ -109,6 +111,7 @@ public sealed class AppStateProjectorTests
             agentTaskRuntime: runtime);
 
         Assert.Equal(awaiting.Id, snapshot.ActiveTaskId);
+        Assert.Equal(AgentAutoResumeMode.Queue, snapshot.AutoResumeMode);
         Assert.Equal(AgentWorkItemStatus.Pending, snapshot.WorkItems[pending.Id]);
         Assert.Equal(AgentWorkItemStatus.AwaitingApproval, snapshot.WorkItems[awaiting.Id]);
         Assert.Equal(1, snapshot.TaskAttention.AwaitingApprovalCount);
@@ -139,9 +142,28 @@ public sealed class AppStateProjectorTests
             agentTaskRuntime: runtime);
 
         Assert.Equal(awaitingResume.Id, snapshot.ActiveTaskId);
+        Assert.Equal(AgentAutoResumeMode.Queue, snapshot.AutoResumeMode);
         Assert.Equal(AgentWorkItemStatus.AwaitingApproval, snapshot.WorkItems[awaitingApproval.Id]);
         Assert.Equal(AgentWorkItemStatus.AwaitingResume, snapshot.WorkItems[awaitingResume.Id]);
         Assert.Equal(1, snapshot.TaskAttention.AwaitingApprovalCount);
         Assert.Equal(1, snapshot.TaskAttention.AwaitingResumeCount);
+    }
+
+    [Fact]
+    public void CreateSnapshot_PrefersRuntimeOptionsForAutoResumeMode()
+    {
+        var projector = new AppStateProjector();
+        var runtimeOptions = new AgentRuntimeOptions
+        {
+            AutoResumeMode = AgentAutoResumeMode.Disabled,
+        };
+
+        var snapshot = projector.CreateSnapshot(
+            "/workspace",
+            PermissionMode.Default,
+            AgentAutoResumeMode.Latest,
+            agentRuntimeOptions: runtimeOptions);
+
+        Assert.Equal(AgentAutoResumeMode.Disabled, snapshot.AutoResumeMode);
     }
 }

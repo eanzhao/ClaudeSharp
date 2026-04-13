@@ -733,6 +733,12 @@ public class AgentsCommand : ICommand
         }
 
         if (parts.Length > 0 &&
+            parts[0].Equals("config", StringComparison.OrdinalIgnoreCase))
+        {
+            return ConfigureRuntimeAsync(trimmed, context);
+        }
+
+        if (parts.Length > 0 &&
             parts[0].Equals("wait", StringComparison.OrdinalIgnoreCase))
         {
             return WaitForBackgroundRunAsync(trimmed, context);
@@ -764,7 +770,7 @@ public class AgentsCommand : ICommand
             if (!TryParseSummaryOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents summary arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents resume <work-item-id>, /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents config [auto-resume [queue|latest|disabled]], /agents resume <work-item-id>, /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -778,7 +784,7 @@ public class AgentsCommand : ICommand
             if (!TryParseOverviewOptions(trimmed, out var options, out var error))
             {
                 context.WriteLine(error ?? "  Invalid /agents arguments.");
-                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents resume <work-item-id>, /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+                context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents config [auto-resume [queue|latest|disabled]], /agents resume <work-item-id>, /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
                 return Task.CompletedTask;
             }
 
@@ -799,8 +805,56 @@ public class AgentsCommand : ICommand
         }
 
         context.WriteLine(details);
-        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents resume <work-item-id>, /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
+        context.WriteLine("  Usage: /agents, /agents summary [--owner <owner>] [--recent-limit <n>], /agents attention [--owner <owner>] [--limit <n>], /agents config [auto-resume [queue|latest|disabled]], /agents resume <work-item-id>, /agents prune [--keep-runs <n>] [--keep-work-items <n>], /agents wait [any|all] <background-run-id> [more-ids...] [--timeout-ms <n>] [--poll-ms <n>] [--include-output], /agents tail <background-run-id> [--last <n>] [--follow] [--poll-ms <n>], /agents <id>, /agents list [--kind <all|work_items|background_runs>] [--status <status>] [--owner <owner>] [--offset <n>] [--limit <n>], /agents stop <background-run-id> [reason]");
         return Task.CompletedTask;
+    }
+
+    private static Task ConfigureRuntimeAsync(
+        string args,
+        CommandContext context)
+    {
+        var parts = args.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 1 || (parts.Length == 2 && parts[1].Equals("show", StringComparison.OrdinalIgnoreCase)))
+        {
+            WriteRuntimeConfig(context);
+            return Task.CompletedTask;
+        }
+
+        if (parts.Length == 2 && parts[1].Equals("auto-resume", StringComparison.OrdinalIgnoreCase))
+        {
+            context.WriteLine($"  Auto-resume: {context.CurrentAgentAutoResumeMode.ToString().ToLowerInvariant()}");
+            return Task.CompletedTask;
+        }
+
+        if (parts.Length == 3 && parts[1].Equals("auto-resume", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!AgentAutoResumeModeParser.TryParse(parts[2], out var mode))
+            {
+                context.WriteLine($"  Unknown auto-resume mode: {parts[2]}");
+                context.WriteLine($"  Usage: /agents config auto-resume <{AgentAutoResumeModeParser.Usage}>");
+                return Task.CompletedTask;
+            }
+
+            if (context.AgentRuntimeOptions == null)
+            {
+                context.WriteLine("  Agent runtime configuration is not writable in this context.");
+                return Task.CompletedTask;
+            }
+
+            context.AgentRuntimeOptions.AutoResumeMode = mode;
+            context.WriteLine($"  Auto-resume mode set to {mode.ToString().ToLowerInvariant()} for this session.");
+            return Task.CompletedTask;
+        }
+
+        context.WriteLine("  Usage: /agents config [show], /agents config auto-resume, /agents config auto-resume <queue|latest|disabled>");
+        return Task.CompletedTask;
+    }
+
+    private static void WriteRuntimeConfig(CommandContext context)
+    {
+        context.WriteLine("  Agent runtime config:");
+        context.WriteLine($"    Auto-resume: {context.CurrentAgentAutoResumeMode.ToString().ToLowerInvariant()}");
+        context.WriteLine("    Change with: /agents config auto-resume <queue|latest|disabled>");
     }
 
     private static async Task ResumeWorkItemAsync(
@@ -1557,6 +1611,7 @@ public class SessionCommand : ICommand
                 ? "  Tags: (none)"
                 : $"  Tags: {string.Join(", ", metadata.Tags.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase))}");
         context.WriteLine($"  Mode: {mode}");
+        context.WriteLine($"  Auto-resume: {context.CurrentAgentAutoResumeMode.ToString().ToLowerInvariant()}");
 
         return Task.CompletedTask;
     }
