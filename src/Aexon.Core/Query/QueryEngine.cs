@@ -8,11 +8,6 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
 using Microsoft.Extensions.AI;
-using ApiMessageCreateParams = Anthropic.Models.Messages.MessageCreateParams;
-using ApiThinkingConfigAdaptive = Anthropic.Models.Messages.ThinkingConfigAdaptive;
-using ApiThinkingConfigDisabled = Anthropic.Models.Messages.ThinkingConfigDisabled;
-using ApiThinkingConfigEnabled = Anthropic.Models.Messages.ThinkingConfigEnabled;
-using ApiThinkingConfigParam = Anthropic.Models.Messages.ThinkingConfigParam;
 
 namespace Aexon.Core.Query;
 
@@ -338,26 +333,12 @@ public class QueryEngine : IAsyncDisposable
             Instructions = systemPrompt,
             Tools = ChatMessageConverter.ToMeaiTools(toolDefs),
             ToolMode = ChatToolMode.Auto,
-        };
-
-        ApiThinkingConfigParam? thinkingConfig = _config.ThinkingMode switch
-        {
-            ThinkingMode.Disabled => new ApiThinkingConfigDisabled(),
-            ThinkingMode.Enabled => new ApiThinkingConfigEnabled(_config.ThinkingBudgetTokens),
-            ThinkingMode.Adaptive => new ApiThinkingConfigAdaptive(),
-            _ => null,
-        };
-
-        if (thinkingConfig != null)
-        {
-            options.RawRepresentationFactory = _ => new ApiMessageCreateParams
+            AdditionalProperties = new AdditionalPropertiesDictionary
             {
-                Model = _config.Model,
-                MaxTokens = _config.MaxTokens,
-                Messages = [],
-                Thinking = thinkingConfig,
-            };
-        }
+                ["ThinkingMode"] = _config.ThinkingMode.ToString(),
+                ["ThinkingBudgetTokens"] = _config.ThinkingBudgetTokens,
+            },
+        };
 
         return options;
     }

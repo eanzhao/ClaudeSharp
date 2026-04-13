@@ -115,7 +115,11 @@ internal static class Program
             providerRouter.Resolve(model));
         var anthropicSettings = managedPolicy.AnthropicSettings;
         using var anthropicClient = CreateAnthropicClient(anthropicSettings);
-        var chatClient = anthropicClient.AsIChatClient(model, defaultMaxOutputTokens: 16384);
+        var chatClient = anthropicClient
+            .AsIChatClient(model, defaultMaxOutputTokens: 16384)
+            .AsBuilder()
+            .Use(inner => new AnthropicThinkingMiddleware(inner))
+            .Build();
         var agentSettings = AgentSettingsLoader.Load(
             workingDirectory,
             options.SettingsPath);

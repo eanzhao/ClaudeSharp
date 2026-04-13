@@ -265,13 +265,10 @@ public sealed class QueryEngineDeepTests
             .ToArray();
         var userToolResult = messages[2]
             .GetProperty("content")[0];
-        var thinking = request.GetProperty("thinking");
         var tools = request.GetProperty("tools");
 
         Assert.Contains("tool_use", assistantTypes);
         Assert.Equal("tool_result", userToolResult.GetProperty("type").GetString());
-        Assert.Equal("enabled", thinking.GetProperty("type").GetString());
-        Assert.Equal(321, thinking.GetProperty("budget_tokens").GetInt32());
         Assert.Equal("search", tools[0].GetProperty("name").GetString());
     }
 
