@@ -87,6 +87,250 @@ public sealed class TranscriptStoreDeepTests
     }
 
     [Fact]
+    public async Task LoadProjection_RoundTripsStructuredSystemMessages()
+    {
+        using var temp = new TempDirectoryScope(nameof(LoadProjection_RoundTripsStructuredSystemMessages));
+        var store = new JsonlTranscriptStore(temp.RootPath);
+        var session = await store.CreateSessionAsync("/work/project", "sonnet");
+
+        var messages = new ConversationMessage[]
+        {
+            new SystemCompactBoundaryMessage
+            {
+                Id = "compact-1",
+                Content = "conversation compacted",
+                BoundaryId = "boundary-1",
+                Mode = "compact",
+                Reason = "manual",
+                Automatic = true,
+                FoldedMessageCount = 5,
+                PreservedMessageCount = 8,
+                SummaryMessageId = "summary-1",
+            },
+            new SystemMicrocompactBoundaryMessage
+            {
+                Id = "microcompact-1",
+                Content = "microcompact applied",
+                BoundaryId = "boundary-2",
+                Reason = "cache cooldown elapsed",
+                Automatic = true,
+                ClearedToolResultCount = 2,
+                ClearedThinkingBlockCount = 1,
+            },
+            new SystemPermissionRetryMessage
+            {
+                Id = "permission-1",
+                Content = "retrying tool after permission update",
+                ToolName = "Bash",
+                Attempt = 2,
+                Reason = "user approved with narrower scope",
+                UpdatedInput = JsonSerializer.SerializeToElement(new { command = "git status" }),
+            },
+            new SystemStopHookSummaryMessage
+            {
+                Id = "hook-1",
+                Content = "stop hook completed",
+                HookEvent = "stop",
+                Success = true,
+                DurationMs = 42,
+                Summary = "all cleanup hooks succeeded",
+            },
+            new SystemTurnDurationMessage
+            {
+                Id = "turn-1",
+                Content = "turn completed",
+                TurnCount = 3,
+                DurationMs = 1234,
+                Model = "sonnet",
+            },
+            new SystemLocalCommandMessage
+            {
+                Id = "command-1",
+                Content = "local command executed",
+                Command = "dotnet test",
+                WorkingDirectory = "/work/project",
+                ExitCode = 0,
+            },
+            new SystemApiMetricsMessage
+            {
+                Id = "api-1",
+                Content = "api metrics captured",
+                Model = "sonnet",
+                Usage = new TokenUsage
+                {
+                    InputTokens = 10,
+                    OutputTokens = 20,
+                    CacheReadInputTokens = 3,
+                    CacheCreationInputTokens = 4,
+                },
+                DurationMs = 321,
+                StopReason = "end_turn",
+                Success = true,
+            },
+            new SystemMemorySavedMessage
+            {
+                Id = "memory-1",
+                Content = "session memory saved",
+                MemoryKind = "session",
+                FilePath = "/tmp/session-memory.md",
+                CharacterCount = 512,
+            },
+            new SystemAgentsKilledMessage
+            {
+                Id = "agents-1",
+                Content = "agents stopped",
+                AgentIds = ["agent-a", "agent-b"],
+                Reason = "user requested shutdown",
+            },
+            new SystemAwaySummaryMessage
+            {
+                Id = "away-1",
+                Content = "away summary",
+                AwayDurationMs = 60000,
+                Summary = "resumed after one minute",
+            },
+            new SystemScheduledTaskFireMessage
+            {
+                Id = "task-1",
+                Content = "scheduled task fired",
+                TaskName = "daily-refresh",
+                ScheduledAt = DateTimeOffset.Parse("2026-04-14T08:00:00+08:00"),
+                FiredAt = DateTimeOffset.Parse("2026-04-14T08:00:05+08:00"),
+                Result = "completed",
+            },
+            new SystemBridgeStatusMessage
+            {
+                Id = "bridge-1",
+                Content = "bridge connected",
+                BridgeName = "mcp",
+                Status = "connected",
+                Detail = "stdio transport ready",
+            },
+            new ProgressMessage
+            {
+                Id = "progress-1",
+                Content = "uploading artifact",
+                Stage = "upload",
+                Status = "running",
+                Percent = 75,
+            },
+            new ToolUseSummaryMessage
+            {
+                Id = "tool-summary-1",
+                Content = "tool run completed",
+                ToolUseId = "tool-123",
+                ToolName = "FileWrite",
+                ResultPreview = "wrote 3 lines",
+            },
+            new AttachmentMessage
+            {
+                Id = "attachment-1",
+                Content = "attached diff",
+                AttachmentId = "att-1",
+                AttachmentName = "patch.diff",
+                MediaType = "text/x-diff",
+                SourcePath = "/tmp/patch.diff",
+                SizeBytes = 128,
+            },
+            new TombstoneMessage
+            {
+                Id = "tombstone-1",
+                Content = "message removed",
+                DeletedMessageId = "assistant-9",
+                DeletedMessageType = "assistant",
+                Reason = "redacted",
+            },
+            new SystemMessage
+            {
+                Id = "legacy-1",
+                Content = "legacy system marker",
+                Subtype = "legacy_marker",
+            },
+        };
+
+        string? parentMessageId = null;
+        foreach (var message in messages)
+        {
+            await store.AppendMessageAsync(session, message, parentMessageId);
+            parentMessageId = message.Id;
+        }
+
+        var reloaded = await store.FindSessionAsync(session.SessionDirectory);
+        Assert.NotNull(reloaded);
+
+        var projection = await store.LoadProjectionAsync(reloaded!, new TranscriptLoadOptions());
+
+        Assert.Equal(
+            messages.Select(message => message.Id),
+            projection.MessagesById.Values
+                .OrderBy(message => message.Sequence)
+                .Select(message => message.Message.Id));
+
+        var compact = Assert.IsType<SystemCompactBoundaryMessage>(projection.MessagesById["compact-1"].Message);
+        Assert.Equal("boundary-1", compact.BoundaryId);
+        Assert.Equal(5, compact.FoldedMessageCount);
+
+        var microcompact = Assert.IsType<SystemMicrocompactBoundaryMessage>(projection.MessagesById["microcompact-1"].Message);
+        Assert.Equal(2, microcompact.ClearedToolResultCount);
+        Assert.Equal(1, microcompact.ClearedThinkingBlockCount);
+
+        var permission = Assert.IsType<SystemPermissionRetryMessage>(projection.MessagesById["permission-1"].Message);
+        Assert.Equal("Bash", permission.ToolName);
+        Assert.Equal("git status", permission.UpdatedInput?.GetProperty("command").GetString());
+
+        var hook = Assert.IsType<SystemStopHookSummaryMessage>(projection.MessagesById["hook-1"].Message);
+        Assert.True(hook.Success);
+        Assert.Equal("all cleanup hooks succeeded", hook.Summary);
+
+        var turn = Assert.IsType<SystemTurnDurationMessage>(projection.MessagesById["turn-1"].Message);
+        Assert.Equal(3, turn.TurnCount);
+        Assert.Equal("sonnet", turn.Model);
+
+        var command = Assert.IsType<SystemLocalCommandMessage>(projection.MessagesById["command-1"].Message);
+        Assert.Equal("dotnet test", command.Command);
+        Assert.Equal(0, command.ExitCode);
+
+        var api = Assert.IsType<SystemApiMetricsMessage>(projection.MessagesById["api-1"].Message);
+        Assert.NotNull(api.Usage);
+        Assert.Equal(37, api.Usage!.TotalTokens);
+
+        var memory = Assert.IsType<SystemMemorySavedMessage>(projection.MessagesById["memory-1"].Message);
+        Assert.Equal("/tmp/session-memory.md", memory.FilePath);
+        Assert.Equal(512, memory.CharacterCount);
+
+        var agents = Assert.IsType<SystemAgentsKilledMessage>(projection.MessagesById["agents-1"].Message);
+        Assert.Equal(["agent-a", "agent-b"], agents.AgentIds);
+
+        var away = Assert.IsType<SystemAwaySummaryMessage>(projection.MessagesById["away-1"].Message);
+        Assert.Equal(60000, away.AwayDurationMs);
+
+        var task = Assert.IsType<SystemScheduledTaskFireMessage>(projection.MessagesById["task-1"].Message);
+        Assert.Equal("daily-refresh", task.TaskName);
+        Assert.Equal(DateTimeOffset.Parse("2026-04-14T08:00:05+08:00"), task.FiredAt);
+
+        var bridge = Assert.IsType<SystemBridgeStatusMessage>(projection.MessagesById["bridge-1"].Message);
+        Assert.Equal("connected", bridge.Status);
+
+        var progress = Assert.IsType<ProgressMessage>(projection.MessagesById["progress-1"].Message);
+        Assert.Equal(75, progress.Percent);
+
+        var toolSummary = Assert.IsType<ToolUseSummaryMessage>(projection.MessagesById["tool-summary-1"].Message);
+        Assert.Equal("tool-123", toolSummary.ToolUseId);
+        Assert.Equal("wrote 3 lines", toolSummary.ResultPreview);
+
+        var attachment = Assert.IsType<AttachmentMessage>(projection.MessagesById["attachment-1"].Message);
+        Assert.Equal("patch.diff", attachment.AttachmentName);
+        Assert.Equal(128, attachment.SizeBytes);
+
+        var tombstone = Assert.IsType<TombstoneMessage>(projection.MessagesById["tombstone-1"].Message);
+        Assert.Equal("assistant-9", tombstone.DeletedMessageId);
+
+        var legacy = Assert.IsType<SystemMessage>(projection.MessagesById["legacy-1"].Message);
+        Assert.Equal("legacy_marker", legacy.Subtype);
+        Assert.Equal("legacy system marker", legacy.Content);
+    }
+
+    [Fact]
     public async Task AppendMetadataAppliesDeltaAndIgnoresInvalidValues()
     {
         using var temp = new TempDirectoryScope(nameof(AppendMetadataAppliesDeltaAndIgnoresInvalidValues));
