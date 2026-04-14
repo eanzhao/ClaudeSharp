@@ -315,6 +315,7 @@ public class QueryEngine : IAsyncDisposable
         Messages = _messages,
         CancellationToken = cancellationToken,
         MainLoopModel = _config.Model,
+        MainLoopProvider = _config.Provider,
     };
 
     private async Task<string> BuildSystemPromptAsync()

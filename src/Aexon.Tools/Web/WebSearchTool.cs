@@ -108,15 +108,18 @@ public sealed class WebSearchTool : ITool
 {
     private readonly IProviderCapabilityRouter _capabilityRouter;
     private readonly Func<string?> _currentModelAccessor;
+    private readonly Func<AiProvider> _currentProviderAccessor;
     private readonly IWebSearchBackend _backend;
 
     public WebSearchTool(
         IProviderCapabilityRouter? capabilityRouter = null,
         Func<string?>? currentModelAccessor = null,
+        Func<AiProvider>? currentProviderAccessor = null,
         IWebSearchBackend? backend = null)
     {
         _capabilityRouter = capabilityRouter ?? new DefaultProviderCapabilityRouter();
         _currentModelAccessor = currentModelAccessor ?? (() => ClaudeModels.DefaultMainModel);
+        _currentProviderAccessor = currentProviderAccessor ?? (() => AiProvider.Anthropic);
         _backend = backend ?? new DuckDuckGoWebSearchBackend();
     }
 
@@ -167,6 +170,7 @@ public sealed class WebSearchTool : ITool
     }
 
     public bool IsEnabled() =>
+        _currentProviderAccessor() == AiProvider.Anthropic &&
         _capabilityRouter.Supports(_currentModelAccessor(), ModelCapability.WebSearch);
 
     public bool IsReadOnly(JsonElement input) => true;

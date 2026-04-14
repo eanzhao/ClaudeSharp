@@ -283,7 +283,10 @@ public sealed class AgentTool : ITool
                 Prompt = input.Prompt.Trim(),
                 WorkingDirectory = context.WorkingDirectory,
                 Model = context.MainLoopModel,
-                Tools = BuildReadOnlyToolRegistry(context.MainLoopModel, workItemId),
+                Tools = BuildReadOnlyToolRegistry(
+                    context.MainLoopModel,
+                    context.MainLoopProvider,
+                    workItemId),
                 PermissionContext = ClonePermissionContext(context.PermissionContext),
                 UseIsolatedWorkspace = input.UseIsolatedWorkspace,
                 Progress = progress,
@@ -437,7 +440,10 @@ public sealed class AgentTool : ITool
         }
     }
 
-    private ToolRegistry BuildReadOnlyToolRegistry(string model, string workItemId)
+    private ToolRegistry BuildReadOnlyToolRegistry(
+        string model,
+        AiProvider provider,
+        string workItemId)
     {
         var registry = new ToolRegistry();
         registry.Register(new FileReadTool());
@@ -457,7 +463,10 @@ public sealed class AgentTool : ITool
                 workItemId));
         }
         registry.Register(new WebFetchTool());
-        registry.Register(new WebSearchTool(_providerCapabilityRouter, () => model));
+        registry.Register(new WebSearchTool(
+            _providerCapabilityRouter,
+            () => model,
+            () => provider));
         return registry;
     }
 
@@ -856,12 +865,14 @@ public sealed class AgentTool : ITool
     private sealed record AgentExecutionContextSnapshot(
         string WorkingDirectory,
         string MainLoopModel,
+        AiProvider MainLoopProvider,
         PermissionContext PermissionContext)
     {
         public static AgentExecutionContextSnapshot Create(ToolExecutionContext context) =>
             new(
                 context.WorkingDirectory,
                 context.MainLoopModel,
+                context.MainLoopProvider,
                 ClonePermissionContext(context.PermissionContext));
     }
 

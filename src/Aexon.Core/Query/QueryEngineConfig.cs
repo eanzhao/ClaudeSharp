@@ -6,6 +6,11 @@ namespace Aexon.Core.Query;
 public class QueryEngineConfig
 {
     /// <summary>
+    /// Gets the active provider for the main loop.
+    /// </summary>
+    public AiProvider Provider { get; set; } = AiProvider.Anthropic;
+
+    /// <summary>
     /// Gets model.
     /// </summary>
     public string Model { get; set; } = ClaudeModels.DefaultMainModel;

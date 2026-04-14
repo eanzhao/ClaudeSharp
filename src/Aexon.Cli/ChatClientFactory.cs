@@ -3,21 +3,19 @@ using Aexon.Core.Configuration;
 using Aexon.Core.Query;
 using Anthropic;
 using Microsoft.Extensions.AI;
+using OllamaSharp;
 using OpenAI;
 
 namespace Aexon.Cli;
 
-internal sealed record ChatClientFactoryResult(
+internal sealed record ChatClientBootstrap(
     IChatClient ChatClient,
-    bool HasApiKey,
-    IDisposable? Disposable) : IDisposable
-{
-    public void Dispose() => Disposable?.Dispose();
-}
+    bool HasRequiredConfiguration,
+    string? StartupSummary);
 
 internal static class ChatClientFactory
 {
-    public static ChatClientFactoryResult Create(
+    public static ChatClientBootstrap Create(
         AiProvider provider,
         string model,
         AnthropicClientSettings anthropicSettings)
@@ -25,44 +23,54 @@ internal static class ChatClientFactory
         return provider switch
         {
             AiProvider.OpenAI => CreateOpenAI(model),
+            AiProvider.Ollama => CreateOllama(model),
             _ => CreateAnthropic(model, anthropicSettings),
         };
     }
 
-    private static ChatClientFactoryResult CreateAnthropic(string model, AnthropicClientSettings settings)
+    private static ChatClientBootstrap CreateAnthropic(
+        string model,
+        AnthropicClientSettings settings)
     {
         var client = CreateAnthropicClient(settings);
-        var chatClient = client
-            .AsIChatClient(model, defaultMaxOutputTokens: 16384)
-            .AsBuilder()
-            .Use(inner => new AnthropicThinkingMiddleware(inner))
-            .Build();
+        var chatClient = new OwnedChatClient(
+            client.AsIChatClient(model, defaultMaxOutputTokens: 16384),
+            client);
 
-        return new ChatClientFactoryResult(chatClient, settings.HasApiKey, client);
+        return new ChatClientBootstrap(
+            chatClient,
+            settings.HasApiKey,
+            settings.StartupSummary);
     }
 
-    private static ChatClientFactoryResult CreateOpenAI(string model)
+    private static ChatClientBootstrap CreateOpenAI(string model)
     {
-        var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-        var baseUrl = Environment.GetEnvironmentVariable("OPENAI_BASE_URL");
+        var settings = OpenAIClientSettingsLoader.Load();
 
         OpenAIClientOptions? clientOptions = null;
-        if (!string.IsNullOrWhiteSpace(baseUrl))
-            clientOptions = new OpenAIClientOptions { Endpoint = new Uri(baseUrl) };
+        if (!string.IsNullOrWhiteSpace(settings.BaseUrl))
+            clientOptions = new OpenAIClientOptions { Endpoint = new Uri(settings.BaseUrl) };
 
-        var credential = new ApiKeyCredential(apiKey ?? "dummy-key");
+        var credential = new ApiKeyCredential(settings.ApiKey ?? "dummy-key");
         var client = clientOptions != null
             ? new OpenAIClient(credential, clientOptions)
             : new OpenAIClient(credential);
 
-        var chatClient = client
-            .GetChatClient(model)
-            .AsIChatClient()
-            .AsBuilder()
-            .Use(inner => new OpenAIReasoningMiddleware(inner))
-            .Build();
+        return new ChatClientBootstrap(
+            client.GetChatClient(model).AsIChatClient(),
+            settings.HasUsableConfiguration,
+            settings.StartupSummary);
+    }
 
-        return new ChatClientFactoryResult(chatClient, !string.IsNullOrWhiteSpace(apiKey), null);
+    private static ChatClientBootstrap CreateOllama(string model)
+    {
+        var settings = OllamaClientSettingsLoader.Load();
+        var client = new OllamaApiClient(new Uri(settings.BaseUrl), model);
+
+        return new ChatClientBootstrap(
+            (IChatClient)client,
+            true,
+            settings.StartupSummary);
     }
 
     private static AnthropicClient CreateAnthropicClient(AnthropicClientSettings settings)
@@ -77,5 +85,23 @@ internal static class ChatClientFactory
             return new AnthropicClient { BaseUrl = settings.BaseUrl };
 
         return new AnthropicClient();
+    }
+
+    private sealed class OwnedChatClient(
+        IChatClient innerClient,
+        IDisposable? ownedResource = null) : DelegatingChatClient(innerClient)
+    {
+        protected override void Dispose(bool disposing)
+        {
+            try
+            {
+                base.Dispose(disposing);
+            }
+            finally
+            {
+                if (disposing)
+                    ownedResource?.Dispose();
+            }
+        }
     }
 }

@@ -132,6 +132,11 @@ public class ToolExecutionContext
     /// Gets the model used by the main loop.
     /// </summary>
     public string MainLoopModel { get; init; } = Query.ClaudeModels.DefaultMainModel;
+
+    /// <summary>
+    /// Gets the provider used by the main loop.
+    /// </summary>
+    public Query.AiProvider MainLoopProvider { get; init; } = Query.AiProvider.Anthropic;
 }
 
 /// <summary>
