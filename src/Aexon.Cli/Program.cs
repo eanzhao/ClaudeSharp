@@ -215,6 +215,8 @@ internal static class Program
             initialUsage: resumed?.TotalUsage,
             initialMetadata: resumed?.Metadata,
             askUserQuestion: PromptUserQuestionAsync);
+        toolRegistry.Register(new EnterPlanModeTool(queryEngine));
+        toolRegistry.Register(new ExitPlanModeTool(queryEngine));
         var permissionContext = contextProvider.GetPermissionContext();
         var appStateStore = new AppStateStore();
         var appStateBridge = new AppStateHostBridge(
@@ -452,6 +454,7 @@ internal static class Program
         registry.Register(new ModelCommand());
         registry.Register(new MicrocompactCommand());
         registry.Register(new ModeCommand());
+        registry.Register(new PlanCommand());
         registry.Register(new PartialCompactCommand());
         registry.Register(new SessionCommand());
         registry.Register(new SessionMemoryCompactCommand());

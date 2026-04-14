@@ -44,6 +44,15 @@ public sealed class StreamingToolExecutor : IToolRuntime
                 continue;
             }
 
+            if (!context.Tools.Contains(tool))
+            {
+                yield return CreateCompleted(
+                    invocation,
+                    tool,
+                    ToolResult.Error($"Tool {invocation.Name} is not available in the current mode."));
+                continue;
+            }
+
             var validation = await tool.ValidateInputAsync(invocation.Input, context);
             if (!validation.IsValid)
             {

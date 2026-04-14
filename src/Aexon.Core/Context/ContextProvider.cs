@@ -29,12 +29,16 @@ public class ContextProvider
         QueryEngineConfig config)
     {
         var parts = new List<string>();
+        var planModeSection = GetPlanModeSection(tools);
 
         // 1. Add the core identity prompt.
         parts.Add(GetIdentityPrompt());
 
         // 2. Add the environment section.
         parts.Add(GetEnvironmentSection());
+
+        if (!string.IsNullOrWhiteSpace(planModeSection))
+            parts.Add(planModeSection);
 
         // 3. Add tool-specific usage guidance.
         var toolPromptCtx = new ToolPromptContext
@@ -82,6 +86,8 @@ public class ContextProvider
         {
             parts.Clear();
             parts.Add(config.CustomSystemPrompt);
+            if (!string.IsNullOrWhiteSpace(planModeSection))
+                parts.Add(planModeSection);
         }
 
         if (!string.IsNullOrWhiteSpace(config.AppendSystemPrompt))
@@ -90,6 +96,27 @@ public class ContextProvider
         }
 
         return string.Join("\n\n", parts);
+    }
+
+    private string? GetPlanModeSection(IReadOnlyList<ITool> tools)
+    {
+        if (PermissionContext.Mode != PermissionMode.Plan)
+            return null;
+
+        var toolList = tools.Count == 0
+            ? "(none)"
+            : string.Join(", ", tools.Select(tool => tool.Name));
+
+        return $$"""
+            # Plan Mode
+            You are currently in plan mode. Inspect the codebase and produce a structured implementation plan instead of making changes.
+
+            Rules:
+            - Do not modify files, git state, or external systems while this mode is active
+            - Only use the tools available in this turn: {{toolList}}
+            - Return the plan with these Markdown sections exactly: Goal, Findings, Implementation Steps, Risks, Verification
+            - Do not call {{PlanModeToolPolicy.ExitPlanModeToolName}} until the user explicitly approves the plan and asks you to start executing
+            """;
     }
 
     /// <summary>

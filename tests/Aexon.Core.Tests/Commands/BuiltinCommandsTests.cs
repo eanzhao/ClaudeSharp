@@ -172,6 +172,30 @@ public sealed class BuiltinCommandsTests
     }
 
     [Fact]
+    public async Task PlanCommand_EntersReportsStatusAndRestoresPreviousMode()
+    {
+        using var temp = new TempDirectory();
+        using var bundle = CreateEngineBundle(temp.Root);
+        var lines = new List<string>();
+        await bundle.Engine.SetPermissionModeAsync(PermissionMode.Auto);
+        var context = CreateContext(bundle.Engine, bundle.PermissionContext, lines);
+
+        await new PlanCommand().ExecuteAsync("", context);
+        await new PlanCommand().ExecuteAsync("status", context);
+        await new PlanCommand().ExecuteAsync("exit", context);
+        await new PlanCommand().ExecuteAsync("exit", context);
+
+        var output = string.Join(Environment.NewLine, lines);
+        Assert.Contains("Plan mode enabled. Available tools: ExitPlanMode, Read, Glob, Grep, WebFetch", output, StringComparison.Ordinal);
+        Assert.Contains("Plan mode: active", output, StringComparison.Ordinal);
+        Assert.Contains("Resume mode after approval: Auto", output, StringComparison.Ordinal);
+        Assert.Contains("Plan mode disabled. Restored permission mode: Auto", output, StringComparison.Ordinal);
+        Assert.Contains("Plan mode is not active.", output, StringComparison.Ordinal);
+        Assert.False(bundle.Engine.IsPlanModeActive);
+        Assert.Equal(PermissionMode.Auto, bundle.Engine.SessionMetadata.Mode);
+    }
+
+    [Fact]
     public async Task CompactCommand_ReportsUsageMissingHistoryAndSuccess()
     {
         using var temp = new TempDirectory();

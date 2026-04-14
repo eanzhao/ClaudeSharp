@@ -1661,6 +1661,66 @@ public class ModeCommand : ICommand
 }
 
 /// <summary>
+/// Represents plan command.
+/// </summary>
+public class PlanCommand : ICommand
+{
+    public string Name => "plan";
+    public string Description => "Enter planning-only mode or exit it after approval";
+
+    public async Task ExecuteAsync(string args, CommandContext context)
+    {
+        var trimmed = args.Trim();
+
+        if (string.Equals(trimmed, "status", StringComparison.OrdinalIgnoreCase))
+        {
+            if (context.QueryEngine.IsPlanModeActive)
+            {
+                context.WriteLine("  Plan mode: active");
+                context.WriteLine($"  Resume mode after approval: {context.QueryEngine.PlanModeResumeMode}");
+            }
+            else
+            {
+                context.WriteLine("  Plan mode: inactive");
+            }
+
+            return;
+        }
+
+        if (string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, "off", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, "run", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, "apply", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!context.QueryEngine.IsPlanModeActive)
+            {
+                context.WriteLine("  Plan mode is not active.");
+                return;
+            }
+
+            var restoredMode = await context.QueryEngine.ExitPlanModeAsync(context.CancellationToken);
+            context.WriteLine($"  Plan mode disabled. Restored permission mode: {restoredMode}");
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(trimmed) &&
+            !string.Equals(trimmed, "enter", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(trimmed, "on", StringComparison.OrdinalIgnoreCase))
+        {
+            context.WriteLine("  Usage: /plan [enter|status|exit]");
+            return;
+        }
+
+        var changed = await context.QueryEngine.EnterPlanModeAsync(context.CancellationToken);
+        var allowedTools = string.Join(", ", PlanModeToolPolicy.AllowedToolNamesInPlanMode);
+        context.WriteLine(
+            changed
+                ? $"  Plan mode enabled. Available tools: {allowedTools}"
+                : $"  Plan mode is already active. Available tools: {allowedTools}");
+    }
+}
+
+/// <summary>
 /// Represents title command.
 /// </summary>
 public class TitleCommand : ICommand
