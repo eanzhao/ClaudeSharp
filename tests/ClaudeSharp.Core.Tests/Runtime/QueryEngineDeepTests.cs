@@ -9,6 +9,7 @@ using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Query;
 using ClaudeSharp.Core.Storage;
 using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Tools;
 
 namespace ClaudeSharp.Core.Tests.Runtime;
 
@@ -277,6 +278,49 @@ public sealed class QueryEngineDeepTests
         Assert.Equal("search", tools[0].GetProperty("name").GetString());
     }
 
+    [Fact]
+    public async Task SubmitMessageAsync_FiltersAndEnforcesPlanModeTools()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(CreateToolUseResponse("Write", new { file_path = "/tmp/out.txt", content = "hi" }));
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("done"));
+
+        var registry = BuildRegistry(
+            new FakeTool { Name = "Read", ReadOnly = true, ConcurrencySafe = true },
+            new FakeTool { Name = "Glob", ReadOnly = true, ConcurrencySafe = true },
+            new FakeTool { Name = "Grep", ReadOnly = true, ConcurrencySafe = true },
+            new FakeTool { Name = "WebFetch", ReadOnly = true, ConcurrencySafe = true },
+            new FakeTool { Name = "Write" });
+        var journal = new RecordingJournal();
+        var engine = CreateEngine(
+            temp.Root,
+            journal,
+            client: TestSupport.CreateAnthropicClient(handler),
+            tools: registry);
+        registry.Register(new EnterPlanModeTool(engine));
+        registry.Register(new ExitPlanModeTool(engine));
+        await engine.EnterPlanModeAsync();
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("plan this change"));
+
+        var request = JsonDocument.Parse(handler.Bodies[0]).RootElement;
+        var tools = request.GetProperty("tools")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("name").GetString()!)
+            .ToArray();
+        var system = request.GetProperty("system").GetString();
+
+        Assert.Equal(["ExitPlanMode", "Glob", "Grep", "Read", "WebFetch"], tools);
+        Assert.DoesNotContain("EnterPlanMode", tools);
+        Assert.DoesNotContain("Write", tools);
+        Assert.Contains("# Plan Mode", system);
+        Assert.Contains(events, evt => evt is ToolResultEvent result &&
+                                       result.ToolName == "Write" &&
+                                       result.IsError &&
+                                       result.Result.Contains("not available in the current mode", StringComparison.Ordinal));
+    }
+
     private static QueryEngine CreateEngine(
         string workingDirectory,
         RecordingJournal journal,
@@ -323,8 +367,12 @@ public sealed class QueryEngineDeepTests
         return result;
     }
 
-    private static HttpResponseMessage CreateToolUseResponse()
+    private static HttpResponseMessage CreateToolUseResponse(
+        string toolName = "search",
+        object? input = null)
     {
+        input ??= new { query = "claude" };
+
         var payload = JsonSerializer.Serialize(new
         {
             id = "msg-1",
@@ -339,9 +387,9 @@ public sealed class QueryEngineDeepTests
                 {
                     type = "tool_use",
                     id = "tool-1",
-                    name = "search",
+                    name = toolName,
                     caller = new { type = "direct" },
-                    input = new { query = "claude" },
+                    input,
                 },
             },
             usage = new
