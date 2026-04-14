@@ -2,6 +2,7 @@ using ClaudeSharp.Core.Agents;
 using ClaudeSharp.Core.Configuration;
 using ClaudeSharp.Core.Mcp;
 using ClaudeSharp.Core.Permissions;
+using ClaudeSharp.Core.Todos;
 
 namespace ClaudeSharp.Core.AppState;
 
@@ -22,7 +23,8 @@ public sealed class AppStateProjector
         IAgentTaskRuntime? agentTaskRuntime = null,
         IAgentTeamRuntime? agentTeamRuntime = null,
         IAgentMessageRuntime? agentMessageRuntime = null,
-        AgentRuntimeOptions? agentRuntimeOptions = null)
+        AgentRuntimeOptions? agentRuntimeOptions = null,
+        ITodoRuntime? todoRuntime = null)
     {
         var workItems = SnapshotWorkItems(agentTaskRuntime);
         var effectiveAutoResumeMode = agentRuntimeOptions?.AutoResumeMode ?? autoResumeMode;
@@ -42,6 +44,7 @@ public sealed class AppStateProjector
             TaskAttention = SnapshotTaskAttention(agentTaskRuntime),
             Teams = SnapshotTeams(agentTeamRuntime),
             Mailboxes = SnapshotMailboxes(agentMessageRuntime),
+            Todos = SnapshotTodos(todoRuntime),
         };
     }
 
@@ -198,4 +201,20 @@ public sealed class AppStateProjector
             .ToArray();
     }
 
+    internal static IReadOnlyList<AppStateTodoSnapshot> SnapshotTodos(
+        ITodoRuntime? runtime)
+    {
+        if (runtime == null)
+            return [];
+
+        return runtime.ListTodos()
+            .Select(todo => new AppStateTodoSnapshot
+            {
+                Id = todo.Id,
+                Title = todo.Title,
+                Status = TodoStatusNames.ToValue(todo.Status),
+                Description = todo.Description,
+            })
+            .ToArray();
+    }
 }

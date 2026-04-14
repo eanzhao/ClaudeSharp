@@ -8,6 +8,7 @@ using ClaudeSharp.Core.Providers;
 using ClaudeSharp.Core.Tools;
 using ClaudeSharp.Core.Query;
 using ClaudeSharp.Core.Tests.Runtime;
+using ClaudeSharp.Core.Todos;
 using ClaudeSharp.Tools;
 
 namespace ClaudeSharp.Core.Tests.Foundations;
@@ -143,6 +144,7 @@ public sealed class CoreUtilityCoverageTests
             new FileEditTool(),
             new GlobTool(),
             new GrepTool(),
+            new TodoWriteTool(new InMemoryTodoRuntime()),
             new WebFetchTool(),
             new WebSearchTool(new DefaultProviderCapabilityRouter(), () => ClaudeModels.DefaultMainModel),
             new AgentTool(new NoOpAgentRunner(), new DefaultProviderCapabilityRouter(), runtime, hooks: HookRuntime.Empty),

@@ -15,6 +15,7 @@ using ClaudeSharp.Core.Providers;
 using ClaudeSharp.Core.Query;
 using ClaudeSharp.Core.Storage;
 using ClaudeSharp.Core.Tools;
+using ClaudeSharp.Core.Todos;
 using ClaudeSharp.Tools;
 
 namespace ClaudeSharp.Cli;
@@ -158,21 +159,24 @@ internal static class Program
                 model);
         }
 
-        var agentMetadataEntries = resumed?.ContinueExistingSession == true
+        var metadataEntries = resumed?.ContinueExistingSession == true
             ? (await transcriptStore.LoadProjectionAsync(
                 session,
                 new TranscriptLoadOptions())).MetadataEntries
             : [];
+        var todoRuntime = await PersistentTodoRuntime.CreateAsync(
+            journal,
+            metadataEntries);
         var agentTaskRuntime = await PersistentAgentTaskRuntime.CreateAsync(
             journal,
-            agentMetadataEntries,
+            metadataEntries,
             autoPrunePolicy: agentSettings.Settings.BuildRetentionPolicy());
         var agentTeamRuntime = await PersistentAgentTeamRuntime.CreateAsync(
             journal,
-            agentMetadataEntries);
+            metadataEntries);
         var agentMessageRuntime = await PersistentAgentMessageRuntime.CreateAsync(
             journal,
-            agentMetadataEntries);
+            metadataEntries);
         var messageActivationRuntime = new InMemoryAgentMessageActivationRuntime();
         var toolRegistry = BuildToolRegistry(
             providerRouter,
@@ -183,6 +187,7 @@ internal static class Program
             agentTaskRuntime,
             agentTeamRuntime,
             agentMessageRuntime,
+            todoRuntime,
             messageActivationRuntime,
             agentRuntimeOptions,
             agentSettings.Settings.BackgroundRunConcurrency);
@@ -230,7 +235,8 @@ internal static class Program
                     agentTaskRuntime: agentTaskRuntime,
                     agentMessageRuntime: agentMessageRuntime,
                     agentTeamRuntime: agentTeamRuntime,
-                    agentRuntimeOptions: agentRuntimeOptions));
+                    agentRuntimeOptions: agentRuntimeOptions,
+                    todoRuntime: todoRuntime));
                 await appStateBridge.PublishAsync();
             }
             catch
@@ -315,6 +321,7 @@ internal static class Program
         IAgentTaskRuntime agentTaskRuntime,
         IAgentTeamRuntime agentTeamRuntime,
         IAgentMessageRuntime agentMessageRuntime,
+        ITodoRuntime todoRuntime,
         IAgentMessageActivationRuntime messageActivationRuntime,
         AgentRuntimeOptions agentRuntimeOptions,
         int backgroundRunConcurrency)
@@ -328,6 +335,7 @@ internal static class Program
         registry.Register(new FileEditTool());
         registry.Register(new GlobTool());
         registry.Register(new GrepTool());
+        registry.Register(new TodoWriteTool(todoRuntime));
         registry.Register(new TeamCreateTool(agentTeamRuntime));
         registry.Register(new TeamStatusTool(agentTeamRuntime));
         registry.Register(new TeamDissolveTool(agentTeamRuntime));

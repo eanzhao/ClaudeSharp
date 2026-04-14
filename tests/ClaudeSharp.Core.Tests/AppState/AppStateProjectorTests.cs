@@ -3,6 +3,7 @@ using ClaudeSharp.Core.AppState;
 using ClaudeSharp.Core.Configuration;
 using ClaudeSharp.Core.Mcp;
 using ClaudeSharp.Core.Permissions;
+using ClaudeSharp.Core.Todos;
 
 namespace ClaudeSharp.Core.Tests.AppState;
 
@@ -34,6 +35,12 @@ public sealed class AppStateProjectorTests
         var teamRuntime = new InMemoryAgentTeamRuntime();
         var team = teamRuntime.CreateTeam("Platform", leadName: "Ada");
         teamRuntime.AddMember(team.Id, "Bob");
+        var todoRuntime = new InMemoryTodoRuntime();
+        todoRuntime.CreateTodo(
+            "issue-4",
+            "Implement TodoWrite",
+            TodoStatus.InProgress,
+            "Persist todos into session state");
 
         var mcp = new McpConnectionManager();
         mcp.Register(new McpConnection("alpha"));
@@ -64,7 +71,8 @@ public sealed class AppStateProjectorTests
             mcpConnectionManager: mcp,
             agentTaskRuntime: runtime,
             agentTeamRuntime: teamRuntime,
-            agentMessageRuntime: messageRuntime);
+            agentMessageRuntime: messageRuntime,
+            todoRuntime: todoRuntime);
 
         Assert.Equal("session-1", snapshot.SessionId);
         Assert.Equal("/workspace", snapshot.WorkingDirectory);
@@ -90,6 +98,11 @@ public sealed class AppStateProjectorTests
         Assert.Equal(1, adaMailbox.PendingPlanApprovalCount);
         Assert.Equal(2, adaMailbox.InboxCount);
         Assert.Equal(2, adaMailbox.UnreadCount);
+        var projectedTodo = Assert.Single(snapshot.Todos);
+        Assert.Equal("issue-4", projectedTodo.Id);
+        Assert.Equal("Implement TodoWrite", projectedTodo.Title);
+        Assert.Equal("in_progress", projectedTodo.Status);
+        Assert.Equal("Persist todos into session state", projectedTodo.Description);
     }
 
     [Fact]
