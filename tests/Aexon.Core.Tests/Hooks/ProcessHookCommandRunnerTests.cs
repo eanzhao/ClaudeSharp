@@ -65,6 +65,29 @@ public sealed class ProcessHookCommandRunnerTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_IgnoresClosedStdinWhenCommandExitsImmediately()
+    {
+        using var temp = new TempDirectory();
+        var runner = new ProcessHookCommandRunner();
+
+        var result = await runner.ExecuteAsync(
+            new HookCommandDefinition
+            {
+                EventKind = HookEventKind.Stop,
+                Command = BuildImmediateFailureCommand(),
+            },
+            new string('x', 256 * 1024),
+            temp.Root,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+        Assert.False(result.Succeeded);
+        Assert.False(result.TimedOut);
+        Assert.Equal(7, result.ExitCode);
+        Assert.Equal(string.Empty, result.Stdout);
+        Assert.Equal("boom", result.Stderr.Trim());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_ReturnsTimedOutResultWhenCommandDoesNotFinish()
     {
         using var temp = new TempDirectory();
@@ -104,6 +127,11 @@ public sealed class ProcessHookCommandRunnerTests
         OperatingSystem.IsWindows()
             ? "set /p DUMMY= & echo boom 1>&2 & exit /b 7"
             : "cat >/dev/null; printf 'boom' 1>&2; exit 7";
+
+    private static string BuildImmediateFailureCommand() =>
+        OperatingSystem.IsWindows()
+            ? "echo boom 1>&2 & exit /b 7"
+            : "printf 'boom' 1>&2; exit 7";
 
     private static string BuildSlowCommand() =>
         OperatingSystem.IsWindows()

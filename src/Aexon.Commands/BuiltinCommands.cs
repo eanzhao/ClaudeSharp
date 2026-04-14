@@ -1583,7 +1583,20 @@ public class ModelCommand : ICommand
         }
         else
         {
-            var resolved = await context.QueryEngine.SetModelAsync(args);
+            var targetProvider = AiProviderSelection.DetectProvider(
+                providerHint: null,
+                model: args,
+                fallbackProvider: context.AiProvider);
+
+            if (targetProvider != context.AiProvider)
+            {
+                context.WriteLine(
+                    $"  Switching providers requires a new session. Restart with --provider {AiProviderSelection.ToStorageValue(targetProvider)} --model {args.Trim()}.");
+                return;
+            }
+
+            var resolved = await context.QueryEngine.SetModelAsync(
+                AiProviderSelection.ResolveModel(args, context.AiProvider));
             context.WriteLine($"  Switched to: {resolved}");
         }
     }

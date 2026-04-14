@@ -74,7 +74,7 @@ internal static class Program
                     WorkingDirectoryOverride = options.WorkingDirectory,
                     ModelOverride = string.IsNullOrWhiteSpace(options.Model)
                         ? null
-                        : ClaudeModels.Resolve(options.Model),
+                        : options.Model.Trim(),
                     ForkSession = options.ForkSession,
                 });
         }
@@ -95,10 +95,13 @@ internal static class Program
             contextProvider.PermissionContext.Mode = resumedMode;
         await contextProvider.LoadMemoryAsync();
 
-        var aiProvider = ChatClientFactory.DetectProvider(
+        var sessionTarget = AiProviderSelection.ResolveSessionTarget(
             options.Provider,
-            options.Model ?? "");
-        var model = resumed?.Model ?? ChatClientFactory.ResolveModel(options.Model, aiProvider);
+            options.Model,
+            resumed?.SourceSession.Provider,
+            resumed?.Model);
+        var aiProvider = sessionTarget.Provider;
+        var model = sessionTarget.Model;
         var config = new QueryEngineConfig
         {
             Model = model,
@@ -116,7 +119,7 @@ internal static class Program
             rawAnthropicSettings,
             providerRouter.Resolve(model));
         var anthropicSettings = managedPolicy.AnthropicSettings;
-        var clientResult = ChatClientFactory.Create(aiProvider, model, anthropicSettings);
+        using var clientResult = ChatClientFactory.Create(aiProvider, model, anthropicSettings);
         var chatClient = clientResult.ChatClient;
         var agentSettings = AgentSettingsLoader.Load(
             workingDirectory,
@@ -142,6 +145,7 @@ internal static class Program
 
         session.WorkingDirectory = workingDirectory;
         session.Model = model;
+        session.Provider = AiProviderSelection.ToStorageValue(aiProvider);
         session.Metadata = resumed?.Metadata.Clone() ?? session.Metadata;
         await transcriptStore.UpdateSessionAsync(session);
         var journal = new ConversationJournal(transcriptStore, session);
@@ -282,6 +286,7 @@ internal static class Program
             toolRegistry,
             commandRegistry,
             queryEngine,
+            aiProvider,
             permissionContext,
             agentTaskRuntime,
             agentTeamRuntime,
@@ -426,6 +431,7 @@ Environment:
         private readonly ToolRegistry _toolRegistry;
         private readonly CommandRegistry _commandRegistry;
         private readonly QueryEngine _queryEngine;
+        private readonly AiProvider _aiProvider;
         private readonly PermissionContext _permissionContext;
         private readonly IAgentTaskRuntime _agentTaskRuntime;
         private readonly IAgentTeamRuntime _agentTeamRuntime;
@@ -442,6 +448,7 @@ Environment:
             ToolRegistry toolRegistry,
             CommandRegistry commandRegistry,
             QueryEngine queryEngine,
+            AiProvider aiProvider,
             PermissionContext permissionContext,
             IAgentTaskRuntime agentTaskRuntime,
             IAgentTeamRuntime agentTeamRuntime,
@@ -456,6 +463,7 @@ Environment:
             _toolRegistry = toolRegistry;
             _commandRegistry = commandRegistry;
             _queryEngine = queryEngine;
+            _aiProvider = aiProvider;
             _permissionContext = permissionContext;
             _agentTaskRuntime = agentTaskRuntime;
             _agentTeamRuntime = agentTeamRuntime;
@@ -477,6 +485,7 @@ Environment:
                 WriteLine = Console.WriteLine,
                 Tools = _toolRegistry,
                 QueryEngine = _queryEngine,
+                AiProvider = _aiProvider,
                 PermissionContext = _permissionContext,
                 AgentTaskRuntime = _agentTaskRuntime,
                 AgentAutoResumeMode = _agentRuntimeOptions.AutoResumeMode,

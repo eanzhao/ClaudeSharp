@@ -17,6 +17,7 @@ public sealed class TranscriptSession
     public required DateTimeOffset UpdatedAt { get; set; }
     public required string WorkingDirectory { get; set; }
     public required string Model { get; set; }
+    public string? Provider { get; set; }
     public ConversationSessionMetadata Metadata { get; set; } = new();
     public string? CurrentLeafMessageId { get; set; }
 }
@@ -677,6 +678,7 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
             UpdatedAt = session.UpdatedAt,
             WorkingDirectory = session.WorkingDirectory,
             Model = session.Model,
+            Provider = session.Provider,
             Title = session.Metadata.Title,
             Tags = session.Metadata.Tags.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase).ToArray(),
             Mode = session.Metadata.Mode?.ToString(),
@@ -712,6 +714,7 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                 UpdatedAt = manifest.UpdatedAt,
                 WorkingDirectory = manifest.WorkingDirectory,
                 Model = manifest.Model,
+                Provider = manifest.Provider,
                 Metadata = CreateMetadataFromManifest(manifest),
                 CurrentLeafMessageId = manifest.CurrentLeafMessageId,
             };
@@ -821,6 +824,7 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public required DateTimeOffset UpdatedAt { get; init; }
         public required string WorkingDirectory { get; init; }
         public required string Model { get; init; }
+        public string? Provider { get; init; }
         public string? Title { get; init; }
         public string[]? Tags { get; init; }
         public string? Mode { get; init; }

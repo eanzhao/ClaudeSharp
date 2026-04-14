@@ -1,22 +1,16 @@
 using System.ClientModel;
 using Aexon.Core.Configuration;
+using Aexon.Core.Query;
 using Anthropic;
 using Microsoft.Extensions.AI;
 using OpenAI;
 
 namespace Aexon.Cli;
 
-internal enum AiProvider
-{
-    Anthropic,
-    OpenAI,
-}
-
 internal sealed record ChatClientFactoryResult(
     IChatClient ChatClient,
     bool HasApiKey,
-    string ProviderName,
-    IDisposable? Disposable)
+    IDisposable? Disposable) : IDisposable
 {
     public void Dispose() => Disposable?.Dispose();
 }
@@ -35,34 +29,6 @@ internal static class ChatClientFactory
         };
     }
 
-    public static AiProvider DetectProvider(string? providerFlag, string model)
-    {
-        if (!string.IsNullOrWhiteSpace(providerFlag))
-        {
-            return providerFlag.Equals("openai", StringComparison.OrdinalIgnoreCase)
-                ? AiProvider.OpenAI
-                : AiProvider.Anthropic;
-        }
-
-        if (model.StartsWith("gpt-", StringComparison.OrdinalIgnoreCase) ||
-            model.StartsWith("o1", StringComparison.OrdinalIgnoreCase) ||
-            model.StartsWith("o3", StringComparison.OrdinalIgnoreCase) ||
-            model.StartsWith("o4", StringComparison.OrdinalIgnoreCase))
-        {
-            return AiProvider.OpenAI;
-        }
-
-        return AiProvider.Anthropic;
-    }
-
-    public static string ResolveModel(string? input, AiProvider provider)
-    {
-        if (!string.IsNullOrWhiteSpace(input) && provider == AiProvider.OpenAI)
-            return input;
-
-        return provider == AiProvider.OpenAI ? "gpt-4o" : Aexon.Core.Query.ClaudeModels.Resolve(input);
-    }
-
     private static ChatClientFactoryResult CreateAnthropic(string model, AnthropicClientSettings settings)
     {
         var client = CreateAnthropicClient(settings);
@@ -72,7 +38,7 @@ internal static class ChatClientFactory
             .Use(inner => new AnthropicThinkingMiddleware(inner))
             .Build();
 
-        return new ChatClientFactoryResult(chatClient, settings.HasApiKey, "Anthropic", client);
+        return new ChatClientFactoryResult(chatClient, settings.HasApiKey, client);
     }
 
     private static ChatClientFactoryResult CreateOpenAI(string model)
@@ -96,7 +62,7 @@ internal static class ChatClientFactory
             .Use(inner => new OpenAIReasoningMiddleware(inner))
             .Build();
 
-        return new ChatClientFactoryResult(chatClient, !string.IsNullOrWhiteSpace(apiKey), "OpenAI", null);
+        return new ChatClientFactoryResult(chatClient, !string.IsNullOrWhiteSpace(apiKey), null);
     }
 
     private static AnthropicClient CreateAnthropicClient(AnthropicClientSettings settings)

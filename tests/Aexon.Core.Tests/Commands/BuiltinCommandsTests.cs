@@ -106,6 +106,7 @@ public sealed class BuiltinCommandsTests
 
         await new ModelCommand().ExecuteAsync("", context);
         await new ModelCommand().ExecuteAsync("opus", context);
+        await new ModelCommand().ExecuteAsync("gpt-4o", context);
         await new ModeCommand().ExecuteAsync("", context);
         await new ModeCommand().ExecuteAsync("plan", context);
         await new ModeCommand().ExecuteAsync("mystery", context);
@@ -124,6 +125,10 @@ public sealed class BuiltinCommandsTests
         Assert.Contains("Current model: claude-sonnet-4-6", output, StringComparison.Ordinal);
         Assert.Contains("Common aliases: sonnet, opus, haiku", output, StringComparison.Ordinal);
         Assert.Contains("Switched to: claude-opus-4-6", output, StringComparison.Ordinal);
+        Assert.Contains(
+            "Switching providers requires a new session. Restart with --provider openai --model gpt-4o.",
+            output,
+            StringComparison.Ordinal);
         Assert.Contains("Current mode: Default", output, StringComparison.Ordinal);
         Assert.Contains("Switched permission mode to: Plan", output, StringComparison.Ordinal);
         Assert.Contains("Unknown mode: mystery", output, StringComparison.Ordinal);
@@ -337,12 +342,14 @@ public sealed class BuiltinCommandsTests
         PermissionContext permissionContext,
         List<string> lines,
         IReadOnlyList<ICommand>? commands = null,
-        AgentRuntimeOptions? runtimeOptions = null) =>
+        AgentRuntimeOptions? runtimeOptions = null,
+        AiProvider aiProvider = AiProvider.Anthropic) =>
         new()
         {
             WriteLine = lines.Add,
             Tools = new ToolRegistry(),
             QueryEngine = engine,
+            AiProvider = aiProvider,
             PermissionContext = permissionContext,
             AgentTaskRuntime = new InMemoryAgentTaskRuntime(),
             AgentRuntimeOptions = runtimeOptions,
