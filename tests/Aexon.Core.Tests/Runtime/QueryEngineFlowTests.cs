@@ -7,7 +7,6 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Query;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
-using Anthropic;
 
 namespace Aexon.Core.Tests.Runtime;
 
@@ -165,7 +164,7 @@ public sealed class QueryEngineFlowTests
             WorkingDirectory = workingDirectory,
         };
 
-        var client = TestSupport.CreateAnthropicClient(handler);
+        var client = TestSupport.CreateChatClient(handler);
         return TestSupport.CreateQueryEngine(
             client,
             tools,

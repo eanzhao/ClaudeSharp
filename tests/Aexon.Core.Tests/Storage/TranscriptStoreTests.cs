@@ -140,6 +140,21 @@ public sealed class TranscriptStoreTests
     }
 
     [Fact]
+    public async Task SessionProvider_RoundTripsThroughManifest()
+    {
+        using var temp = new TempDirectoryScope(nameof(SessionProvider_RoundTripsThroughManifest));
+        var store = new JsonlTranscriptStore(temp.RootPath);
+        var session = await store.CreateSessionAsync("/work/project", "gpt-4o");
+        session.Provider = "openai";
+
+        await store.UpdateSessionAsync(session);
+
+        var reloaded = await store.FindSessionAsync(session.SessionDirectory);
+        Assert.NotNull(reloaded);
+        Assert.Equal("openai", reloaded!.Provider);
+    }
+
+    [Fact]
     public async Task ResetHeadClearsTheActiveChainOnResume()
     {
         using var temp = new TempDirectoryScope(nameof(ResetHeadClearsTheActiveChainOnResume));

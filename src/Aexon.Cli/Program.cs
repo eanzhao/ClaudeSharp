@@ -15,7 +15,7 @@ using Aexon.Core.Query;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
 using Aexon.Tools;
-using Anthropic;
+using Microsoft.Extensions.AI;
 
 namespace Aexon.Cli;
 
@@ -74,7 +74,7 @@ internal static class Program
                     WorkingDirectoryOverride = options.WorkingDirectory,
                     ModelOverride = string.IsNullOrWhiteSpace(options.Model)
                         ? null
-                        : ClaudeModels.Resolve(options.Model),
+                        : options.Model.Trim(),
                     ForkSession = options.ForkSession,
                 });
         }
@@ -95,7 +95,13 @@ internal static class Program
             contextProvider.PermissionContext.Mode = resumedMode;
         await contextProvider.LoadMemoryAsync();
 
-        var model = resumed?.Model ?? ClaudeModels.Resolve(options.Model);
+        var sessionTarget = AiProviderSelection.ResolveSessionTarget(
+            options.Provider,
+            options.Model,
+            resumed?.SourceSession.Provider,
+            resumed?.Model);
+        var aiProvider = sessionTarget.Provider;
+        var model = sessionTarget.Model;
         var config = new QueryEngineConfig
         {
             Model = model,
@@ -113,7 +119,8 @@ internal static class Program
             rawAnthropicSettings,
             providerRouter.Resolve(model));
         var anthropicSettings = managedPolicy.AnthropicSettings;
-        using var client = CreateAnthropicClient(anthropicSettings);
+        using var clientResult = ChatClientFactory.Create(aiProvider, model, anthropicSettings);
+        var chatClient = clientResult.ChatClient;
         var agentSettings = AgentSettingsLoader.Load(
             workingDirectory,
             options.SettingsPath);
@@ -138,6 +145,7 @@ internal static class Program
 
         session.WorkingDirectory = workingDirectory;
         session.Model = model;
+        session.Provider = AiProviderSelection.ToStorageValue(aiProvider);
         session.Metadata = resumed?.Metadata.Clone() ?? session.Metadata;
         await transcriptStore.UpdateSessionAsync(session);
         var journal = new ConversationJournal(transcriptStore, session);
@@ -178,7 +186,7 @@ internal static class Program
             providerRouter,
             managedPolicy.AllowWebSearch,
             () => config.Model,
-            client,
+            chatClient,
             hooks,
             agentTaskRuntime,
             agentTeamRuntime,
@@ -195,7 +203,7 @@ internal static class Program
             : new McpRuntime();
 
         await using var queryEngine = new QueryEngine(
-            client,
+            chatClient,
             toolRegistry,
             new DefaultPermissionChecker(),
             config,
@@ -274,10 +282,11 @@ internal static class Program
 
         var shell = new AexonShell(
             workingDirectory,
-            anthropicSettings.HasApiKey,
+            clientResult.HasApiKey,
             toolRegistry,
             commandRegistry,
             queryEngine,
+            aiProvider,
             permissionContext,
             agentTaskRuntime,
             agentTeamRuntime,
@@ -292,25 +301,11 @@ internal static class Program
         return exitCode;
     }
 
-    private static AnthropicClient CreateAnthropicClient(AnthropicClientSettings settings)
-    {
-        if (settings.HasApiKey && !string.IsNullOrWhiteSpace(settings.BaseUrl))
-            return new AnthropicClient { ApiKey = settings.ApiKey!, BaseUrl = settings.BaseUrl };
-
-        if (settings.HasApiKey)
-            return new AnthropicClient { ApiKey = settings.ApiKey! };
-
-        if (!string.IsNullOrWhiteSpace(settings.BaseUrl))
-            return new AnthropicClient { BaseUrl = settings.BaseUrl };
-
-        return new AnthropicClient();
-    }
-
     private static ToolRegistry BuildToolRegistry(
         IProviderCapabilityRouter providerRouter,
         bool allowWebSearch,
         Func<string?> currentModelAccessor,
-        AnthropicClient client,
+        IChatClient chatClient,
         IHookRuntime hooks,
         IAgentTaskRuntime agentTaskRuntime,
         IAgentTeamRuntime agentTeamRuntime,
@@ -338,7 +333,7 @@ internal static class Program
         if (allowWebSearch)
             registry.Register(new WebSearchTool(providerRouter, currentModelAccessor));
         registry.Register(new AgentTool(
-            new QueryEngineAgentRunner(client, hooks: hooks),
+            new QueryEngineAgentRunner(chatClient, hooks: hooks),
             providerRouter,
             agentTaskRuntime,
             agentTeamRuntime,
@@ -409,17 +404,23 @@ internal static class Program
     {
         Console.WriteLine("""
 Usage:
-  Aexon [--cwd <path>] [--model <model>] [--resume <session>] [--continue] [--fork-session] [--settings <path>] [prompt]
+  aexon [--cwd <path>] [--model <model>] [--provider <name>] [--resume <session>] [--continue] [--fork-session] [--settings <path>] [prompt]
 
 Options:
   --cwd <path>       Working directory for this session
-  --model <model>    Main model or alias (sonnet / opus / haiku)
+  --model <model>    Main model or alias (sonnet / opus / haiku / gpt-4o / o3 / ...)
+  --provider <name>  AI provider: anthropic (default) or openai
   --resume <id>      Resume a specific session by id, directory, manifest, or transcript path
   --continue         Resume the most recently updated session
   --fork-session     Fork the resumed transcript into a brand new session
   --settings <path>  Load hooks and MCP servers from a specific settings.json file
   --mcp-config       Alias for --settings
   --help             Show this help
+
+Environment:
+  ANTHROPIC_API_KEY  API key for Anthropic Claude models
+  OPENAI_API_KEY     API key for OpenAI models
+  OPENAI_BASE_URL    Custom base URL for OpenAI-compatible endpoints
 """);
     }
 
@@ -430,6 +431,7 @@ Options:
         private readonly ToolRegistry _toolRegistry;
         private readonly CommandRegistry _commandRegistry;
         private readonly QueryEngine _queryEngine;
+        private readonly AiProvider _aiProvider;
         private readonly PermissionContext _permissionContext;
         private readonly IAgentTaskRuntime _agentTaskRuntime;
         private readonly IAgentTeamRuntime _agentTeamRuntime;
@@ -446,6 +448,7 @@ Options:
             ToolRegistry toolRegistry,
             CommandRegistry commandRegistry,
             QueryEngine queryEngine,
+            AiProvider aiProvider,
             PermissionContext permissionContext,
             IAgentTaskRuntime agentTaskRuntime,
             IAgentTeamRuntime agentTeamRuntime,
@@ -460,6 +463,7 @@ Options:
             _toolRegistry = toolRegistry;
             _commandRegistry = commandRegistry;
             _queryEngine = queryEngine;
+            _aiProvider = aiProvider;
             _permissionContext = permissionContext;
             _agentTaskRuntime = agentTaskRuntime;
             _agentTeamRuntime = agentTeamRuntime;
@@ -481,6 +485,7 @@ Options:
                 WriteLine = Console.WriteLine,
                 Tools = _toolRegistry,
                 QueryEngine = _queryEngine,
+                AiProvider = _aiProvider,
                 PermissionContext = _permissionContext,
                 AgentTaskRuntime = _agentTaskRuntime,
                 AgentAutoResumeMode = _agentRuntimeOptions.AutoResumeMode,
@@ -653,7 +658,7 @@ Options:
             if (!_hasApiKey)
             {
                 Console.WriteLine(
-                    "未检测到可用的 Anthropic API Key。你仍然可以使用本地斜杠命令，但真正发起 Claude 请求会失败。");
+                    "未检测到可用的 API Key。你仍然可以使用本地斜杠命令，但发起 AI 请求会失败。");
             }
         }
     }
@@ -664,6 +669,7 @@ Options:
         bool ForkSession,
         string? WorkingDirectory,
         string? Model,
+        string? Provider,
         string? ResumeTarget,
         string? SettingsPath,
         string? InitialPrompt)
@@ -675,6 +681,7 @@ Options:
             var forkSession = false;
             string? workingDirectory = null;
             string? model = null;
+            string? provider = null;
             string? resumeTarget = null;
             string? settingsPath = null;
             var remaining = new List<string>();
@@ -712,6 +719,11 @@ Options:
                             model = args[++i];
                         break;
 
+                    case "--provider":
+                        if (i + 1 < args.Length)
+                            provider = args[++i];
+                        break;
+
                     case "--settings":
                     case "--mcp-config":
                         if (i + 1 < args.Length)
@@ -730,6 +742,7 @@ Options:
                 forkSession,
                 workingDirectory,
                 model,
+                provider,
                 resumeTarget,
                 settingsPath,
                 remaining.Count > 0 ? string.Join(' ', remaining) : null);

@@ -1431,7 +1431,7 @@ public sealed class AgentToolTests
         using var temp = new TempDirectory();
         var handler = new FakeAnthropicHandler();
         handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("child answer", inputTokens: 3, outputTokens: 4));
-        var client = TestSupport.CreateAnthropicClient(handler);
+        var client = TestSupport.CreateChatClient(handler);
 
         var registry = new ToolRegistry();
         registry.Register(new FakeTool { Name = "search" });
@@ -1458,7 +1458,14 @@ public sealed class AgentToolTests
         Assert.Equal("claude-sonnet-4-6", request.GetProperty("model").GetString());
         Assert.Equal("Summarize the subsystem", request.GetProperty("messages")[0].GetProperty("content")[0].GetProperty("text").GetString());
         Assert.Equal("search", request.GetProperty("tools")[0].GetProperty("name").GetString());
-        Assert.Contains("child appendix", request.GetProperty("system").GetString(), StringComparison.Ordinal);
+        var systemProp = request.GetProperty("system");
+        var systemText = systemProp.ValueKind == System.Text.Json.JsonValueKind.String
+            ? systemProp.GetString()!
+            : systemProp.EnumerateArray()
+                .Where(e => e.GetProperty("type").GetString() == "text")
+                .Select(e => e.GetProperty("text").GetString())
+                .FirstOrDefault() ?? string.Empty;
+        Assert.Contains("child appendix", systemText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1469,7 +1476,7 @@ public sealed class AgentToolTests
         var isolated = temp.CreateDirectory("isolated");
         var handler = new FakeAnthropicHandler();
         handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("child answer", inputTokens: 3, outputTokens: 4));
-        var client = TestSupport.CreateAnthropicClient(handler);
+        var client = TestSupport.CreateChatClient(handler);
 
         var workspaceManager = new RecordingWorkspaceManager(isolated);
         var runner = new QueryEngineAgentRunner(client, workspaceManager: workspaceManager);
@@ -1489,9 +1496,15 @@ public sealed class AgentToolTests
         Assert.True(workspaceManager.DisposeCalled);
 
         var request = JsonDocument.Parse(handler.Bodies[0]).RootElement;
+        var systemProp2 = request.GetProperty("system");
+        var systemText2 = systemProp2.ValueKind == System.Text.Json.JsonValueKind.String
+            ? systemProp2.GetString()!
+            : string.Join(" ", systemProp2.EnumerateArray()
+                .Where(e => e.GetProperty("type").GetString() == "text")
+                .Select(e => e.GetProperty("text").GetString()));
         Assert.Contains(
             $"Working Directory: {isolated}",
-            request.GetProperty("system").GetString(),
+            systemText2,
             StringComparison.Ordinal);
     }
 
@@ -1501,7 +1514,7 @@ public sealed class AgentToolTests
         using var temp = new TempDirectory();
         var handler = new FakeAnthropicHandler();
         handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("child answer", inputTokens: 3, outputTokens: 4));
-        var client = TestSupport.CreateAnthropicClient(handler);
+        var client = TestSupport.CreateChatClient(handler);
 
         var progressEvents = new List<AgentExecutionProgress>();
         var runner = new QueryEngineAgentRunner(client);

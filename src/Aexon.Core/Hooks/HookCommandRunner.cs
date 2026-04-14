@@ -69,9 +69,7 @@ public sealed class ProcessHookCommandRunner : IHookCommandRunner
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
 
-        await process.StandardInput.WriteAsync(payloadJson);
-        await process.StandardInput.FlushAsync(cancellationToken);
-        process.StandardInput.Close();
+        await WritePayloadAsync(process, payloadJson, cancellationToken);
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(TimeSpan.FromMilliseconds(command.TimeoutMs));
@@ -95,6 +93,35 @@ public sealed class ProcessHookCommandRunner : IHookCommandRunner
             process.ExitCode,
             await stdoutTask,
             await stderrTask);
+    }
+
+    private static async Task WritePayloadAsync(
+        Process process,
+        string payloadJson,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await process.StandardInput.WriteAsync(payloadJson.AsMemory(), cancellationToken);
+            await process.StandardInput.FlushAsync(cancellationToken);
+        }
+        catch (IOException)
+        {
+            // Some hooks exit or close stdin before consuming the payload.
+            // We still want to report their exit code and stderr rather than
+            // failing the runner with a transport-level pipe error.
+        }
+        finally
+        {
+            try
+            {
+                process.StandardInput.Close();
+            }
+            catch (IOException)
+            {
+                // Ignore pipe-close races for the same reason as above.
+            }
+        }
     }
 
     private static string GetShell()

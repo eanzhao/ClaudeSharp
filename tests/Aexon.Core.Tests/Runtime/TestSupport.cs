@@ -12,6 +12,7 @@ using Aexon.Core.Query;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
 using Anthropic;
+using Microsoft.Extensions.AI;
 
 namespace Aexon.Core.Tests.Runtime;
 
@@ -32,8 +33,13 @@ internal static class TestSupport
         };
     }
 
+    public static IChatClient CreateChatClient(HttpMessageHandler handler)
+    {
+        return CreateAnthropicClient(handler).AsIChatClient();
+    }
+
     public static QueryEngine CreateQueryEngine(
-        AnthropicClient client,
+        IChatClient chatClient,
         ToolRegistry tools,
         ContextProvider contextProvider,
         IPermissionChecker permissions,
@@ -51,7 +57,7 @@ internal static class TestSupport
         SessionMemoryFile? sessionMemoryFile = null)
     {
         return new QueryEngine(
-            client,
+            chatClient,
             tools,
             permissions,
             config ?? new QueryEngineConfig(),
