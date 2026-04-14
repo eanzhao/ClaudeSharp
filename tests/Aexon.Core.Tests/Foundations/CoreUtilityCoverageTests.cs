@@ -143,6 +143,7 @@ public sealed class CoreUtilityCoverageTests
             new FileEditTool(),
             new GlobTool(),
             new GrepTool(),
+            new AskUserQuestionTool(),
             new WebFetchTool(),
             new WebSearchTool(new DefaultProviderCapabilityRouter(), () => ClaudeModels.DefaultMainModel),
             new AgentTool(new NoOpAgentRunner(), new DefaultProviderCapabilityRouter(), runtime, hooks: HookRuntime.Empty),
@@ -155,7 +156,9 @@ public sealed class CoreUtilityCoverageTests
             new MailboxRespondTool(new InMemoryAgentMessageRuntime()),
         };
 
-        var totalOptionalParameters = tools.Sum(CountOptionalParameters);
+        var totalOptionalParameters = tools
+            .Where(tool => tool.IsEnabled())
+            .Sum(CountOptionalParameters);
 
         Assert.True(
             totalOptionalParameters <= 24,

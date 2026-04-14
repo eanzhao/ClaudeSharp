@@ -54,7 +54,8 @@ internal static class TestSupport
         ISessionMemoryCompactor? sessionMemoryCompactor = null,
         IContextPressurePipeline? contextPressurePipeline = null,
         IHookRuntime? hooks = null,
-        SessionMemoryFile? sessionMemoryFile = null)
+        SessionMemoryFile? sessionMemoryFile = null,
+        AskUserQuestionHandler? askUserQuestion = null)
     {
         return new QueryEngine(
             chatClient,
@@ -72,7 +73,8 @@ internal static class TestSupport
             sessionMemoryFile: sessionMemoryFile,
             initialMessages: initialMessages,
             initialUsage: initialUsage,
-            initialMetadata: initialMetadata);
+            initialMetadata: initialMetadata,
+            askUserQuestion: askUserQuestion);
     }
 }
 

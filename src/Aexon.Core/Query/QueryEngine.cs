@@ -28,6 +28,7 @@ public class QueryEngine : IAsyncDisposable
     private readonly Context.ContextProvider _contextProvider;
     private readonly IConversationJournal? _journal;
     private readonly SessionMemoryFile? _sessionMemoryFile;
+    private readonly AskUserQuestionHandler? _askUserQuestion;
     private readonly ConversationSessionMetadata _sessionMetadata;
     private readonly List<ConversationMessage> _messages;
     private TokenUsage _totalUsage;
@@ -51,7 +52,8 @@ public class QueryEngine : IAsyncDisposable
         SessionMemoryFile? sessionMemoryFile = null,
         IReadOnlyList<ConversationMessage>? initialMessages = null,
         TokenUsage? initialUsage = null,
-        ConversationSessionMetadata? initialMetadata = null)
+        ConversationSessionMetadata? initialMetadata = null,
+        AskUserQuestionHandler? askUserQuestion = null)
     {
         _chatClient = chatClient;
         _tools = tools;
@@ -70,6 +72,7 @@ public class QueryEngine : IAsyncDisposable
         _contextProvider = contextProvider;
         _journal = journal;
         _sessionMemoryFile = sessionMemoryFile;
+        _askUserQuestion = askUserQuestion;
         _sessionMetadata = initialMetadata?.Clone() ?? journal?.Metadata ?? new ConversationSessionMetadata();
         _messages = initialMessages?.ToList() ?? [];
         _totalUsage = initialUsage ?? ComputeTotalUsage(_messages);
@@ -314,6 +317,8 @@ public class QueryEngine : IAsyncDisposable
         Tools = _tools.GetEnabledTools(),
         Messages = _messages,
         CancellationToken = cancellationToken,
+        IsNonInteractiveSession = _askUserQuestion == null,
+        AskUserQuestionAsync = _askUserQuestion,
         MainLoopModel = _config.Model,
     };
 
