@@ -77,7 +77,7 @@ public record SystemMessage : ConversationMessage
 // Content block types
 
 /// <summary>
-/// Represents a polymorphic content block compatible with the Anthropic Messages API.
+/// Represents a polymorphic content block for LLM message payloads.
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(TextBlock), "text")]

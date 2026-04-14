@@ -166,36 +166,49 @@ internal static class ChatMessageConverter
         var chatResponse = updates.ToChatResponse();
         turn.Usage = ToTokenUsage(chatResponse.Usage);
 
-        var textParts = new List<string>();
-        var thinkingParts = new List<string>();
-        string? thinkingSignature = null;
+        if (chatResponse.FinishReason != null)
+            turn.StopReason ??= chatResponse.FinishReason.Value.Value;
 
-        foreach (var update in updates)
+        foreach (var message in chatResponse.Messages)
         {
-            foreach (var content in update.Contents)
+            if (message.Role != ChatRole.Assistant)
+                continue;
+
+            foreach (var content in message.Contents)
             {
                 switch (content)
                 {
                     case TextContent tc when !string.IsNullOrEmpty(tc.Text):
-                        textParts.Add(tc.Text);
+                        if (!turn.ContentBlocks.OfType<TextBlock>().Any())
+                            turn.ContentBlocks.Insert(0, new TextBlock(tc.Text));
                         break;
 
                     case TextReasoningContent trc when !string.IsNullOrEmpty(trc.Text):
-                        thinkingParts.Add(trc.Text);
+                        if (!turn.ContentBlocks.OfType<ThinkingBlock>().Any())
+                            turn.ContentBlocks.Insert(0, new ThinkingBlock(trc.Text, trc.ProtectedData));
                         break;
 
-                    case TextReasoningContent trc when !string.IsNullOrEmpty(trc.ProtectedData):
-                        thinkingSignature = trc.ProtectedData;
+                    case FunctionCallContent fcc:
+                        if (!turn.ToolUseBlocks.Any(b => b.ToolUseId == fcc.CallId))
+                        {
+                            var inputJson = fcc.Arguments != null
+                                ? JsonSerializer.SerializeToElement(fcc.Arguments)
+                                : JsonSerializer.SerializeToElement(new { });
+
+                            var block = new ToolUseBlock
+                            {
+                                ToolUseId = fcc.CallId ?? string.Empty,
+                                Name = fcc.Name ?? string.Empty,
+                                Input = inputJson,
+                            };
+                            turn.ContentBlocks.Add(block);
+                            turn.ToolUseBlocks.Add(block);
+                        }
+
                         break;
                 }
             }
         }
-
-        if (textParts.Count > 0 && !turn.ContentBlocks.OfType<TextBlock>().Any())
-            turn.ContentBlocks.Insert(0, new TextBlock(string.Concat(textParts)));
-
-        if (thinkingParts.Count > 0 && !turn.ContentBlocks.OfType<ThinkingBlock>().Any())
-            turn.ContentBlocks.Insert(0, new ThinkingBlock(string.Concat(thinkingParts), thinkingSignature));
     }
 
     public static List<AITool> ToMeaiTools(IReadOnlyList<JsonElement> toolDefinitions)

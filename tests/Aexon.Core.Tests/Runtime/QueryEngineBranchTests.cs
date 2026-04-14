@@ -6,7 +6,6 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Query;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
-using Anthropic;
 using Microsoft.Extensions.AI;
 
 namespace Aexon.Core.Tests.Runtime;
