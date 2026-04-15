@@ -431,6 +431,64 @@ public sealed class QueryEngineDeepTests
                                        result.Result.Contains("not available in the current mode", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task SubmitMessageAsync_UsesDeferredToolsAfterToolSearchSelect()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(CreateToolUseResponse("ToolSearch", new { query = "select:BetaTool" }));
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("loaded"));
+
+        var registry = new ToolRegistry();
+        registry.Register(new ToolSearchTool(registry));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "BetaTool",
+            () => new FakeTool
+            {
+                Name = "BetaTool",
+                Description = "beta desc",
+                InputSchema = TestSupport.Json(new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        value = new { type = "string" },
+                    },
+                }),
+            },
+            Keywords: ["beta", "delayed"]));
+
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateChatClient(handler),
+            tools: registry);
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("load beta"));
+
+        Assert.Contains(events, evt => evt is ToolResultEvent result &&
+                                       result.ToolName == "ToolSearch" &&
+                                       !result.IsError &&
+                                       result.Result.Contains("\"loaded\":[\"BetaTool\"]", StringComparison.Ordinal));
+        Assert.Equal(2, handler.Bodies.Count);
+
+        var firstRequest = JsonDocument.Parse(handler.Bodies[0]).RootElement;
+        var secondRequest = JsonDocument.Parse(handler.Bodies[1]).RootElement;
+
+        Assert.Equal(
+            ["ToolSearch"],
+            firstRequest.GetProperty("tools")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("name").GetString()!)
+                .ToArray());
+        Assert.Equal(
+            ["BetaTool", "ToolSearch"],
+            secondRequest.GetProperty("tools")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("name").GetString()!)
+                .ToArray());
+    }
+
     private static QueryEngine CreateEngine(
         string workingDirectory,
         RecordingJournal journal,
