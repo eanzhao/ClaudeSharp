@@ -391,6 +391,104 @@ public class QueryEngineTests
             initialMessages: initialMessages);
     }
 
+    [Fact]
+    public async Task RegisterAttachment_PersistsToJournalMetadata()
+    {
+        using var temp = new TempDirectory();
+        var journal = new RecordingJournal();
+        var engine = CreateEngine(
+            temp.Root,
+            journal,
+            initialMessages: [],
+            config: new QueryEngineConfig { Model = ClaudeModels.DefaultMainModel });
+
+        var attachment = await engine.RegisterAttachmentAsync(
+            "readme.md", "text/markdown", 2048, AttachmentSource.User, "/tmp/readme.md");
+
+        Assert.NotNull(attachment.Id);
+        Assert.Equal("readme.md", attachment.FileName);
+        Assert.Equal("text/markdown", attachment.MimeType);
+        Assert.Equal(2048, attachment.SizeBytes);
+        Assert.Equal(AttachmentSource.User, attachment.Source);
+        Assert.Equal("/tmp/readme.md", attachment.SourcePath);
+
+        Assert.Single(engine.Attachments.GetAll());
+        Assert.NotNull(engine.Attachments.Get(attachment.Id));
+
+        var meta = engine.SessionMetadata;
+        Assert.Single(meta.Attachments);
+        Assert.True(meta.Attachments.ContainsKey(attachment.Id));
+
+        Assert.Single(journal.Metadata.Attachments);
+    }
+
+    [Fact]
+    public async Task RemoveAttachment_RemovesFromRegistryAndJournal()
+    {
+        using var temp = new TempDirectory();
+        var journal = new RecordingJournal();
+        var engine = CreateEngine(
+            temp.Root,
+            journal,
+            initialMessages: [],
+            config: new QueryEngineConfig { Model = ClaudeModels.DefaultMainModel });
+
+        var attachment = await engine.RegisterAttachmentAsync(
+            "data.csv", "text/csv", 512, AttachmentSource.Tool);
+
+        var removed = await engine.RemoveAttachmentAsync(attachment.Id);
+        Assert.True(removed);
+        Assert.Empty(engine.Attachments.GetAll());
+        Assert.Empty(engine.SessionMetadata.Attachments);
+        Assert.Empty(journal.Metadata.Attachments);
+    }
+
+    [Fact]
+    public async Task RemoveAttachment_ReturnsFalseForUnknownId()
+    {
+        using var temp = new TempDirectory();
+        var journal = new RecordingJournal();
+        var engine = CreateEngine(
+            temp.Root,
+            journal,
+            initialMessages: [],
+            config: new QueryEngineConfig { Model = ClaudeModels.DefaultMainModel });
+
+        var removed = await engine.RemoveAttachmentAsync("nonexistent");
+        Assert.False(removed);
+    }
+
+    [Fact]
+    public void AttachmentRegistry_RestoresFromInitialMetadata()
+    {
+        using var temp = new TempDirectory();
+        var journal = new RecordingJournal();
+        var initialMetadata = new ConversationSessionMetadata();
+        initialMetadata.Attachments["preloaded"] = new Attachment
+        {
+            Id = "preloaded",
+            FileName = "old.txt",
+            MimeType = "text/plain",
+            SizeBytes = 100,
+            Source = AttachmentSource.System,
+        };
+
+        var provider = new ContextProvider { WorkingDirectory = temp.Root };
+        var tools = new ToolRegistry();
+        var permissions = new DefaultPermissionChecker();
+        var httpHandler = new FakeAnthropicHandler();
+        var chatClient = TestSupport.CreateChatClient(httpHandler);
+
+        var engine = TestSupport.CreateQueryEngine(
+            chatClient, tools, provider, permissions,
+            new QueryEngineConfig { Model = ClaudeModels.DefaultMainModel },
+            journal: journal,
+            initialMetadata: initialMetadata);
+
+        Assert.NotNull(engine.Attachments.Get("preloaded"));
+        Assert.Equal("old.txt", engine.Attachments.Get("preloaded")!.FileName);
+    }
+
     private static IReadOnlyList<ConversationMessage> BuildPressureMessages()
     {
         var oldTimestamp = DateTimeOffset.UtcNow - TimeSpan.FromHours(4);

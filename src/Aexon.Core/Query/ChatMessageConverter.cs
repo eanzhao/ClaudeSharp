@@ -53,6 +53,10 @@ internal static class ChatMessageConverter
                         Exception = trb.IsError ? new InvalidOperationException(trb.Content) : null,
                     });
                     break;
+
+                case AttachmentBlock ab:
+                    contents.Add(new TextContent($"[Attachment: {ab.FileName} ({ab.MimeType}, {ab.SizeBytes} bytes) id={ab.AttachmentId}]"));
+                    break;
             }
         }
 

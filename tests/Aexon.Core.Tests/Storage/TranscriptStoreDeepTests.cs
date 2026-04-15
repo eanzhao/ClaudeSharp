@@ -185,9 +185,10 @@ public sealed class TranscriptStoreDeepTests
             new SystemAwaySummaryMessage
             {
                 Id = "away-1",
-                Content = "away summary",
-                AwayDurationMs = 60000,
-                Summary = "resumed after one minute",
+                AwayEnteredAt = DateTimeOffset.Parse("2026-04-14T08:00:00+08:00"),
+                AwayExitedAt = DateTimeOffset.Parse("2026-04-14T08:01:00+08:00"),
+                TriggerReason = "break",
+                SummaryText = "resumed after one minute",
             },
             new SystemScheduledTaskFireMessage
             {
@@ -300,7 +301,8 @@ public sealed class TranscriptStoreDeepTests
         Assert.Equal(["agent-a", "agent-b"], agents.AgentIds);
 
         var away = Assert.IsType<SystemAwaySummaryMessage>(projection.MessagesById["away-1"].Message);
-        Assert.Equal(60000, away.AwayDurationMs);
+        Assert.Equal("break", away.TriggerReason);
+        Assert.Equal(TimeSpan.FromMinutes(1), away.AwayDuration);
 
         var task = Assert.IsType<SystemScheduledTaskFireMessage>(projection.MessagesById["task-1"].Message);
         Assert.Equal("daily-refresh", task.TaskName);

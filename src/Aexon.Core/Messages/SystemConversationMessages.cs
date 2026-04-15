@@ -17,7 +17,6 @@ public static class SystemMessageSubtypes
     public const string ApiMetrics = "api_metrics";
     public const string MemorySaved = "memory_saved";
     public const string AgentsKilled = "agents_killed";
-    public const string AwaySummary = "away_summary";
     public const string ScheduledTaskFire = "scheduled_task_fire";
     public const string BridgeStatus = "bridge_status";
     public const string Progress = "progress";
@@ -173,20 +172,6 @@ public record SystemAgentsKilledMessage : SystemMessage
 }
 
 /// <summary>
-/// Stores an away-mode summary.
-/// </summary>
-public record SystemAwaySummaryMessage : SystemMessage
-{
-    public SystemAwaySummaryMessage()
-    {
-        Subtype = SystemMessageSubtypes.AwaySummary;
-    }
-
-    public double AwayDurationMs { get; init; }
-    public string? Summary { get; init; }
-}
-
-/// <summary>
 /// Stores scheduled task trigger metadata.
 /// </summary>
 public record SystemScheduledTaskFireMessage : SystemMessage
@@ -300,7 +285,6 @@ internal static class StructuredSystemMessageCodec
             SystemMessageSubtypes.ApiMetrics => Deserialize<SystemApiMetricsMessage>(payload),
             SystemMessageSubtypes.MemorySaved => Deserialize<SystemMemorySavedMessage>(payload),
             SystemMessageSubtypes.AgentsKilled => Deserialize<SystemAgentsKilledMessage>(payload),
-            SystemMessageSubtypes.AwaySummary => Deserialize<SystemAwaySummaryMessage>(payload),
             SystemMessageSubtypes.ScheduledTaskFire => Deserialize<SystemScheduledTaskFireMessage>(payload),
             SystemMessageSubtypes.BridgeStatus => Deserialize<SystemBridgeStatusMessage>(payload),
             SystemMessageSubtypes.Progress => Deserialize<ProgressMessage>(payload),
