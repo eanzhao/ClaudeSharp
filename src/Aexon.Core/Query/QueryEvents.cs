@@ -97,3 +97,22 @@ public record QueryCompleteEvent : QueryEvent
 /// Represents status event.
 /// </summary>
 public record StatusEvent(string Status) : QueryEvent;
+
+// Attachment events
+
+/// <summary>
+/// Raised when an attachment is registered in the session.
+/// </summary>
+public record AttachmentRegisteredEvent : QueryEvent
+{
+    public required string AttachmentId { get; init; }
+    public required string FileName { get; init; }
+    public required string MimeType { get; init; }
+    public required long SizeBytes { get; init; }
+    public required Messages.AttachmentSource Source { get; init; }
+}
+
+/// <summary>
+/// Raised when an attachment is removed from the session.
+/// </summary>
+public record AttachmentRemovedEvent(string AttachmentId) : QueryEvent;

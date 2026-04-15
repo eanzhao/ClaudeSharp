@@ -483,6 +483,31 @@ public sealed class ConversationJournal : IConversationJournal
                     DateTimeOffset.UtcNow);
             }
         }
+
+        foreach (var removedId in before.Attachments.Keys.Except(after.Attachments.Keys, StringComparer.Ordinal))
+        {
+            yield return new TranscriptMetadataEntry(
+                "attachment-remove",
+                JsonSerializer.SerializeToElement(new { attachmentId = removedId }),
+                DateTimeOffset.UtcNow);
+        }
+
+        foreach (var addedId in after.Attachments.Keys.Except(before.Attachments.Keys, StringComparer.Ordinal))
+        {
+            var a = after.Attachments[addedId];
+            yield return new TranscriptMetadataEntry(
+                "attachment-add",
+                JsonSerializer.SerializeToElement(new
+                {
+                    id = a.Id,
+                    fileName = a.FileName,
+                    mimeType = a.MimeType,
+                    sizeBytes = a.SizeBytes,
+                    source = a.Source.ToString(),
+                    sourcePath = a.SourcePath,
+                }),
+                DateTimeOffset.UtcNow);
+        }
     }
 }
 
@@ -866,6 +891,22 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                 metadata.AwayEnteredAt = null;
                 metadata.AwayTriggerReason = null;
                 break;
+
+            case "attachment-add":
+                {
+                    var attachment = TryDeserializeAttachment(entry.Payload);
+                    if (attachment != null)
+                        metadata.Attachments[attachment.Id] = attachment;
+                    break;
+                }
+
+            case "attachment-remove":
+                {
+                    var id = TryReadString(entry.Payload, "attachmentId");
+                    if (!string.IsNullOrWhiteSpace(id))
+                        metadata.Attachments.Remove(id);
+                    break;
+                }
         }
     }
 
@@ -880,6 +921,34 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         }
 
         return property.GetString();
+    }
+
+    private static Attachment? TryDeserializeAttachment(JsonElement? payload)
+    {
+        if (payload is not JsonElement element || element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var id = element.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+        var fileName = element.TryGetProperty("fileName", out var fnProp) ? fnProp.GetString() : null;
+        var mimeType = element.TryGetProperty("mimeType", out var mtProp) ? mtProp.GetString() : null;
+        var sizeBytes = element.TryGetProperty("sizeBytes", out var sbProp) && sbProp.TryGetInt64(out var sz) ? sz : 0L;
+        var sourceStr = element.TryGetProperty("source", out var srcProp) ? srcProp.GetString() : null;
+        var sourcePath = element.TryGetProperty("sourcePath", out var spProp) ? spProp.GetString() : null;
+
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(fileName))
+            return null;
+
+        _ = Enum.TryParse<AttachmentSource>(sourceStr, true, out var source);
+
+        return new Attachment
+        {
+            Id = id,
+            FileName = fileName,
+            MimeType = mimeType ?? "application/octet-stream",
+            SizeBytes = sizeBytes,
+            Source = source,
+            SourcePath = sourcePath,
+        };
     }
 
     private static Permissions.PermissionMode? ParsePermissionMode(string? mode)
@@ -1045,6 +1114,10 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public string? Content { get; init; }
         public bool? IsError { get; init; }
         public string? Signature { get; init; }
+        public string? AttachmentId { get; init; }
+        public string? FileName { get; init; }
+        public string? MimeType { get; init; }
+        public long? SizeBytes { get; init; }
 
         public static PersistedContentBlock FromDomain(ContentBlock block) =>
             block switch
@@ -1074,6 +1147,14 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     Text = thinking.Text,
                     Signature = thinking.Signature,
                 },
+                AttachmentBlock attachment => new PersistedContentBlock
+                {
+                    Type = "attachment",
+                    AttachmentId = attachment.AttachmentId,
+                    FileName = attachment.FileName,
+                    MimeType = attachment.MimeType,
+                    SizeBytes = attachment.SizeBytes,
+                },
                 _ => throw new InvalidOperationException($"Unsupported content block type: {block.GetType().Name}"),
             };
 
@@ -1092,6 +1173,13 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     Content ?? string.Empty,
                     IsError ?? false),
                 "thinking" => new ThinkingBlock(Text ?? string.Empty, Signature),
+                "attachment" => new AttachmentBlock
+                {
+                    AttachmentId = AttachmentId ?? string.Empty,
+                    FileName = FileName ?? string.Empty,
+                    MimeType = MimeType ?? string.Empty,
+                    SizeBytes = SizeBytes ?? 0,
+                },
                 _ => throw new InvalidOperationException($"Unsupported persisted content block type: {Type}"),
             };
     }
