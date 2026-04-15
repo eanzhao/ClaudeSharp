@@ -1,5 +1,5 @@
-using Anthropic.Models.Messages;
 using Aexon.Core.Query;
+using Anthropic.Models.Messages;
 using Microsoft.Extensions.AI;
 
 namespace Aexon.Cli;

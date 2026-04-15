@@ -2,10 +2,10 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Aexon.Core.Query;
 using Anthropic.Core;
 using Anthropic.Exceptions;
 using Anthropic.Models.Messages;
-using Aexon.Core.Query;
 using Microsoft.Extensions.AI;
 
 namespace Aexon.Cli;
