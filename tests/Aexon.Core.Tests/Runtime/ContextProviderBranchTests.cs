@@ -37,7 +37,8 @@ public sealed class ContextProviderBranchTests
             [new FakeTool { Name = "Good", PromptText = "good prompt" }, new ThrowingPromptTool()],
             new QueryEngineConfig());
 
-        Assert.Contains("Current git status", prompt);
+        Assert.Contains("# Context", prompt);
+        Assert.Contains("## Git Status", prompt);
         Assert.Contains("Current branch:", prompt);
         Assert.Contains("Recent commits:", prompt);
         Assert.Contains("... (truncated)", prompt);

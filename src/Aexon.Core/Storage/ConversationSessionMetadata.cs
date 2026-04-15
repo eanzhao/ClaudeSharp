@@ -14,6 +14,8 @@ public sealed class ConversationSessionMetadata
 
     public PermissionMode? Mode { get; set; }
 
+    public Query.QueryEffortLevel? Effort { get; set; }
+
     public DateTimeOffset? AwayEnteredAt { get; set; }
 
     public string? AwayTriggerReason { get; set; }
@@ -26,6 +28,7 @@ public sealed class ConversationSessionMetadata
         {
             Title = Title,
             Mode = Mode,
+            Effort = Effort,
             AwayEnteredAt = AwayEnteredAt,
             AwayTriggerReason = AwayTriggerReason,
         };

@@ -41,6 +41,11 @@ public class QueryEngineConfig
     public string? AppendSystemPrompt { get; set; }
 
     /// <summary>
+    /// Gets the execution effort profile.
+    /// </summary>
+    public QueryEffortLevel Effort { get; set; } = QueryEffortLevel.Balanced;
+
+    /// <summary>
     /// Gets thinking mode.
     /// </summary>
     public ThinkingMode ThinkingMode { get; set; } = ThinkingMode.Adaptive;
@@ -150,4 +155,14 @@ public enum ThinkingMode
     /// Lets the model decide when to use the feature.
     /// </summary>
     Adaptive,
+}
+
+/// <summary>
+/// Defines the supported execution effort levels.
+/// </summary>
+public enum QueryEffortLevel
+{
+    Fast,
+    Balanced,
+    Thorough,
 }

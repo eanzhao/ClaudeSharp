@@ -170,8 +170,15 @@ The current MCP implementation supports stdio servers and registers their tools 
 
 ## Project Memory Files
 
-Aexon loads project instructions from these files when present:
+Aexon now loads CLAUDE memory in precedence order `system -> user -> project`, then lets the later entries override the earlier ones in the final prompt. Project scanning walks from the current repository root down to the working directory, supports `.claudeignore`, and reloads automatically on the next prompt build after files change.
 
+Memory sources:
+
+- `<app base>/CLAUDE.md`
+- `<app base>/.claude/CLAUDE.md`
+- `<app base>/.claude/rules/*.md`
+- `~/.claude/CLAUDE.md`
+- `~/.claude/rules/*.md`
 - `CLAUDE.md`
 - `.claude/CLAUDE.md`
 - `.claude/rules/*.md`
@@ -229,7 +236,7 @@ src/
 ## Slash Commands
 
 - `/help`, `/clear`, `/exit`, `/cost`, `/model`
-- `/session`, `/mode`, `/title`, `/tag`
+- `/session`, `/mode`, `/effort`, `/fast`, `/title`, `/tag`
 - `/compact`, `/microcompact`, `/pcompact`, `/session-memory`
 - `/agents`, `/agents summary`, `/agents list`, `/agents wait`, `/agents tail`, `/agents prune`, `/agents stop`
 - `/mailbox`

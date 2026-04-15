@@ -524,7 +524,9 @@ internal static class Program
         registry.Register(new ClearCommand());
         registry.Register(new CompactCommand());
         registry.Register(new CostCommand());
+        registry.Register(new EffortCommand());
         registry.Register(new ExitCommand());
+        registry.Register(new FastCommand());
         registry.Register(new AgentsCommand());
         registry.Register(new MailboxCommand());
         registry.Register(new ModelCommand());

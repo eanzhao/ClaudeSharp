@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Aexon.Core.Compaction;
 using Aexon.Core.Messages;
+using Aexon.Core.Query;
 
 namespace Aexon.Core.Storage;
 
@@ -443,6 +444,16 @@ public sealed class ConversationJournal : IConversationJournal
                 DateTimeOffset.UtcNow);
         }
 
+        if (before.Effort != after.Effort)
+        {
+            yield return new TranscriptMetadataEntry(
+                "effort",
+                after.Effort is null
+                    ? null
+                    : JsonSerializer.SerializeToElement(new { effort = after.Effort.ToString() }),
+                DateTimeOffset.UtcNow);
+        }
+
         foreach (var removedTag in before.Tags.Except(after.Tags, StringComparer.OrdinalIgnoreCase))
         {
             yield return new TranscriptMetadataEntry(
@@ -772,6 +783,7 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
             Title = session.Metadata.Title,
             Tags = session.Metadata.Tags.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase).ToArray(),
             Mode = session.Metadata.Mode?.ToString(),
+            Effort = session.Metadata.Effort?.ToString(),
             CurrentLeafMessageId = session.CurrentLeafMessageId,
             AwayEnteredAt = session.Metadata.AwayEnteredAt,
             AwayTriggerReason = session.Metadata.AwayTriggerReason,
@@ -837,6 +849,7 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         {
             Title = manifest.Title,
             Mode = ParsePermissionMode(manifest.Mode),
+            Effort = ParseEffort(manifest.Effort),
             AwayEnteredAt = manifest.AwayEnteredAt,
             AwayTriggerReason = manifest.AwayTriggerReason,
         };
@@ -859,6 +872,10 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
 
             case "mode":
                 metadata.Mode = ParsePermissionMode(TryReadString(entry.Payload, "mode"));
+                break;
+
+            case "effort":
+                metadata.Effort = ParseEffort(TryReadString(entry.Payload, "effort"));
                 break;
 
             case "tag-add":
@@ -961,6 +978,16 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
             : null;
     }
 
+    private static QueryEffortLevel? ParseEffort(string? effort)
+    {
+        if (string.IsNullOrWhiteSpace(effort))
+            return null;
+
+        return Enum.TryParse<QueryEffortLevel>(effort, true, out var parsed)
+            ? parsed
+            : null;
+    }
+
     private sealed class TranscriptRecord
     {
         public required string RecordType { get; init; }
@@ -981,6 +1008,7 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public string? Title { get; init; }
         public string[]? Tags { get; init; }
         public string? Mode { get; init; }
+        public string? Effort { get; init; }
         public string? CurrentLeafMessageId { get; init; }
         public DateTimeOffset? AwayEnteredAt { get; init; }
         public string? AwayTriggerReason { get; init; }

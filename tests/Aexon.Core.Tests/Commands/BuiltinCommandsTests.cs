@@ -110,6 +110,11 @@ public sealed class BuiltinCommandsTests
         await new ModelCommand().ExecuteAsync("", context);
         await new ModelCommand().ExecuteAsync("opus", context);
         await new ModelCommand().ExecuteAsync("gpt-4o", context);
+        await new EffortCommand().ExecuteAsync("", context);
+        await new EffortCommand().ExecuteAsync("thorough", context);
+        await new FastCommand().ExecuteAsync("", context);
+        await new FastCommand().ExecuteAsync("off", context);
+        await new EffortCommand().ExecuteAsync("mystery", context);
         await new ModeCommand().ExecuteAsync("", context);
         await new ModeCommand().ExecuteAsync("plan", context);
         await new ModeCommand().ExecuteAsync("mystery", context);
@@ -132,6 +137,12 @@ public sealed class BuiltinCommandsTests
             "Switching providers requires a new session. Restart with --provider openai --model gpt-4o.",
             output,
             StringComparison.Ordinal);
+        Assert.Contains("Current effort: Balanced", output, StringComparison.Ordinal);
+        Assert.Contains("Available effort levels: Fast, Balanced, Thorough", output, StringComparison.Ordinal);
+        Assert.Contains("Switched effort to: Thorough", output, StringComparison.Ordinal);
+        Assert.Contains("Switched effort to: Fast", output, StringComparison.Ordinal);
+        Assert.Contains("Switched effort to: Balanced", output, StringComparison.Ordinal);
+        Assert.Contains("Unknown effort: mystery", output, StringComparison.Ordinal);
         Assert.Contains("Current mode: Default", output, StringComparison.Ordinal);
         Assert.Contains("Switched permission mode to: Plan", output, StringComparison.Ordinal);
         Assert.Contains("Unknown mode: mystery", output, StringComparison.Ordinal);
@@ -147,12 +158,14 @@ public sealed class BuiltinCommandsTests
         Assert.Contains("Title: Sprint 7", output, StringComparison.Ordinal);
         Assert.Contains("Tags: beta", output, StringComparison.Ordinal);
         Assert.Contains("Mode: Plan", output, StringComparison.Ordinal);
+        Assert.Contains("Effort: Balanced", output, StringComparison.Ordinal);
         Assert.Contains("Auto-resume: queue", output, StringComparison.Ordinal);
         Assert.Contains("Session title cleared.", output, StringComparison.Ordinal);
         Assert.Contains("Cleared all session tags.", output, StringComparison.Ordinal);
         Assert.Null(bundle.Engine.SessionMetadata.Title);
         Assert.Empty(bundle.Engine.SessionMetadata.Tags);
         Assert.Equal(PermissionMode.Plan, bundle.Engine.SessionMetadata.Mode);
+        Assert.Equal(QueryEffortLevel.Balanced, bundle.Engine.CurrentEffort);
     }
 
     [Fact]

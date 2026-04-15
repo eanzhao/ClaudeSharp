@@ -142,10 +142,12 @@ public sealed class QueryEngineBranchTests
         Assert.Equal("title", engine.SessionMetadata.Title);
         await engine.SetSessionTitleAsync("   ");
         await engine.SetPermissionModeAsync(PermissionMode.Plan);
+        await engine.SetEffortAsync(QueryEffortLevel.Fast);
         engine.ClearMessages();
 
         Assert.Empty(engine.Messages);
         Assert.Equal(PermissionMode.Plan, engine.SessionMetadata.Mode);
+        Assert.Equal(QueryEffortLevel.Fast, engine.SessionMetadata.Effort);
         Assert.Null(engine.SessionMetadata.Title);
         Assert.Empty(engine.SessionMetadata.Tags);
         Assert.True(journal.ResetHeadCount >= 1);

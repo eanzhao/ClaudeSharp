@@ -33,17 +33,38 @@ internal sealed class OpenAIReasoningMiddleware(IChatClient inner) : DelegatingC
         if (options?.AdditionalProperties == null)
             return options;
 
+#pragma warning disable OPENAI001
+        ChatReasoningEffortLevel? effort = null;
+#pragma warning restore OPENAI001
+        if (options.AdditionalProperties.TryGetValue(ChatClientPropertyKeys.Effort, out var effortObj) &&
+            effortObj is string effortStr)
+        {
+#pragma warning disable OPENAI001
+            effort = effortStr switch
+            {
+                "Fast" => ChatReasoningEffortLevel.Low,
+                "Balanced" => ChatReasoningEffortLevel.Medium,
+                "Thorough" => ChatReasoningEffortLevel.High,
+                _ => null,
+            };
+#pragma warning restore OPENAI001
+        }
+
         if (!options.AdditionalProperties.TryGetValue(ChatClientPropertyKeys.ThinkingMode, out var modeObj) ||
             modeObj is not string modeStr)
-            return options;
+        {
+            return effort == null || !IsReasoningModel(options.ModelId)
+                ? options
+                : CloneWithReasoningEffort(options, effort.Value);
+        }
 
         if (!IsReasoningModel(options.ModelId))
             return options;
 
 #pragma warning disable OPENAI001
-        var effort = modeStr switch
+        effort ??= modeStr switch
         {
-            "Disabled" => (ChatReasoningEffortLevel?)null,
+            "Disabled" => null,
             "Enabled" => ChatReasoningEffortLevel.High,
             "Adaptive" => ChatReasoningEffortLevel.Medium,
             _ => null,
@@ -53,6 +74,15 @@ internal sealed class OpenAIReasoningMiddleware(IChatClient inner) : DelegatingC
         if (effort == null)
             return options;
 
+        return CloneWithReasoningEffort(options, effort.Value);
+    }
+
+    private static ChatOptions CloneWithReasoningEffort(
+        ChatOptions options,
+#pragma warning disable OPENAI001
+        ChatReasoningEffortLevel effort)
+#pragma warning restore OPENAI001
+    {
         var cloned = options.Clone();
 #pragma warning disable OPENAI001
         cloned.RawRepresentationFactory = _ => new ChatCompletionOptions
@@ -60,7 +90,6 @@ internal sealed class OpenAIReasoningMiddleware(IChatClient inner) : DelegatingC
             ReasoningEffortLevel = effort,
         };
 #pragma warning restore OPENAI001
-
         return cloned;
     }
 

@@ -10,10 +10,15 @@ namespace Aexon.Core.Context;
 /// </summary>
 public class ContextProvider
 {
+    private bool _managedMemoryContent;
+
     public string WorkingDirectory { get; set; } = Environment.CurrentDirectory;
     public PermissionContext PermissionContext { get; set; } = new();
     public string? MemoryContent { get; set; }
     public string? SessionMemoryContent { get; set; }
+    public string? UserClaudeDirectory { get; set; }
+    public string? SystemClaudeDirectory { get; set; }
+    public IReadOnlyList<MemoryInstructionDiagnostic> MemoryDiagnostics { get; private set; } = [];
 
     public PermissionContext GetPermissionContext()
     {
@@ -28,60 +33,31 @@ public class ContextProvider
         IReadOnlyList<ITool> tools,
         QueryEngineConfig config)
     {
+        if (_managedMemoryContent)
+            await LoadMemoryAsync();
+
+        var profile = QueryExecutionProfileResolver.Resolve(config);
         var parts = new List<string>();
         var planModeSection = GetPlanModeSection(tools);
 
-        // 1. Add the core identity prompt.
-        parts.Add(GetIdentityPrompt());
-
-        // 2. Add the environment section.
-        parts.Add(GetEnvironmentSection());
+        parts.Add(GetIdentityPrompt(profile));
+        parts.Add(GetEnvironmentSection(profile));
 
         if (!string.IsNullOrWhiteSpace(planModeSection))
             parts.Add(planModeSection);
 
-        // 3. Add tool-specific usage guidance.
-        var toolPromptCtx = new ToolPromptContext
-        {
-            PermissionContext = GetPermissionContext(),
-            Tools = tools,
-        };
+        var toolsSection = await BuildToolsSectionAsync(tools);
+        if (!string.IsNullOrWhiteSpace(toolsSection))
+            parts.Add(toolsSection);
 
-        foreach (var tool in tools)
-        {
-            try
-            {
-                var toolPrompt = await tool.GetPromptAsync(toolPromptCtx);
-                if (!string.IsNullOrWhiteSpace(toolPrompt))
-                {
-                    parts.Add($"# {tool.Name} Tool\n{toolPrompt}");
-                }
-            }
-            catch
-            {
-                // Skip tools that fail to generate prompts
-            }
-        }
+        var contextSection = await BuildContextSectionAsync(profile);
+        if (!string.IsNullOrWhiteSpace(contextSection))
+            parts.Add(contextSection);
 
-        // 4. Add the git status snapshot.
-        var gitStatus = await GetGitStatusAsync();
-        if (!string.IsNullOrWhiteSpace(gitStatus))
-        {
-            parts.Add($"# Current git status\n{gitStatus}");
-        }
+        var memorySection = BuildMemorySection();
+        if (!string.IsNullOrWhiteSpace(memorySection))
+            parts.Add(memorySection);
 
-        // 5. Add project instructions loaded from CLAUDE.md-style files.
-        if (!string.IsNullOrWhiteSpace(MemoryContent))
-        {
-            parts.Add($"# User's project instructions (CLAUDE.md)\n{MemoryContent}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(SessionMemoryContent))
-        {
-            parts.Add($"# Session memory\n{SessionMemoryContent}");
-        }
-
-        // 6. Apply custom or appended system prompts.
         if (!string.IsNullOrWhiteSpace(config.CustomSystemPrompt))
         {
             parts.Clear();
@@ -91,11 +67,85 @@ public class ContextProvider
         }
 
         if (!string.IsNullOrWhiteSpace(config.AppendSystemPrompt))
-        {
             parts.Add(config.AppendSystemPrompt);
-        }
 
         return string.Join("\n\n", parts);
+    }
+
+    private async Task<string?> BuildToolsSectionAsync(IReadOnlyList<ITool> tools)
+    {
+        var toolPromptCtx = new ToolPromptContext
+        {
+            PermissionContext = GetPermissionContext(),
+            Tools = tools,
+        };
+
+        var sections = new List<string>();
+        foreach (var tool in tools)
+        {
+            try
+            {
+                var toolPrompt = await tool.GetPromptAsync(toolPromptCtx);
+                if (!string.IsNullOrWhiteSpace(toolPrompt))
+                    sections.Add($"## {tool.Name}\n{toolPrompt}");
+            }
+            catch
+            {
+                // Skip tools that fail to generate prompts.
+            }
+        }
+
+        return sections.Count == 0
+            ? null
+            : "# Tools\n" + string.Join("\n\n", sections);
+    }
+
+    private async Task<string?> BuildContextSectionAsync(QueryExecutionProfile profile)
+    {
+        var sections = new List<string>
+        {
+            $$"""
+            ## Execution Profile
+            - Effort: {{profile.Effort}}
+            - Model: {{profile.ClaudeModel?.StableId ?? profile.ModelId}}
+            - Prompt Detail: {{profile.PromptDetail}}
+            - Max Output Tokens: {{profile.MaxOutputTokens}}
+            - Extended Thinking: {{profile.ThinkingMode}}
+            """
+        };
+
+        var gitStatus = await GetGitStatusAsync(includeRecentCommits: profile.PromptDetail != QueryPromptDetail.Compact);
+        if (!string.IsNullOrWhiteSpace(gitStatus))
+            sections.Add($"## Git Status\n{gitStatus}");
+
+        return sections.Count == 0
+            ? null
+            : "# Context\n" + string.Join("\n\n", sections);
+    }
+
+    private string? BuildMemorySection()
+    {
+        var sections = new List<string>();
+
+        if (MemoryDiagnostics.Count > 0)
+        {
+            sections.Add(
+                "## CLAUDE.md Warnings\n" +
+                string.Join(
+                    "\n",
+                    MemoryDiagnostics.Select(diagnostic =>
+                        $"- {diagnostic.Path}: {diagnostic.Message}")));
+        }
+
+        if (!string.IsNullOrWhiteSpace(MemoryContent))
+            sections.Add($"## CLAUDE.md Instructions\n{MemoryContent}");
+
+        if (!string.IsNullOrWhiteSpace(SessionMemoryContent))
+            sections.Add($"## Session Memory\n{SessionMemoryContent}");
+
+        return sections.Count == 0
+            ? null
+            : "# Memory\n" + string.Join("\n\n", sections);
     }
 
     private string? GetPlanModeSection(IReadOnlyList<ITool> tools)
@@ -119,33 +169,45 @@ public class ContextProvider
             """;
     }
 
-    /// <summary>
-    /// Builds the core identity prompt used by Aexon.
-    /// </summary>
-    private string GetIdentityPrompt()
+    private string GetIdentityPrompt(QueryExecutionProfile profile)
     {
-        return """
-            You are Aexon, a powerful agentic CLI coding assistant.
+        return profile.PromptDetail switch
+        {
+            QueryPromptDetail.Compact => """
+                # Identity
+                You are Aexon, a CLI coding assistant working directly in the user's repository.
 
-            You are pair programming with a USER to solve their coding task. You have access to a set of tools that allow you to interact with the user's codebase, execute commands, and manage files.
+                Rules:
+                - Use tools to inspect or change the code instead of describing steps
+                - Keep responses short and task-focused
+                - Prefer targeted verification before you finish
+                - Ask only when a missing fact blocks safe execution
+                """,
+            QueryPromptDetail.Detailed => """
+                # Identity
+                You are Aexon, a rigorous CLI coding assistant working directly in the user's repository.
 
-            Key behaviors:
-            - Always use tools to complete tasks rather than just describing what to do
-            - When you need to read or modify files, use the appropriate file tools
-            - When you need to run commands, use the Bash tool
-            - Ask for clarification if the task is ambiguous
-            - Be concise in your responses
-            - Show file changes clearly
+                Rules:
+                - Inspect the existing code before editing and keep changes on the main execution path
+                - Use tools for concrete work, not for narration
+                - Preserve architecture boundaries and existing conventions
+                - Surface correctness risks, migrations, or validation gaps when they affect the result
+                - Verify the final behavior with targeted commands or tests before finishing
+                """,
+            _ => """
+                # Identity
+                You are Aexon, a CLI coding assistant working directly in the user's repository.
 
-            Important rules:
-            - NEVER execute destructive commands without user confirmation
-            - ALWAYS verify file paths before writing
-            - When editing files, preserve existing formatting and style
-            - Quote file paths containing spaces
-            """;
+                Rules:
+                - Prefer using tools over describing what should be done
+                - Keep edits aligned with the existing codebase and architecture
+                - Verify meaningful changes before finishing
+                - Be concise unless extra detail is needed for correctness
+                """,
+        };
     }
 
-    private string GetEnvironmentSection()
+    private string GetEnvironmentSection(QueryExecutionProfile profile)
     {
         var os = Environment.OSVersion.Platform switch
         {
@@ -154,51 +216,58 @@ public class ContextProvider
             _ => "Unknown",
         };
 
-        return $"""
-            # Environment
-            - Operating System: {os}
-            - Working Directory: {WorkingDirectory}
-            - Current Date: {DateTime.Now:yyyy-MM-dd}
-            - Shell: {(os == "Windows" ? "cmd/powershell" : "bash/zsh")}
-            """;
+        var shell = os == "Windows" ? "cmd/powershell" : "bash/zsh";
+        var lines = new List<string>
+        {
+            "# Environment",
+            $"- Operating System: {os}",
+            $"- Working Directory: {WorkingDirectory}",
+            $"- Current Date: {DateTime.Now:yyyy-MM-dd}",
+            $"- Shell: {shell}",
+        };
+
+        if (profile.ClaudeFamily is { } family)
+            lines.Add($"- Claude Family: {family}");
+
+        return string.Join("\n", lines);
     }
 
     /// <summary>
     /// Collects the current Git branch, status, and recent commits.
     /// </summary>
-    private async Task<string?> GetGitStatusAsync()
+    private async Task<string?> GetGitStatusAsync(bool includeRecentCommits)
     {
         try
         {
-            var gitDir = Path.Combine(WorkingDirectory, ".git");
-            if (!Directory.Exists(gitDir))
-                return null;
-
-            var shell = OperatingSystem.IsWindows() ? "cmd" : "bash";
-            var shellArg = OperatingSystem.IsWindows() ? "/c" : "-c";
-
-            var tasks = new[]
+            var tasks = new List<Task<string?>>
             {
                 RunGitCommandAsync("git rev-parse --abbrev-ref HEAD"),
                 RunGitCommandAsync("git status --short"),
-                RunGitCommandAsync("git log --oneline -n 5"),
             };
 
-            var results = await Task.WhenAll(tasks);
+            if (includeRecentCommits)
+                tasks.Add(RunGitCommandAsync("git log --oneline -n 5"));
 
+            var results = await Task.WhenAll(tasks);
             var branch = results[0]?.Trim() ?? "unknown";
-            var status = results[1]?.Trim() ?? "";
-            var log = results[2]?.Trim() ?? "";
+            var status = results[1]?.Trim() ?? string.Empty;
+            var log = includeRecentCommits && results.Length > 2
+                ? results[2]?.Trim() ?? string.Empty
+                : string.Empty;
 
             if (status.Length > 2000)
                 status = status[..2000] + "\n... (truncated)";
 
-            return string.Join("\n\n", new[]
+            var sections = new List<string>
             {
                 $"Current branch: {branch}",
                 $"Status:\n{(string.IsNullOrEmpty(status) ? "(clean)" : status)}",
-                $"Recent commits:\n{log}",
-            });
+            };
+
+            if (includeRecentCommits)
+                sections.Add($"Recent commits:\n{log}");
+
+            return string.Join("\n\n", sections);
         }
         catch
         {
@@ -236,10 +305,20 @@ public class ContextProvider
     /// <summary>
     /// Loads memory.
     /// </summary>
-    public async Task LoadMemoryAsync()
+    public async Task LoadMemoryAsync(CancellationToken ct = default)
     {
-        var files = await MemoryInstructionScanner.ScanAsync(WorkingDirectory);
-        if (files.Count == 0)
+        var result = await MemoryInstructionScanner.ScanAsync(
+            new MemoryInstructionScanOptions
+            {
+                WorkingDirectory = WorkingDirectory,
+                UserClaudeDirectory = UserClaudeDirectory,
+                SystemClaudeDirectory = SystemClaudeDirectory,
+            },
+            ct);
+        _managedMemoryContent = true;
+        MemoryDiagnostics = result.Diagnostics;
+
+        if (result.Files.Count == 0)
         {
             MemoryContent = null;
             return;
@@ -247,12 +326,12 @@ public class ContextProvider
 
         MemoryContent = string.Join(
             "\n\n",
-            files.Select(FormatMemoryFile));
+            result.Files.Select(FormatMemoryFile));
     }
 
     private static string FormatMemoryFile(MemoryInstructionFile file)
     {
-        var parts = new List<string> { $"# From {file.Path}" };
+        var parts = new List<string> { $"# From {file.Scope}: {file.Path}" };
 
         if (file.Frontmatter.TryGetValue("paths", out var pathsValue))
         {

@@ -5,6 +5,7 @@ namespace Aexon.Core.Query;
 /// </summary>
 public static class ChatClientPropertyKeys
 {
+    public const string Effort = nameof(Effort);
     public const string ThinkingMode = nameof(ThinkingMode);
     public const string ThinkingBudgetTokens = nameof(ThinkingBudgetTokens);
     public const string ApiRequestTimeout = nameof(ApiRequestTimeout);
