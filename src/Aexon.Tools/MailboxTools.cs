@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aexon.Core.Agents;
+using Aexon.Core.Channels;
 using Aexon.Core.Permissions;
 using Aexon.Core.Tools;
 
@@ -120,6 +121,7 @@ public sealed class SendMessageTool : ITool
     private readonly IAgentTeamRuntime? _teamRuntime;
     private readonly IAgentMessageActivationRuntime? _activationRuntime;
     private readonly IAgentTaskRuntime? _taskRuntime;
+    private readonly ChannelRouter? _channelRouter;
     private readonly string? _currentWorkItemId;
 
     public SendMessageTool(
@@ -127,12 +129,14 @@ public sealed class SendMessageTool : ITool
         IAgentTeamRuntime? teamRuntime = null,
         IAgentMessageActivationRuntime? activationRuntime = null,
         IAgentTaskRuntime? taskRuntime = null,
-        string? currentWorkItemId = null)
+        string? currentWorkItemId = null,
+        ChannelRouter? channelRouter = null)
     {
         _messageRuntime = messageRuntime;
         _teamRuntime = teamRuntime;
         _activationRuntime = activationRuntime;
         _taskRuntime = taskRuntime;
+        _channelRouter = channelRouter;
         _currentWorkItemId = string.IsNullOrWhiteSpace(currentWorkItemId)
             ? null
             : currentWorkItemId.Trim();
@@ -192,8 +196,8 @@ public sealed class SendMessageTool : ITool
             - a raw local mailbox address like "main" or "subagent"
             - a teammate name inside a known team by setting team_name
             - "*" or "broadcast" inside a known team to fan out to all teammates
-
-            bridge: and uds: targets are not implemented yet in this build.
+            - "bridge:<channel>" to send via a bridge channel
+            - "uds:<path>" to send via a Unix domain socket channel
             """);
 
     public Task<ValidationResult> ValidateInputAsync(JsonElement input, ToolExecutionContext context)
@@ -238,10 +242,9 @@ public sealed class SendMessageTool : ITool
         if (sender == null)
             return ToolResult.Error("Sender could not be resolved.");
 
-        if (request.To!.StartsWith("bridge:", StringComparison.OrdinalIgnoreCase) ||
-            request.To.StartsWith("uds:", StringComparison.OrdinalIgnoreCase))
+        if (ChannelRouter.IsChannelTarget(request.To!))
         {
-            return ToolResult.Error("bridge: and uds: targets are not implemented in this Aexon build.");
+            return await SendViaChannelAsync(request.To!, sender, body!, kind, subject, protocol, cancellationToken);
         }
 
         List<AgentMessage> delivered;
@@ -282,6 +285,32 @@ public sealed class SendMessageTool : ITool
             lines.Add(FormatActivationLine(activation));
 
         return ToolResult.Success(string.Join(Environment.NewLine, lines));
+    }
+
+    private async Task<ToolResult> SendViaChannelAsync(
+        string target,
+        string sender,
+        string body,
+        AgentMessageKind kind,
+        string? subject,
+        AgentMessageProtocol? protocol,
+        CancellationToken cancellationToken)
+    {
+        if (_channelRouter == null)
+            return ToolResult.Error("Channel routing is not configured in this Aexon build.");
+
+        var transport = _channelRouter.ResolveTransport(target);
+        if (transport == null)
+            return ToolResult.Error($"No transport is registered for target '{target}'.");
+
+        var result = await transport.SendAsync(target, sender, body, kind, subject, protocol, cancellationToken);
+        if (!result.Success)
+            return ToolResult.Error($"Channel send failed for '{target}': {result.ErrorMessage}");
+
+        return ToolResult.Success(
+            $"Delivered 1 message(s) via {transport.Kind.ToString().ToLowerInvariant()} channel." +
+            Environment.NewLine +
+            $"- channel: {result.ChannelId}, from: {sender}, to: {target}");
     }
 
     private void TryTrackCurrentWorkItemApproval(IReadOnlyList<AgentMessage> delivered)
