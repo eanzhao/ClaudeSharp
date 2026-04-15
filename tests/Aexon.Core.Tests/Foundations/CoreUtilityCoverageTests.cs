@@ -7,6 +7,7 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Providers;
 using Aexon.Core.Query;
 using Aexon.Core.Tests.Runtime;
+using Aexon.Core.Todos;
 using Aexon.Core.Tools;
 using Aexon.Tools;
 
@@ -144,6 +145,7 @@ public sealed class CoreUtilityCoverageTests
             new GlobTool(),
             new GrepTool(),
             new AskUserQuestionTool(),
+            new TodoWriteTool(new InMemoryTodoRuntime()),
             new WebFetchTool(),
             new WebSearchTool(new DefaultProviderCapabilityRouter(), () => ClaudeModels.DefaultMainModel),
             new AgentTool(new NoOpAgentRunner(), new DefaultProviderCapabilityRouter(), runtime, hooks: HookRuntime.Empty),

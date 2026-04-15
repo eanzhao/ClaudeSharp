@@ -1,6 +1,8 @@
 using Aexon.Core.Context;
 using Aexon.Core.Query;
+using Aexon.Core.Todos;
 using Aexon.Core.Tools;
+using Aexon.Tools;
 
 namespace Aexon.Core.Tests.Runtime;
 
@@ -98,5 +100,26 @@ nested instructions
         Assert.DoesNotContain("You are Aexon", prompt);
         Assert.DoesNotContain("memory block", prompt);
         Assert.DoesNotContain("search prompt", prompt);
+    }
+
+    [Fact]
+    public async Task BuildSystemPromptAsync_IncludesCurrentTodoListFromTodoWriteTool()
+    {
+        using var temp = new TempDirectory();
+        var provider = new ContextProvider
+        {
+            WorkingDirectory = temp.Root,
+        };
+        var runtime = new InMemoryTodoRuntime();
+        runtime.CreateTodo("issue-4", "Implement TodoWrite", TodoStatus.InProgress, "Wire runtime");
+
+        var prompt = await provider.BuildSystemPromptAsync(
+            [new TodoWriteTool(runtime)],
+            new QueryEngineConfig());
+
+        Assert.Contains("# TodoWrite Tool", prompt);
+        Assert.Contains("Current todo list:", prompt);
+        Assert.Contains("issue-4 [in_progress] Implement TodoWrite", prompt);
+        Assert.Contains("Wire runtime", prompt);
     }
 }
