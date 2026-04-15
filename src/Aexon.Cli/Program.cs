@@ -32,6 +32,12 @@ internal static class Program
         Console.OutputEncoding = Encoding.UTF8;
 
         var options = CliOptions.Parse(args);
+        if (!string.IsNullOrWhiteSpace(options.ParseError))
+        {
+            Console.Error.WriteLine(options.ParseError);
+            return 1;
+        }
+
         if (options.ShowHelp)
         {
             PrintHelp();
@@ -97,10 +103,19 @@ internal static class Program
         if (resumed?.Metadata.Mode is PermissionMode resumedMode)
             contextProvider.PermissionContext.Mode = resumedMode;
         await contextProvider.LoadMemoryAsync();
+        var rawAnthropicSettings = AnthropicClientSettingsLoader.Load(
+            workingDirectory,
+            appBaseDirectory: AppContext.BaseDirectory);
 
+        var configuredAnthropicModel =
+            resumed == null &&
+            string.IsNullOrWhiteSpace(options.Model) &&
+            !string.IsNullOrWhiteSpace(rawAnthropicSettings.Model)
+                ? rawAnthropicSettings.Model
+                : null;
         var sessionTarget = AiProviderSelection.ResolveSessionTarget(
             options.Provider,
-            options.Model,
+            options.Model ?? configuredAnthropicModel,
             resumed?.SourceSession.Provider,
             resumed?.Model);
         var aiProvider = sessionTarget.Provider;
@@ -110,10 +125,13 @@ internal static class Program
             Provider = aiProvider,
             Model = model,
             UseStreamingApi = true,
+            MaxTurns = options.MaxTurns ?? 50,
         };
-        var rawAnthropicSettings = AnthropicClientSettingsLoader.Load(
-            workingDirectory,
-            appBaseDirectory: AppContext.BaseDirectory);
+        if (aiProvider == AiProvider.Anthropic &&
+            rawAnthropicSettings.MaxTokens is { } configuredMaxTokens)
+        {
+            config.MaxTokens = configuredMaxTokens;
+        }
         var providerRouter = new DefaultProviderCapabilityRouter();
         var managedSettings = ManagedSettingsLoader.Load(
             workingDirectory,
@@ -328,7 +346,28 @@ internal static class Program
             startupNote,
             PublishAppStateAsync);
 
-        var exitCode = await shell.RunAsync(options.InitialPrompt);
+        NonInteractiveRunOptions? nonInteractiveOptions = null;
+        if (options.PrintMode)
+        {
+            var stdinContent = Console.IsInputRedirected
+                ? await Console.In.ReadToEndAsync()
+                : null;
+            var prompt = NonInteractivePromptBuilder.Compose(options.InitialPrompt, stdinContent);
+            if (string.IsNullOrWhiteSpace(prompt))
+            {
+                Console.Error.WriteLine("--print 需要命令行 prompt 或 stdin 输入。");
+                return 1;
+            }
+
+            nonInteractiveOptions = new NonInteractiveRunOptions(
+                prompt,
+                options.OutputFormat,
+                options.ApprovalMode);
+        }
+
+        var exitCode = nonInteractiveOptions != null
+            ? await shell.RunNonInteractiveAsync(nonInteractiveOptions)
+            : await shell.RunAsync(options.InitialPrompt);
         await PublishAppStateAsync();
         return exitCode;
     }
@@ -507,6 +546,7 @@ internal static class Program
         Console.WriteLine("""
 Usage:
   aexon [--cwd <path>] [--model <model>] [--provider <name>] [--resume <session>] [--continue] [--fork-session] [--settings <path>] [prompt]
+  aexon --print [-p] [--output-format <text|markdown|json>] [--approval-mode <allow|deny>] [--max-turns <n>] [prompt]
 
 Options:
   --cwd <path>       Working directory for this session
@@ -517,6 +557,10 @@ Options:
   --fork-session     Fork the resumed transcript into a brand new session
   --settings <path>  Load hooks and MCP servers from a specific settings.json file
   --mcp-config       Alias for --settings
+  --print, -p        Run a single non-interactive prompt and exit
+  --output-format    Non-interactive output format: text, markdown, or json
+  --approval-mode    Non-interactive permission policy: allow or deny (default)
+  --max-turns <n>    Maximum assistant/tool turns for this run
   --help             Show this help
 
 Environment:
@@ -633,6 +677,32 @@ Environment:
             return 0;
         }
 
+        public async Task<int> RunNonInteractiveAsync(NonInteractiveRunOptions options)
+        {
+            var result = await ExecuteNonInteractiveQueryAsync(options);
+
+            switch (options.OutputFormat)
+            {
+                case NonInteractiveOutputFormat.Json:
+                    Console.WriteLine(result.ToJson());
+                    break;
+                case NonInteractiveOutputFormat.Markdown:
+                case NonInteractiveOutputFormat.Text:
+                    if (!string.IsNullOrEmpty(result.Output))
+                    {
+                        Console.Write(result.Output);
+                        if (!result.Output.EndsWith(Environment.NewLine, StringComparison.Ordinal))
+                            Console.WriteLine();
+                    }
+
+                    if (!result.Success && !string.IsNullOrWhiteSpace(result.ErrorMessage))
+                        Console.Error.WriteLine(result.ErrorMessage);
+                    break;
+            }
+
+            return result.ExitCode;
+        }
+
         private async Task HandleInputAsync(string input, CommandContext commandContext)
         {
             try
@@ -746,6 +816,67 @@ Environment:
             }
         }
 
+        private async Task<NonInteractiveRunResult> ExecuteNonInteractiveQueryAsync(
+            NonInteractiveRunOptions options)
+        {
+            var assistantText = new StringBuilder();
+            var permissionDenied = false;
+            QueryCompleteEvent? completion = null;
+
+            await foreach (var evt in _queryEngine.SubmitMessageAsync(options.Prompt))
+            {
+                switch (evt)
+                {
+                    case TextDeltaEvent text:
+                        assistantText.Append(text.Text);
+                        break;
+
+                    case PermissionRequestEvent permissionRequest:
+                        var approved = options.ApprovalMode == NonInteractiveApprovalMode.Allow;
+                        if (!approved)
+                            permissionDenied = true;
+
+                        permissionRequest.SetResponse(approved);
+                        break;
+
+                    case ToolResultEvent toolResult when
+                        toolResult.IsError &&
+                        LooksLikePermissionError(toolResult.Result):
+                        permissionDenied = true;
+                        break;
+
+                    case QueryCompleteEvent complete:
+                        completion = complete;
+                        break;
+                }
+            }
+
+            completion ??= new QueryCompleteEvent
+            {
+                Success = !permissionDenied,
+                Duration = TimeSpan.Zero,
+                TurnCount = 0,
+                TotalUsage = _queryEngine.TotalUsage,
+                ErrorMessage = permissionDenied
+                    ? "Permission denied."
+                    : "Query ended without a completion event.",
+            };
+
+            var success = completion.Success && !permissionDenied;
+            var errorMessage = permissionDenied
+                ? completion.ErrorMessage ?? "Permission denied."
+                : completion.ErrorMessage;
+
+            return new NonInteractiveRunResult(
+                success,
+                assistantText.ToString(),
+                errorMessage,
+                permissionDenied,
+                completion.TurnCount,
+                completion.Duration,
+                completion.TotalUsage);
+        }
+
         private bool AskForPermission(PermissionRequestEvent request)
         {
             if (Console.IsInputRedirected)
@@ -761,6 +892,11 @@ Environment:
             var raw = input.GetRawText();
             return raw.Length <= 120 ? raw : $"{raw[..117]}...";
         }
+
+        private static bool LooksLikePermissionError(string result) =>
+            result.Contains("permission denied", StringComparison.OrdinalIgnoreCase) ||
+            result.Contains("denied by rule", StringComparison.OrdinalIgnoreCase) ||
+            result.Contains("requires confirmation", StringComparison.OrdinalIgnoreCase);
 
         private void PrintBanner()
         {
@@ -778,92 +914,6 @@ Environment:
                 Console.WriteLine(
                     "未检测到当前 provider 的可用连接配置。你仍然可以使用本地斜杠命令，但发起 AI 请求会失败。");
             }
-        }
-    }
-
-    private sealed record CliOptions(
-        bool ShowHelp,
-        bool ContinueLatest,
-        bool ForkSession,
-        string? WorkingDirectory,
-        string? Model,
-        string? Provider,
-        string? ResumeTarget,
-        string? SettingsPath,
-        string? InitialPrompt)
-    {
-        public static CliOptions Parse(string[] args)
-        {
-            var showHelp = false;
-            var continueLatest = false;
-            var forkSession = false;
-            string? workingDirectory = null;
-            string? model = null;
-            string? provider = null;
-            string? resumeTarget = null;
-            string? settingsPath = null;
-            var remaining = new List<string>();
-
-            for (var i = 0; i < args.Length; i++)
-            {
-                switch (args[i])
-                {
-                    case "--help":
-                    case "-h":
-                        showHelp = true;
-                        break;
-
-                    case "--cwd":
-                        if (i + 1 < args.Length)
-                            workingDirectory = args[++i];
-                        break;
-
-                    case "--resume":
-                        if (i + 1 < args.Length)
-                            resumeTarget = args[++i];
-                        break;
-
-                    case "--continue":
-                        continueLatest = true;
-                        break;
-
-                    case "--fork-session":
-                        forkSession = true;
-                        break;
-
-                    case "--model":
-                    case "-m":
-                        if (i + 1 < args.Length)
-                            model = args[++i];
-                        break;
-
-                    case "--provider":
-                        if (i + 1 < args.Length)
-                            provider = args[++i];
-                        break;
-
-                    case "--settings":
-                    case "--mcp-config":
-                        if (i + 1 < args.Length)
-                            settingsPath = args[++i];
-                        break;
-
-                    default:
-                        remaining.Add(args[i]);
-                        break;
-                }
-            }
-
-            return new CliOptions(
-                showHelp,
-                continueLatest,
-                forkSession,
-                workingDirectory,
-                model,
-                provider,
-                resumeTarget,
-                settingsPath,
-                remaining.Count > 0 ? string.Join(' ', remaining) : null);
         }
     }
 }
