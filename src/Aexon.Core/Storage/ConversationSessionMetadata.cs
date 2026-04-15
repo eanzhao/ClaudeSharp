@@ -1,3 +1,4 @@
+using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
 
 namespace Aexon.Core.Storage;
@@ -13,6 +14,8 @@ public sealed class ConversationSessionMetadata
 
     public PermissionMode? Mode { get; set; }
 
+    public Dictionary<string, Attachment> Attachments { get; } = new(StringComparer.Ordinal);
+
     public ConversationSessionMetadata Clone()
     {
         var clone = new ConversationSessionMetadata
@@ -23,6 +26,9 @@ public sealed class ConversationSessionMetadata
 
         foreach (var tag in Tags)
             clone.Tags.Add(tag);
+
+        foreach (var (id, attachment) in Attachments)
+            clone.Attachments[id] = attachment;
 
         return clone;
     }

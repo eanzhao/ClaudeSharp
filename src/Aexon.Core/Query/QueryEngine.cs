@@ -54,6 +54,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
     private readonly SessionMemoryFile? _sessionMemoryFile;
     private readonly AskUserQuestionHandler? _askUserQuestion;
     private readonly ConversationSessionMetadata _sessionMetadata;
+    private readonly AttachmentRegistry _attachmentRegistry = new();
     private readonly List<ConversationMessage> _messages;
     private TokenUsage _totalUsage;
     private int _consecutiveAutoCompactFailures;
@@ -104,6 +105,8 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
             _contextProvider.PermissionContext.Mode = sessionMode;
         _messages = initialMessages?.ToList() ?? [];
         _totalUsage = initialUsage ?? ComputeTotalUsage(_messages);
+        foreach (var attachment in _sessionMetadata.Attachments.Values)
+            _attachmentRegistry.Register(attachment);
         _planModeResumeMode = ResolveInitialPlanModeResumeMode();
     }
 
@@ -742,6 +745,58 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
                 metadata => metadata.Tags.Clear(),
                 ct);
         }
+    }
+
+    public IAttachmentRegistry Attachments => _attachmentRegistry;
+
+    public async Task<Attachment> RegisterAttachmentAsync(
+        string fileName,
+        string mimeType,
+        long sizeBytes,
+        AttachmentSource source,
+        string? sourcePath = null,
+        CancellationToken ct = default)
+    {
+        var attachment = _attachmentRegistry.Register(fileName, mimeType, sizeBytes, source, sourcePath);
+        _sessionMetadata.Attachments[attachment.Id] = attachment;
+        if (_journal != null)
+        {
+            var snapshot = _sessionMetadata.Attachments.ToDictionary(kv => kv.Key, kv => kv.Value);
+            await _journal.UpdateMetadataAsync(
+                metadata =>
+                {
+                    metadata.Attachments.Clear();
+                    foreach (var (id, a) in snapshot)
+                        metadata.Attachments[id] = a;
+                },
+                ct);
+        }
+
+        return attachment;
+    }
+
+    public async Task<bool> RemoveAttachmentAsync(
+        string attachmentId,
+        CancellationToken ct = default)
+    {
+        if (!_attachmentRegistry.Remove(attachmentId))
+            return false;
+
+        _sessionMetadata.Attachments.Remove(attachmentId);
+        if (_journal != null)
+        {
+            var snapshot = _sessionMetadata.Attachments.ToDictionary(kv => kv.Key, kv => kv.Value);
+            await _journal.UpdateMetadataAsync(
+                metadata =>
+                {
+                    metadata.Attachments.Clear();
+                    foreach (var (id, a) in snapshot)
+                        metadata.Attachments[id] = a;
+                },
+                ct);
+        }
+
+        return true;
     }
 
     public async Task SetPermissionModeAsync(
