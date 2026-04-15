@@ -1,4 +1,5 @@
 using Aexon.Core.Messages;
+using Aexon.Core.Query;
 using Aexon.Core.Storage;
 
 namespace Aexon.Core.Tests.Storage;
@@ -187,6 +188,41 @@ public sealed class AttachmentPipelineTests
         var reloaded2 = await store.FindSessionAsync(session.SessionDirectory);
         var projection2 = await store.LoadProjectionAsync(reloaded2!, new TranscriptLoadOptions());
         Assert.Empty(projection2.Session.Metadata.Attachments);
+    }
+
+    [Fact]
+    public void AttachmentRegisteredEvent_CarriesMetadata()
+    {
+        var evt = new AttachmentRegisteredEvent
+        {
+            AttachmentId = "e-001",
+            FileName = "data.json",
+            MimeType = "application/json",
+            SizeBytes = 256,
+            Source = AttachmentSource.Tool,
+        };
+
+        Assert.Equal("e-001", evt.AttachmentId);
+        Assert.Equal("data.json", evt.FileName);
+        Assert.Equal("application/json", evt.MimeType);
+        Assert.Equal(256, evt.SizeBytes);
+        Assert.Equal(AttachmentSource.Tool, evt.Source);
+        Assert.IsAssignableFrom<QueryEvent>(evt);
+    }
+
+    [Fact]
+    public void AttachmentRemovedEvent_CarriesId()
+    {
+        var evt = new AttachmentRemovedEvent("e-002");
+        Assert.Equal("e-002", evt.AttachmentId);
+        Assert.IsAssignableFrom<QueryEvent>(evt);
+    }
+
+    [Fact]
+    public void Attachment_NewId_ReturnsUniqueValues()
+    {
+        var ids = Enumerable.Range(0, 10).Select(_ => Attachment.NewId()).ToHashSet();
+        Assert.Equal(10, ids.Count);
     }
 
     [Fact]
