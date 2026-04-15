@@ -8,6 +8,8 @@ namespace Aexon.Core.Configuration;
 public sealed record AnthropicClientSettings(
     string? ApiKey,
     string? BaseUrl,
+    string? Model,
+    int? MaxTokens,
     bool ApiKeyFromEnvironment,
     bool ApiKeyFromAppSettings,
     string? SourcePath,
@@ -32,6 +34,12 @@ public sealed record AnthropicClientSettings(
             if (!string.IsNullOrWhiteSpace(BaseUrl))
                 messages.Add($"Anthropic config: using base URL from {sourceName}.");
 
+            if (!string.IsNullOrWhiteSpace(Model))
+                messages.Add($"Anthropic config: using default model '{Model}' from {sourceName}.");
+
+            if (MaxTokens is { } maxTokens)
+                messages.Add($"Anthropic config: using max tokens {maxTokens} from {sourceName}.");
+
             return messages.Count == 0
                 ? null
                 : string.Join(Environment.NewLine, messages);
@@ -55,10 +63,13 @@ public static class AnthropicClientSettingsLoader
         getEnvironmentVariable ??= Environment.GetEnvironmentVariable;
         string? appSettingsApiKey = null;
         string? baseUrl = null;
+        string? model = null;
+        int? maxTokens = null;
         string? sourcePath = null;
         var diagnostics = new List<string>();
+        var candidatePaths = GetCandidatePaths(workingDirectory, appBaseDirectory);
 
-        foreach (var appSettingsPath in GetCandidatePaths(workingDirectory, appBaseDirectory))
+        foreach (var appSettingsPath in candidatePaths)
         {
             if (!File.Exists(appSettingsPath))
                 continue;
@@ -72,8 +83,10 @@ public static class AnthropicClientSettingsLoader
                 if (!section.HasValue)
                     continue;
 
-                appSettingsApiKey = TryReadString(section.Value, "apiKey", diagnostics, "Anthropic.apiKey");
+                appSettingsApiKey = TryReadApiKey(section.Value, diagnostics);
                 baseUrl = TryReadBaseUrl(section.Value, diagnostics);
+                model = TryReadString(section.Value, "model", diagnostics, "Anthropic.model");
+                maxTokens = TryReadPositiveInt(section.Value, "maxTokens", diagnostics, "Anthropic.maxTokens");
                 break;
             }
             catch (JsonException ex)
@@ -90,9 +103,21 @@ public static class AnthropicClientSettingsLoader
         if (string.IsNullOrWhiteSpace(environmentApiKey))
             environmentApiKey = null;
 
+        if (environmentApiKey == null &&
+            string.IsNullOrWhiteSpace(appSettingsApiKey) &&
+            !candidatePaths
+                .Where(path => Path.GetFileName(path).Equals("appsettings.secrets.json", StringComparison.OrdinalIgnoreCase))
+                .Any(File.Exists))
+        {
+            diagnostics.Add(
+                "Anthropic config: no API key found. Create appsettings.secrets.json or set ANTHROPIC_API_KEY.");
+        }
+
         return new AnthropicClientSettings(
             ApiKey: environmentApiKey ?? appSettingsApiKey,
             BaseUrl: baseUrl,
+            Model: model,
+            MaxTokens: maxTokens,
             ApiKeyFromEnvironment: environmentApiKey != null,
             ApiKeyFromAppSettings: environmentApiKey == null && !string.IsNullOrWhiteSpace(appSettingsApiKey),
             SourcePath: sourcePath,
@@ -176,6 +201,42 @@ public static class AnthropicClientSettingsLoader
 
         diagnostics.Add("Anthropic config: Anthropic.baseUrl must be an absolute URL.");
         return null;
+    }
+
+    private static string? TryReadApiKey(
+        JsonElement section,
+        List<string> diagnostics)
+    {
+        var value = TryReadString(section, "apiKey", diagnostics, "Anthropic.apiKey");
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (string.Equals(value, "YOUR_ANTHROPIC_API_KEY", StringComparison.OrdinalIgnoreCase))
+        {
+            diagnostics.Add(
+                "Anthropic config: placeholder API key detected. Set ANTHROPIC_API_KEY or use appsettings.secrets.json.");
+            return null;
+        }
+
+        return value;
+    }
+
+    private static int? TryReadPositiveInt(
+        JsonElement section,
+        string propertyName,
+        List<string> diagnostics,
+        string label)
+    {
+        if (!TryGetPropertyCaseInsensitive(section, propertyName, out var property))
+            return null;
+
+        if (property.ValueKind != JsonValueKind.Number || !property.TryGetInt32(out var value) || value <= 0)
+        {
+            diagnostics.Add($"Anthropic config: {label} must be a positive integer.");
+            return null;
+        }
+
+        return value;
     }
 
     private static string? TryReadString(

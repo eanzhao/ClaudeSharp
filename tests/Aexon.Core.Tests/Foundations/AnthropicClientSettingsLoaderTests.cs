@@ -16,7 +16,9 @@ public sealed class AnthropicClientSettingsLoaderTests
 {
   "Anthropic": {
     "apiKey": "config-key",
-    "baseUrl": "https://example.anthropic.local"
+    "baseUrl": "https://example.anthropic.local",
+    "model": "claude-sonnet-4-20250514",
+    "maxTokens": 4096
   }
 }
 """);
@@ -27,11 +29,15 @@ public sealed class AnthropicClientSettingsLoaderTests
 
         Assert.Equal("config-key", settings.ApiKey);
         Assert.Equal("https://example.anthropic.local", settings.BaseUrl);
+        Assert.Equal("claude-sonnet-4-20250514", settings.Model);
+        Assert.Equal(4096, settings.MaxTokens);
         Assert.True(settings.ApiKeyFromAppSettings);
         Assert.False(settings.ApiKeyFromEnvironment);
         Assert.NotNull(settings.SourcePath);
         Assert.Contains("API key from appsettings.json", settings.StartupSummary, StringComparison.Ordinal);
         Assert.Contains("base URL from appsettings.json", settings.StartupSummary, StringComparison.Ordinal);
+        Assert.Contains("default model 'claude-sonnet-4-20250514'", settings.StartupSummary, StringComparison.Ordinal);
+        Assert.Contains("max tokens 4096", settings.StartupSummary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -190,5 +196,42 @@ public sealed class AnthropicClientSettingsLoaderTests
         Assert.Contains(
             settings.Diagnostics,
             diagnostic => diagnostic.Contains("must be an absolute URL", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Load_TreatsPlaceholderApiKeyAsMissingAndReportsDiagnostic()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("appsettings.json", """
+{
+  "Anthropic": {
+    "apiKey": "YOUR_ANTHROPIC_API_KEY"
+  }
+}
+""");
+
+        var settings = AnthropicClientSettingsLoader.Load(
+            temp.Root,
+            _ => null);
+
+        Assert.Null(settings.ApiKey);
+        Assert.False(settings.HasApiKey);
+        Assert.Contains(
+            settings.Diagnostics,
+            diagnostic => diagnostic.Contains("placeholder API key detected", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Load_ReportsMissingSecretsGuidanceWhenNoCredentialExists()
+    {
+        using var temp = new TempDirectory();
+
+        var settings = AnthropicClientSettingsLoader.Load(
+            temp.Root,
+            _ => null);
+
+        Assert.Contains(
+            settings.Diagnostics,
+            diagnostic => diagnostic.Contains("Create appsettings.secrets.json or set ANTHROPIC_API_KEY", StringComparison.Ordinal));
     }
 }

@@ -23,6 +23,8 @@ public sealed class ManagedRuntimePolicyTests
         var anthropicSettings = new AnthropicClientSettings(
             ApiKey: "secret",
             BaseUrl: null,
+            Model: null,
+            MaxTokens: null,
             ApiKeyFromEnvironment: true,
             ApiKeyFromAppSettings: false,
             SourcePath: null,
@@ -70,6 +72,8 @@ public sealed class ManagedRuntimePolicyTests
         var anthropicSettings = new AnthropicClientSettings(
             ApiKey: null,
             BaseUrl: null,
+            Model: null,
+            MaxTokens: null,
             ApiKeyFromEnvironment: false,
             ApiKeyFromAppSettings: false,
             SourcePath: null,
@@ -105,6 +109,8 @@ public sealed class ManagedRuntimePolicyTests
         var anthropicSettings = new AnthropicClientSettings(
             ApiKey: "secret",
             BaseUrl: null,
+            Model: null,
+            MaxTokens: null,
             ApiKeyFromEnvironment: true,
             ApiKeyFromAppSettings: false,
             SourcePath: null,

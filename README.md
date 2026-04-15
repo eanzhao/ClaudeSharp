@@ -78,6 +78,8 @@ Both of the following JSON shapes are supported:
 {
   "Anthropic": {
     "apiKey": "YOUR_ANTHROPIC_API_KEY",
+    "model": "claude-sonnet-4-20250514",
+    "maxTokens": 16384,
     "baseUrl": "https://api.anthropic.com"
   }
 }
@@ -99,11 +101,15 @@ Ollama settings are read from:
   "Aexon": {
     "Anthropic": {
       "apiKey": "YOUR_ANTHROPIC_API_KEY",
+      "model": "claude-sonnet-4-20250514",
+      "maxTokens": 16384,
       "baseUrl": "https://api.anthropic.com"
     }
   }
 }
 ```
+
+If `apiKey` is still the placeholder value, Aexon treats it as missing and will prompt you to either set `ANTHROPIC_API_KEY` or create `appsettings.secrets.json`.
 
 ## Getting Started
 
@@ -118,6 +124,9 @@ dotnet run --project src/Aexon.Cli
 
 # Non-interactive prompt
 dotnet run --project src/Aexon.Cli -- "explain this codebase"
+
+# Print mode for scripts
+dotnet run --project src/Aexon.Cli -- --print --output-format json "explain this codebase"
 ```
 
 Run from an installed tool:
@@ -128,6 +137,12 @@ aexon
 
 # Prompt mode
 aexon "explain this codebase"
+
+# Single-shot print mode with JSON output
+aexon --print --output-format json "summarize this repo"
+
+# Review piped content non-interactively
+cat file.py | aexon --print --approval-mode deny "review this code"
 
 # Override working directory and model
 aexon --cwd /path/to/project --model opus "summarize this repo"
@@ -204,6 +219,10 @@ src/
 | `--fork-session` | Fork the resumed transcript into a brand new session |
 | `--settings <path>` | Load hooks and MCP servers from a specific `settings.json` |
 | `--mcp-config` | Alias for `--settings` |
+| `--print`, `-p` | Run a single non-interactive prompt and exit |
+| `--output-format <text\|markdown\|json>` | Format for `--print` output |
+| `--approval-mode <allow\|deny>` | Non-interactive permission policy for `--print` |
+| `--max-turns <n>` | Maximum assistant/tool turns for the run |
 | `--help` | Show help |
 | `<prompt>` | Initial prompt; omit for interactive mode |
 
