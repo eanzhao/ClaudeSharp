@@ -38,10 +38,13 @@ public sealed record AgentPruneResult(
 /// </summary>
 public interface IAgentTaskRuntime
 {
+    string AllocateSubagentId();
+
     AgentWorkItem CreateWorkItem(
         string title,
         string? description = null,
-        string? owner = null);
+        string? owner = null,
+        string? subagentId = null);
 
     AgentWorkItem? GetWorkItem(string id);
 
@@ -53,7 +56,8 @@ public interface IAgentTaskRuntime
         string name,
         string? owner = null,
         string? workItemId = null,
-        AgentBackgroundRunStatus initialStatus = AgentBackgroundRunStatus.Running);
+        AgentBackgroundRunStatus initialStatus = AgentBackgroundRunStatus.Running,
+        string? subagentId = null);
 
     AgentBackgroundRun? GetBackgroundRun(string id);
 
@@ -69,11 +73,23 @@ public interface IAgentTaskRuntime
         string id,
         string? reason = null);
 
+    AgentBackgroundRunCancellationResult RequestBackgroundRunCancellation(
+        string id,
+        AgentTerminationInfo termination);
+
     bool StopBackgroundRun(string id, string? reason = null);
+
+    bool StopBackgroundRun(string id, AgentTerminationInfo termination);
 
     bool FailBackgroundRun(string id, string? reason = null);
 
+    bool FailBackgroundRun(string id, AgentTerminationInfo termination);
+
     bool CancelBackgroundRun(string id, string? reason = null);
+
+    bool CancelBackgroundRun(string id, AgentTerminationInfo termination);
+
+    AgentTerminationEvent? GetLastTerminationEvent(string backgroundRunId);
 
     AgentPruneResult PruneHistory(AgentRetentionPolicy? policy = null);
 }
@@ -90,8 +106,11 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, Action> _backgroundRunCancellers =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, AgentTerminationEvent> _terminationEvents =
+        new(StringComparer.OrdinalIgnoreCase);
     private int _workItemSequence;
     private int _backgroundRunSequence;
+    private int _subagentSequence;
 
     public InMemoryAgentTaskRuntime(
         IEnumerable<AgentWorkItem>? workItems = null,
@@ -103,6 +122,7 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
             {
                 _workItems[item.Id] = item.Clone();
                 _workItemSequence = Math.Max(_workItemSequence, ParseSequence(item.Id, "work-item-"));
+                _subagentSequence = Math.Max(_subagentSequence, ParseSequence(item.SubagentId, "subagent-"));
             }
         }
 
@@ -112,18 +132,24 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
             {
                 _backgroundRuns[run.Id] = run.Clone();
                 _backgroundRunSequence = Math.Max(_backgroundRunSequence, ParseSequence(run.Id, "background-run-"));
+                _subagentSequence = Math.Max(_subagentSequence, ParseSequence(run.SubagentId, "subagent-"));
             }
         }
     }
 
+    public string AllocateSubagentId() =>
+        $"subagent-{Interlocked.Increment(ref _subagentSequence)}";
+
     public AgentWorkItem CreateWorkItem(
         string title,
         string? description = null,
-        string? owner = null)
+        string? owner = null,
+        string? subagentId = null)
     {
         var item = new AgentWorkItem
         {
             Id = $"work-item-{Interlocked.Increment(ref _workItemSequence)}",
+            SubagentId = string.IsNullOrWhiteSpace(subagentId) ? null : subagentId.Trim(),
             Title = title.Trim(),
             Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
             Owner = string.IsNullOrWhiteSpace(owner) ? null : owner.Trim(),
@@ -163,11 +189,13 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
         string name,
         string? owner = null,
         string? workItemId = null,
-        AgentBackgroundRunStatus initialStatus = AgentBackgroundRunStatus.Running)
+        AgentBackgroundRunStatus initialStatus = AgentBackgroundRunStatus.Running,
+        string? subagentId = null)
     {
         var run = new AgentBackgroundRun
         {
             Id = $"background-run-{Interlocked.Increment(ref _backgroundRunSequence)}",
+            SubagentId = string.IsNullOrWhiteSpace(subagentId) ? null : subagentId.Trim(),
             Name = name.Trim(),
             Owner = string.IsNullOrWhiteSpace(owner) ? null : owner.Trim(),
             WorkItemId = string.IsNullOrWhiteSpace(workItemId) ? null : workItemId.Trim(),
@@ -230,7 +258,12 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
 
     public AgentBackgroundRunCancellationResult RequestBackgroundRunCancellation(
         string id,
-        string? reason = null)
+        string? reason = null) =>
+        RequestBackgroundRunCancellation(id, AgentTerminationInfo.Cancelled(reason));
+
+    public AgentBackgroundRunCancellationResult RequestBackgroundRunCancellation(
+        string id,
+        AgentTerminationInfo termination)
     {
         Action? cancel = null;
 
@@ -252,7 +285,7 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
             if (!_backgroundRunCancellers.TryGetValue(id, out cancel))
                 return AgentBackgroundRunCancellationResult.Unsupported;
 
-            run.RequestCancellation(reason);
+            run.RequestCancellation(termination);
         }
 
         try
@@ -267,43 +300,61 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
         return AgentBackgroundRunCancellationResult.Requested;
     }
 
-    public bool StopBackgroundRun(string id, string? reason = null)
+    public bool StopBackgroundRun(string id, string? reason = null) =>
+        StopBackgroundRun(id, AgentTerminationInfo.Completed(reason));
+
+    public bool StopBackgroundRun(string id, AgentTerminationInfo termination)
     {
         lock (_gate)
         {
             if (!_backgroundRuns.TryGetValue(id, out var run))
                 return false;
 
-            run.Stop(reason);
+            run.Stop(termination);
             _backgroundRunCancellers.Remove(id);
+            _terminationEvents[id] = AgentTerminationEvent.FromRun(run, termination);
             return true;
         }
     }
 
-    public bool FailBackgroundRun(string id, string? reason = null)
+    public bool FailBackgroundRun(string id, string? reason = null) =>
+        FailBackgroundRun(id, AgentTerminationInfo.Failed(reason));
+
+    public bool FailBackgroundRun(string id, AgentTerminationInfo termination)
     {
         lock (_gate)
         {
             if (!_backgroundRuns.TryGetValue(id, out var run))
                 return false;
 
-            run.Fail(reason);
+            run.Fail(termination);
             _backgroundRunCancellers.Remove(id);
+            _terminationEvents[id] = AgentTerminationEvent.FromRun(run, termination);
             return true;
         }
     }
 
-    public bool CancelBackgroundRun(string id, string? reason = null)
+    public bool CancelBackgroundRun(string id, string? reason = null) =>
+        CancelBackgroundRun(id, AgentTerminationInfo.Cancelled(reason));
+
+    public bool CancelBackgroundRun(string id, AgentTerminationInfo termination)
     {
         lock (_gate)
         {
             if (!_backgroundRuns.TryGetValue(id, out var run))
                 return false;
 
-            run.Cancel(reason);
+            run.Cancel(termination);
             _backgroundRunCancellers.Remove(id);
+            _terminationEvents[id] = AgentTerminationEvent.FromRun(run, termination);
             return true;
         }
+    }
+
+    public AgentTerminationEvent? GetLastTerminationEvent(string backgroundRunId)
+    {
+        lock (_gate)
+            return _terminationEvents.TryGetValue(backgroundRunId, out var evt) ? evt : null;
     }
 
     public AgentPruneResult PruneHistory(AgentRetentionPolicy? policy = null)
@@ -351,6 +402,7 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
         {
             _backgroundRuns.Remove(id);
             _backgroundRunCancellers.Remove(id);
+            _terminationEvents.Remove(id);
         }
 
         return removedIds;
@@ -379,9 +431,10 @@ public sealed class InMemoryAgentTaskRuntime : IAgentTaskRuntime
         return removedIds;
     }
 
-    private static int ParseSequence(string id, string prefix)
+    private static int ParseSequence(string? id, string prefix)
     {
-        if (!id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(id) ||
+            !id.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
             return 0;
 
         return int.TryParse(id[prefix.Length..], out var parsed)
