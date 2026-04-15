@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using Aexon.Core.Compaction;
 using Aexon.Core.Hooks;
@@ -10,11 +11,16 @@ using Aexon.Core.Tools;
 using Microsoft.Extensions.AI;
 using ApiCacheControlEphemeral = Anthropic.Models.Messages.CacheControlEphemeral;
 using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
+using ApiInputJsonDelta = Anthropic.Models.Messages.InputJsonDelta;
 using ApiInputSchema = Anthropic.Models.Messages.InputSchema;
 using ApiMessageCreateParams = Anthropic.Models.Messages.MessageCreateParams;
 using ApiMessageCreateParamsSystem = Anthropic.Models.Messages.MessageCreateParamsSystem;
 using ApiMessageParam = Anthropic.Models.Messages.MessageParam;
 using ApiMessageParamContent = Anthropic.Models.Messages.MessageParamContent;
+using ApiRawContentBlockDeltaEvent = Anthropic.Models.Messages.RawContentBlockDeltaEvent;
+using ApiRawContentBlockStartEvent = Anthropic.Models.Messages.RawContentBlockStartEvent;
+using ApiRawContentBlockStopEvent = Anthropic.Models.Messages.RawContentBlockStopEvent;
+using ApiRawMessageStreamEvent = Anthropic.Models.Messages.RawMessageStreamEvent;
 using ApiRole = Anthropic.Models.Messages.Role;
 using ApiTextBlockParam = Anthropic.Models.Messages.TextBlockParam;
 using ApiThinkingBlockParam = Anthropic.Models.Messages.ThinkingBlockParam;
@@ -22,6 +28,7 @@ using ApiTool = Anthropic.Models.Messages.Tool;
 using ApiToolChoiceAuto = Anthropic.Models.Messages.ToolChoiceAuto;
 using ApiToolResultBlockParam = Anthropic.Models.Messages.ToolResultBlockParam;
 using ApiToolUnion = Anthropic.Models.Messages.ToolUnion;
+using ApiToolUseBlock = Anthropic.Models.Messages.ToolUseBlock;
 using ApiToolUseBlockParam = Anthropic.Models.Messages.ToolUseBlockParam;
 
 namespace Aexon.Core.Query;
@@ -372,6 +379,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
         IsNonInteractiveSession = _askUserQuestion == null,
         AskUserQuestionAsync = _askUserQuestion,
         MainLoopModel = _config.Model,
+        MainLoopProvider = _config.Provider,
     };
 
     private async Task<string> BuildSystemPromptAsync()
@@ -546,6 +554,20 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
 
         return new ApiMessageCreateParamsSystem(new[] { textBlock }, null);
     }
+
+    private static string? ToStopReason(ChatFinishReason? finishReason) =>
+        NormalizeStopReason(finishReason?.Value);
+
+    private static string? NormalizeStopReason(string? stopReason) =>
+        stopReason switch
+        {
+            null => null,
+            "tool_calls" => "tool_use",
+            "stop" => "end_turn",
+            "length" => "max_tokens",
+            "content_filter" => "refusal",
+            var value => value,
+        };
 
     private static List<ApiToolUnion> ConvertToolDefinitions(
         IReadOnlyList<JsonElement> defs)
@@ -1183,7 +1205,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
         !IsPlanModeActive || PlanModeToolPolicy.IsAllowedInPlanMode(tool.Name);
 
     private async Task CollectAssistantTurnAsync(
-        List<ChatMessage> messages,
+        IReadOnlyList<ChatMessage> messages,
         ChatOptions options,
         AssistantTurnAccumulator turn,
         CancellationToken ct)
@@ -1191,6 +1213,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
         var response = await _chatClient.GetResponseAsync(messages, options, ct);
         UpdateQuotaStatus(ExtractQuotaStatus(response.AdditionalProperties));
         ChatMessageConverter.PopulateAssistantTurn(response, turn);
+        turn.StopReason = NormalizeStopReason(turn.StopReason);
     }
 
     private static IReadOnlyList<QueryEvent> EmitBufferedAssistantTurnEvents(
@@ -1220,26 +1243,70 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
     }
 
     private async IAsyncEnumerable<QueryEvent> StreamAssistantTurnAsync(
-        List<ChatMessage> messages,
+        IReadOnlyList<ChatMessage> messages,
         ChatOptions options,
         AssistantTurnAccumulator turn,
         [EnumeratorCancellation] CancellationToken ct)
     {
+        var accumulator = new StreamingChatContentAccumulator(turn);
         var updates = new List<ChatResponseUpdate>();
+        var emittedMessageStart = false;
 
         await foreach (var update in _chatClient.GetStreamingResponseAsync(messages, options, ct))
         {
             updates.Add(update);
             UpdateQuotaStatus(ExtractQuotaStatus(update.AdditionalProperties));
 
-            if (updates.Count == 1 && update.ResponseId != null)
-                yield return new MessageStartEvent(update.ResponseId);
+            IList<AIContent> contents = update.Contents ?? [];
+            var fallbackEvents = accumulator.TrackRawUpdate(update.RawRepresentation, contents);
+            var messageId = !string.IsNullOrWhiteSpace(update.MessageId)
+                ? update.MessageId
+                : update.ResponseId;
 
-            foreach (var evt in ChatMessageConverter.ProcessStreamingUpdate(update, turn))
-                yield return evt;
+            if (!emittedMessageStart && !string.IsNullOrWhiteSpace(messageId))
+            {
+                turn.MessageId = messageId;
+                emittedMessageStart = true;
+                yield return new MessageStartEvent(messageId);
+            }
+            else if (!string.IsNullOrWhiteSpace(messageId))
+            {
+                turn.MessageId ??= messageId;
+            }
+
+            if (update.FinishReason is { } finishReason)
+                turn.StopReason = ToStopReason(finishReason);
+
+            foreach (var content in contents)
+            {
+                if (content is UsageContent usageContent)
+                {
+                    turn.Usage = ChatMessageConverter.ToTokenUsage(usageContent.Details);
+                    continue;
+                }
+
+                foreach (var queryEvent in accumulator.Apply(content))
+                    yield return queryEvent;
+            }
+
+            foreach (var fallbackEvent in fallbackEvents)
+                yield return fallbackEvent;
         }
 
-        ChatMessageConverter.FinalizeStreamingTurn(updates, turn);
+        foreach (var fallbackEvent in accumulator.FlushPendingToolUses())
+            yield return fallbackEvent;
+        accumulator.Flush();
+
+        if (updates.Count == 0)
+            yield break;
+
+        var response = updates.ToChatResponse();
+        turn.MessageId ??= response.Messages
+            .Select(message => message.MessageId)
+            .FirstOrDefault(messageId => !string.IsNullOrWhiteSpace(messageId))
+            ?? response.ResponseId;
+        turn.StopReason ??= NormalizeStopReason(response.FinishReason?.Value);
+        turn.Usage ??= ChatMessageConverter.ToTokenUsage(response.Usage);
     }
 
     private async Task EnsureSessionStartedAsync(CancellationToken ct)
@@ -1395,6 +1462,224 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
     private sealed record PendingApiMessage(ApiRole Role, List<ApiContentBlockParam> Content);
 
     private sealed record PromptCacheBlockCandidate(int Position, Action ApplyCacheControl);
+
+    private sealed class StreamingChatContentAccumulator
+    {
+        private readonly AssistantTurnAccumulator _turn;
+        private readonly Dictionary<long, PendingToolUse> _pendingToolUses = [];
+        private BufferedContentKind _bufferKind;
+        private StringBuilder? _textBuffer;
+        private StringBuilder? _thinkingBuffer;
+        private string? _thinkingSignature;
+
+        public StreamingChatContentAccumulator(AssistantTurnAccumulator turn)
+        {
+            _turn = turn;
+        }
+
+        public IReadOnlyList<QueryEvent> Apply(AIContent content)
+        {
+            switch (content)
+            {
+                case TextContent text:
+                    EnsureBuffer(BufferedContentKind.Text);
+                    if (!string.IsNullOrEmpty(text.Text))
+                        _textBuffer!.Append(text.Text);
+                    return string.IsNullOrEmpty(text.Text) ? [] : [new TextDeltaEvent(text.Text)];
+
+                case TextReasoningContent reasoning:
+                    EnsureBuffer(BufferedContentKind.Thinking);
+                    if (!string.IsNullOrEmpty(reasoning.Text))
+                        _thinkingBuffer!.Append(reasoning.Text);
+                    if (!string.IsNullOrWhiteSpace(reasoning.ProtectedData))
+                        _thinkingSignature = reasoning.ProtectedData;
+                    return string.IsNullOrEmpty(reasoning.Text) ? [] : [new ThinkingDeltaEvent(reasoning.Text)];
+
+                case FunctionCallContent functionCall:
+                    Flush();
+                    var toolUse = new ToolUseBlock
+                    {
+                        ToolUseId = functionCall.CallId ?? string.Empty,
+                        Name = functionCall.Name ?? string.Empty,
+                        Input = functionCall.Arguments != null
+                            ? JsonSerializer.SerializeToElement(functionCall.Arguments)
+                            : JsonSerializer.SerializeToElement(new { }),
+                    };
+
+                    MarkToolUseEmitted(toolUse.ToolUseId);
+                    return AddToolUse(toolUse);
+
+                default:
+                    return [];
+            }
+        }
+
+        public IReadOnlyList<QueryEvent> TrackRawUpdate(
+            object? rawRepresentation,
+            IList<AIContent> contents)
+        {
+            if (rawRepresentation is ApiRawMessageStreamEvent streamEvent)
+                rawRepresentation = streamEvent.Value;
+
+            switch (rawRepresentation)
+            {
+                case ApiRawContentBlockStartEvent start
+                    when start.ContentBlock.Value is ApiToolUseBlock toolUse:
+                    _pendingToolUses[start.Index] = new PendingToolUse(
+                        start.Index,
+                        toolUse.ID,
+                        toolUse.Name,
+                        toolUse.Input is { Count: > 0 }
+                            ? JsonSerializer.SerializeToElement(toolUse.Input)
+                            : JsonSerializer.SerializeToElement(new { }));
+                    break;
+
+                case ApiRawContentBlockDeltaEvent delta
+                    when delta.Delta.Value is ApiInputJsonDelta inputJsonDelta
+                         && _pendingToolUses.TryGetValue(delta.Index, out var pending):
+                    pending.PartialJson.Append(inputJsonDelta.PartialJson);
+                    break;
+
+                case ApiRawContentBlockStopEvent stop:
+                    var hasFunctionCall = contents.OfType<FunctionCallContent>().Any();
+                    if (!_pendingToolUses.Remove(stop.Index, out var stoppedPending) || hasFunctionCall)
+                        break;
+
+                    return FinalizePendingToolUse(stoppedPending);
+            }
+
+            return [];
+        }
+
+        public IReadOnlyList<QueryEvent> FlushPendingToolUses()
+        {
+            if (_pendingToolUses.Count == 0)
+                return [];
+
+            var events = new List<QueryEvent>();
+            foreach (var pending in _pendingToolUses.OrderBy(pair => pair.Key).Select(pair => pair.Value))
+            {
+                foreach (var queryEvent in FinalizePendingToolUse(pending))
+                    events.Add(queryEvent);
+            }
+
+            _pendingToolUses.Clear();
+            return events;
+        }
+
+        public void Flush()
+        {
+            switch (_bufferKind)
+            {
+                case BufferedContentKind.Text when _textBuffer is { Length: > 0 }:
+                    _turn.ContentBlocks.Add(new TextBlock(_textBuffer.ToString()));
+                    break;
+
+                case BufferedContentKind.Thinking
+                    when _thinkingBuffer is { Length: > 0 } || !string.IsNullOrWhiteSpace(_thinkingSignature):
+                    _turn.ContentBlocks.Add(new ThinkingBlock(
+                        _thinkingBuffer?.ToString() ?? string.Empty,
+                        _thinkingSignature));
+                    break;
+            }
+
+            _bufferKind = BufferedContentKind.None;
+            _textBuffer = null;
+            _thinkingBuffer = null;
+            _thinkingSignature = null;
+        }
+
+        private void EnsureBuffer(BufferedContentKind kind)
+        {
+            if (_bufferKind == kind)
+                return;
+
+            Flush();
+            _bufferKind = kind;
+
+            if (kind == BufferedContentKind.Text)
+                _textBuffer = new StringBuilder();
+            else if (kind == BufferedContentKind.Thinking)
+                _thinkingBuffer = new StringBuilder();
+        }
+
+        private IReadOnlyList<QueryEvent> FinalizePendingToolUse(PendingToolUse pending)
+        {
+            if (pending.Emitted)
+                return [];
+
+            return AddToolUse(new ToolUseBlock
+            {
+                ToolUseId = pending.ToolUseId,
+                Name = pending.Name,
+                Input = pending.BuildInput(),
+            });
+        }
+
+        private IReadOnlyList<QueryEvent> AddToolUse(ToolUseBlock toolUse)
+        {
+            _turn.ContentBlocks.Add(toolUse);
+            _turn.ToolUseBlocks.Add(toolUse);
+            return
+            [
+                new ToolUseStartEvent(
+                    toolUse.ToolUseId,
+                    toolUse.Name,
+                    toolUse.Input),
+            ];
+        }
+
+        private void MarkToolUseEmitted(string toolUseId)
+        {
+            foreach (var pending in _pendingToolUses.Values)
+            {
+                if (string.Equals(pending.ToolUseId, toolUseId, StringComparison.Ordinal))
+                {
+                    pending.Emitted = true;
+                    break;
+                }
+            }
+        }
+
+        private enum BufferedContentKind
+        {
+            None,
+            Text,
+            Thinking,
+        }
+
+        private sealed class PendingToolUse(
+            long index,
+            string toolUseId,
+            string name,
+            JsonElement initialInput)
+        {
+            public long Index { get; } = index;
+            public string ToolUseId { get; } = toolUseId;
+            public string Name { get; } = name;
+            public JsonElement InitialInput { get; } = initialInput.Clone();
+            public StringBuilder PartialJson { get; } = new();
+            public bool Emitted { get; set; }
+
+            public JsonElement BuildInput()
+            {
+                if (PartialJson.Length > 0)
+                {
+                    try
+                    {
+                        using var document = JsonDocument.Parse(PartialJson.ToString());
+                        return document.RootElement.Clone();
+                    }
+                    catch
+                    {
+                        // Fall back to the initial payload if the partial JSON is malformed.
+                    }
+                }
+
+                return InitialInput.Clone();
+            }
+        }
+    }
 
     private static TokenUsage ComputeTotalUsage(
         IReadOnlyList<ConversationMessage> messages)

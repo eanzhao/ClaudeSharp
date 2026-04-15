@@ -19,11 +19,31 @@ public sealed class WebSearchToolTests
         var supportedModel = ClaudeModelCatalog.All.First(model => model.StableId == "claude-opus-4-6").ProviderIds.FirstParty;
         var unsupportedModel = ClaudeModelCatalog.All.First(model => model.StableId == "claude-sonnet-4-6").ProviderIds.Bedrock;
 
-        var supportedTool = new WebSearchTool(router, () => supportedModel, new FakeSearchBackend());
-        var unsupportedTool = new WebSearchTool(router, () => unsupportedModel, new FakeSearchBackend());
+        var supportedTool = new WebSearchTool(
+            router,
+            () => supportedModel,
+            () => AiProvider.Anthropic,
+            new FakeSearchBackend());
+        var unsupportedTool = new WebSearchTool(
+            router,
+            () => unsupportedModel,
+            () => AiProvider.Anthropic,
+            new FakeSearchBackend());
 
         Assert.True(supportedTool.IsEnabled());
         Assert.False(unsupportedTool.IsEnabled());
+    }
+
+    [Fact]
+    public void IsEnabled_DisablesWebSearchForNonAnthropicProviders()
+    {
+        var tool = new WebSearchTool(
+            new DefaultProviderCapabilityRouter(),
+            () => ClaudeModels.DefaultMainModel,
+            () => AiProvider.OpenAI,
+            new FakeSearchBackend());
+
+        Assert.False(tool.IsEnabled());
     }
 
     [Fact]
@@ -34,7 +54,11 @@ public sealed class WebSearchToolTests
             new WebSearchHit("Aexon", "https://example.com/claudesharp", "first hit"),
             new WebSearchHit("Claude Code", "https://example.com/claude-code"));
 
-        var tool = new WebSearchTool(router, () => ClaudeModels.DefaultMainModel, backend);
+        var tool = new WebSearchTool(
+            router,
+            () => ClaudeModels.DefaultMainModel,
+            () => AiProvider.Anthropic,
+            backend);
 
         var result = await tool.ExecuteAsync(
             JsonSerializer.SerializeToElement(new { query = "claude sharp", max_results = 2 }),
@@ -53,7 +77,11 @@ public sealed class WebSearchToolTests
     [Fact]
     public async Task CheckPermissionsAsync_AlwaysAllowsPassthrough()
     {
-        var tool = new WebSearchTool(new DefaultProviderCapabilityRouter(), () => ClaudeModels.DefaultMainModel, new FakeSearchBackend());
+        var tool = new WebSearchTool(
+            new DefaultProviderCapabilityRouter(),
+            () => ClaudeModels.DefaultMainModel,
+            () => AiProvider.Anthropic,
+            new FakeSearchBackend());
 
         var result = await tool.CheckPermissionsAsync(
             JsonSerializer.SerializeToElement(new { query = "test" }),
@@ -71,6 +99,7 @@ public sealed class WebSearchToolTests
             Messages = [],
             CancellationToken = CancellationToken.None,
             MainLoopModel = ClaudeModels.DefaultMainModel,
+            MainLoopProvider = AiProvider.Anthropic,
         };
 
     private sealed class FakeSearchBackend : IWebSearchBackend

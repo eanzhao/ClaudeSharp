@@ -34,6 +34,19 @@ public sealed class AiProviderSelectionTests
     }
 
     [Fact]
+    public void ResolveSessionTarget_UsesOllamaDefaultWhenProviderIsExplicit()
+    {
+        var target = AiProviderSelection.ResolveSessionTarget(
+            providerFlag: "ollama",
+            modelOverride: null,
+            resumedProvider: "anthropic",
+            resumedModel: "claude-sonnet-4-6");
+
+        Assert.Equal(AiProvider.Ollama, target.Provider);
+        Assert.Equal("qwen3:4b", target.Model);
+    }
+
+    [Fact]
     public void DetectProvider_PrefersExplicitAnthropicAliasesOverOpenAiFallback()
     {
         var provider = AiProviderSelection.DetectProvider(
@@ -42,5 +55,15 @@ public sealed class AiProviderSelectionTests
             fallbackProvider: AiProvider.OpenAI);
 
         Assert.Equal(AiProvider.Anthropic, provider);
+    }
+
+    [Fact]
+    public void TryParse_RecognizesOllamaProvider()
+    {
+        var success = AiProviderSelection.TryParse("ollama", out var provider);
+
+        Assert.True(success);
+        Assert.Equal(AiProvider.Ollama, provider);
+        Assert.Equal("ollama", AiProviderSelection.ToStorageValue(provider));
     }
 }

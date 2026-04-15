@@ -7,6 +7,7 @@ public enum AiProvider
 {
     Anthropic,
     OpenAI,
+    Ollama,
 }
 
 /// <summary>
@@ -61,6 +62,9 @@ public static class AiProviderSelection
         if (LooksLikeOpenAiModel(model))
             return AiProvider.OpenAI;
 
+        if (LooksLikeOllamaModel(model))
+            return AiProvider.Ollama;
+
         if (LooksLikeAnthropicModel(model))
             return AiProvider.Anthropic;
 
@@ -72,11 +76,20 @@ public static class AiProviderSelection
         if (provider == AiProvider.OpenAI)
             return string.IsNullOrWhiteSpace(input) ? "gpt-4o" : input.Trim();
 
+        if (provider == AiProvider.Ollama)
+            return string.IsNullOrWhiteSpace(input) ? "qwen3:4b" : input.Trim();
+
         return ClaudeModels.Resolve(input);
     }
 
     public static bool TryParse(string? value, out AiProvider provider)
     {
+        if (string.Equals(value, "ollama", StringComparison.OrdinalIgnoreCase))
+        {
+            provider = AiProvider.Ollama;
+            return true;
+        }
+
         if (string.Equals(value, "openai", StringComparison.OrdinalIgnoreCase))
         {
             provider = AiProvider.OpenAI;
@@ -94,7 +107,12 @@ public static class AiProviderSelection
     }
 
     public static string ToStorageValue(AiProvider provider) =>
-        provider == AiProvider.OpenAI ? "openai" : "anthropic";
+        provider switch
+        {
+            AiProvider.OpenAI => "openai",
+            AiProvider.Ollama => "ollama",
+            _ => "anthropic",
+        };
 
     public static bool LooksLikeOpenAiModel(string? model)
     {
@@ -111,4 +129,14 @@ public static class AiProviderSelection
     public static bool LooksLikeAnthropicModel(string? model) =>
         !string.IsNullOrWhiteSpace(model) &&
         ClaudeModelCatalog.TryResolve(model.Trim()) != null;
+
+    public static bool LooksLikeOllamaModel(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+            return false;
+
+        var trimmed = model.Trim();
+        return trimmed.StartsWith("ollama/", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Contains(':', StringComparison.Ordinal);
+    }
 }

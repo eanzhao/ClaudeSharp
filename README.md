@@ -55,7 +55,10 @@ nuget install Aexon -Source https://api.nuget.org/v3/index.json -OutputDirectory
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download) (10.0.100+) for local builds and `dotnet` CLI workflows
-- An Anthropic API key, provided through `ANTHROPIC_API_KEY` or an `appsettings*.json` file
+- One of:
+  - an Anthropic API key, provided through `ANTHROPIC_API_KEY` or an `appsettings*.json` file
+  - an OpenAI-compatible endpoint via `OPENAI_API_KEY` and optional `OPENAI_BASE_URL`
+  - a local Ollama server reachable at `OLLAMA_HOST` or the default `http://127.0.0.1:11434`
 
 ## Configuration
 
@@ -79,6 +82,17 @@ Both of the following JSON shapes are supported:
   }
 }
 ```
+
+OpenAI settings are read from environment variables:
+
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL` for OpenAI-compatible endpoints
+
+Ollama settings are read from:
+
+1. `OLLAMA_HOST`
+2. `OLLAMA_BASE_URL`
+3. default `http://127.0.0.1:11434`
 
 ```json
 {
@@ -117,6 +131,12 @@ aexon "explain this codebase"
 
 # Override working directory and model
 aexon --cwd /path/to/project --model opus "summarize this repo"
+
+# Use OpenAI
+aexon --provider openai --model gpt-4o "summarize this repo"
+
+# Use Ollama
+aexon --provider ollama --model qwen3:4b "summarize this repo"
 
 # Resume the latest session
 aexon --continue
@@ -201,20 +221,26 @@ src/
 | Package | Purpose |
 |---------|---------|
 | [Anthropic SDK](https://www.nuget.org/packages/Anthropic) 12.9.0 | Claude API client |
+| [Microsoft.Extensions.AI](https://www.nuget.org/packages/Microsoft.Extensions.AI) 10.2.0 | Unified `IChatClient` abstraction, middleware pipeline, structured output helpers |
+| [Microsoft.Extensions.AI.OpenAI](https://www.nuget.org/packages/Microsoft.Extensions.AI.OpenAI) 10.2.0-preview.1.26063.2 | OpenAI `IChatClient` adapter |
+| [OpenAI](https://www.nuget.org/packages/OpenAI) 2.8.0 | OpenAI and compatible endpoint client |
+| [OllamaSharp](https://www.nuget.org/packages/OllamaSharp) 5.4.10 | Ollama `IChatClient` implementation |
 | Microsoft.Extensions.FileSystemGlobbing 10.0.0 | Glob-based file discovery |
 | [Spectre.Console](https://spectreconsole.net/) 0.54.0 | Terminal UI rendering |
-| Microsoft.Extensions.DependencyInjection 10.0.5 | DI container |
+| Microsoft.Extensions.DependencyInjection 10.0.0 | DI container |
 
 ## Architecture
 
 The core loop in `QueryEngine` follows a standard agentic pattern:
 
 1. Build the system prompt from environment, tools, memory, and runtime context
-2. Send the conversation to the Claude API
+2. Send the conversation through MEAI `IChatClient`
 3. Stream the assistant turn, with a buffered fallback available
 4. Execute requested tools with local permission checks
 5. Append tool results to the conversation
 6. Repeat until the model stops calling tools
+
+The CLI now registers chat clients through `AddChatClient()` and layers retries, logging, OpenTelemetry, provider-specific option mapping, and structured-output helpers on the MEAI pipeline.
 
 All I/O is async (`IAsyncEnumerable<QueryEvent>`) so the REPL can stream output progressively.
 

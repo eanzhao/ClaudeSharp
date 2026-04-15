@@ -105,6 +105,7 @@ internal static class Program
         var model = sessionTarget.Model;
         var config = new QueryEngineConfig
         {
+            Provider = aiProvider,
             Model = model,
             UseStreamingApi = true,
         };
@@ -120,8 +121,12 @@ internal static class Program
             rawAnthropicSettings,
             providerRouter.Resolve(model));
         var anthropicSettings = managedPolicy.AnthropicSettings;
-        using var clientResult = ChatClientFactory.Create(aiProvider, model, anthropicSettings);
-        var chatClient = clientResult.ChatClient;
+        using var chatClientRuntime = ChatClientRuntime.Create(
+            aiProvider,
+            model,
+            config,
+            anthropicSettings);
+        var chatClient = chatClientRuntime.ChatClient;
         var agentSettings = AgentSettingsLoader.Load(
             workingDirectory,
             options.SettingsPath);
@@ -190,6 +195,7 @@ internal static class Program
             providerRouter,
             managedPolicy.AllowWebSearch,
             () => config.Model,
+            () => config.Provider,
             chatClient,
             hooks,
             agentTaskRuntime,
@@ -282,8 +288,8 @@ internal static class Program
             startupParts.Add(managedSettings.StartupSummary);
         if (!string.IsNullOrWhiteSpace(managedPolicy.StartupSummary))
             startupParts.Add(managedPolicy.StartupSummary);
-        if (!string.IsNullOrWhiteSpace(anthropicSettings.StartupSummary))
-            startupParts.Add(anthropicSettings.StartupSummary);
+        if (!string.IsNullOrWhiteSpace(chatClientRuntime.StartupSummary))
+            startupParts.Add(chatClientRuntime.StartupSummary);
 
         var startupNote = startupParts.Count == 0
             ? null
@@ -291,7 +297,7 @@ internal static class Program
 
         var shell = new AexonShell(
             workingDirectory,
-            clientResult.HasApiKey,
+            chatClientRuntime.HasRequiredConfiguration,
             toolRegistry,
             commandRegistry,
             queryEngine,
@@ -314,6 +320,7 @@ internal static class Program
         IProviderCapabilityRouter providerRouter,
         bool allowWebSearch,
         Func<string?> currentModelAccessor,
+        Func<AiProvider> currentProviderAccessor,
         IChatClient chatClient,
         IHookRuntime hooks,
         IAgentTaskRuntime agentTaskRuntime,
@@ -343,7 +350,7 @@ internal static class Program
         registry.Register(new MailboxRespondTool(agentMessageRuntime, messageActivationRuntime, agentTaskRuntime));
         registry.Register(new WebFetchTool());
         if (allowWebSearch)
-            registry.Register(new WebSearchTool(providerRouter, currentModelAccessor));
+            registry.Register(new WebSearchTool(providerRouter, currentModelAccessor, currentProviderAccessor));
         registry.Register(new AgentTool(
             new QueryEngineAgentRunner(chatClient, hooks: hooks),
             providerRouter,
@@ -481,7 +488,7 @@ Usage:
 Options:
   --cwd <path>       Working directory for this session
   --model <model>    Main model or alias (sonnet / opus / haiku / gpt-4o / o3 / ...)
-  --provider <name>  AI provider: anthropic (default) or openai
+  --provider <name>  AI provider: anthropic (default), openai, or ollama
   --resume <id>      Resume a specific session by id, directory, manifest, or transcript path
   --continue         Resume the most recently updated session
   --fork-session     Fork the resumed transcript into a brand new session
@@ -493,13 +500,16 @@ Environment:
   ANTHROPIC_API_KEY  API key for Anthropic Claude models
   OPENAI_API_KEY     API key for OpenAI models
   OPENAI_BASE_URL    Custom base URL for OpenAI-compatible endpoints
+  OLLAMA_HOST        Base URL for the Ollama server (default: http://127.0.0.1:11434)
+  OLLAMA_BASE_URL    Alias for OLLAMA_HOST
+  AEXON_CHAT_LOGGING Enable MEAI pipeline logging on the console (1/true)
 """);
     }
 
     private sealed class AexonShell
     {
         private readonly string _workingDirectory;
-        private readonly bool _hasApiKey;
+        private readonly bool _hasProviderConfiguration;
         private readonly ToolRegistry _toolRegistry;
         private readonly CommandRegistry _commandRegistry;
         private readonly QueryEngine _queryEngine;
@@ -516,7 +526,7 @@ Environment:
 
         public AexonShell(
             string workingDirectory,
-            bool hasApiKey,
+            bool hasProviderConfiguration,
             ToolRegistry toolRegistry,
             CommandRegistry commandRegistry,
             QueryEngine queryEngine,
@@ -531,7 +541,7 @@ Environment:
             Func<Task>? afterInputAsync = null)
         {
             _workingDirectory = workingDirectory;
-            _hasApiKey = hasApiKey;
+            _hasProviderConfiguration = hasProviderConfiguration;
             _toolRegistry = toolRegistry;
             _commandRegistry = commandRegistry;
             _queryEngine = queryEngine;
@@ -740,10 +750,10 @@ Environment:
                 Console.WriteLine(_startupNote);
             Console.WriteLine("输入 /help 查看内置命令，/exit 退出。");
 
-            if (!_hasApiKey)
+            if (!_hasProviderConfiguration)
             {
                 Console.WriteLine(
-                    "未检测到可用的 API Key。你仍然可以使用本地斜杠命令，但发起 AI 请求会失败。");
+                    "未检测到当前 provider 的可用连接配置。你仍然可以使用本地斜杠命令，但发起 AI 请求会失败。");
             }
         }
     }
