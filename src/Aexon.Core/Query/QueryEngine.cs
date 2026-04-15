@@ -362,23 +362,23 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
             switch (update)
             {
                 case ToolPermissionRequestUpdate request:
-                {
-                    await AddMessageAsync(
-                        CreatePermissionRetryMessage(request),
-                        ct);
-
-                    var permissionEvent = new PermissionRequestEvent
                     {
-                        ToolName = request.Invocation.Name,
-                        Description = request.Description,
-                        Input = request.ObservedInput,
-                    };
+                        await AddMessageAsync(
+                            CreatePermissionRetryMessage(request),
+                            ct);
 
-                    yield return permissionEvent;
-                    var approved = await permissionEvent.WaitForResponseAsync();
-                    request.SetResponse(approved);
-                    break;
-                }
+                        var permissionEvent = new PermissionRequestEvent
+                        {
+                            ToolName = request.Invocation.Name,
+                            Description = request.Description,
+                            Input = request.ObservedInput,
+                        };
+
+                        yield return permissionEvent;
+                        var approved = await permissionEvent.WaitForResponseAsync();
+                        request.SetResponse(approved);
+                        break;
+                    }
                 case ToolProgressUpdate progress:
                     {
                         yield return new ToolProgressEvent(
