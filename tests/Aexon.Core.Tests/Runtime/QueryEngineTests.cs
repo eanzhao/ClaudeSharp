@@ -39,6 +39,25 @@ public class QueryEngineTests
     }
 
     [Fact]
+    public async Task EnterAndExitPlanModeAsync_RestoresPreviousPermissionMode()
+    {
+        using var temp = new TempDirectory();
+        var journal = new RecordingJournal();
+        var engine = CreateEngine(temp.Root, journal);
+
+        await engine.SetPermissionModeAsync(PermissionMode.Auto);
+
+        var entered = await engine.EnterPlanModeAsync();
+        var restoredMode = await engine.ExitPlanModeAsync();
+
+        Assert.True(entered);
+        Assert.Equal(PermissionMode.Auto, restoredMode);
+        Assert.False(engine.IsPlanModeActive);
+        Assert.Equal(PermissionMode.Auto, engine.SessionMetadata.Mode);
+        Assert.Equal(PermissionMode.Auto, journal.Metadata.Mode);
+    }
+
+    [Fact]
     public async Task CompactAsync_CreatesCheckpointAndReplacesActiveMessages()
     {
         using var temp = new TempDirectory();
