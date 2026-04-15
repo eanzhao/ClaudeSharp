@@ -1458,7 +1458,7 @@ public sealed class AgentToolTests
         Assert.Equal("claude-sonnet-4-6", request.GetProperty("model").GetString());
         Assert.Equal("Summarize the subsystem", request.GetProperty("messages")[0].GetProperty("content")[0].GetProperty("text").GetString());
         Assert.Equal("search", request.GetProperty("tools")[0].GetProperty("name").GetString());
-        Assert.Contains("child appendix", request.GetProperty("system").GetString(), StringComparison.Ordinal);
+        Assert.Contains("child appendix", ReadSystemText(request.GetProperty("system")), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1491,7 +1491,7 @@ public sealed class AgentToolTests
         var request = JsonDocument.Parse(handler.Bodies[0]).RootElement;
         Assert.Contains(
             $"Working Directory: {isolated}",
-            request.GetProperty("system").GetString(),
+            ReadSystemText(request.GetProperty("system")),
             StringComparison.Ordinal);
     }
 
@@ -1600,6 +1600,16 @@ public sealed class AgentToolTests
 
         Assert.True(predicate(), "Condition was not met before timeout.");
     }
+
+    private static string ReadSystemText(JsonElement system) =>
+        system.ValueKind switch
+        {
+            JsonValueKind.String => system.GetString() ?? string.Empty,
+            JsonValueKind.Array => string.Concat(system.EnumerateArray()
+                .Where(block => block.TryGetProperty("text", out _))
+                .Select(block => block.GetProperty("text").GetString())),
+            _ => string.Empty,
+        };
 
     private sealed class RecordingWorkspaceManager : IAgentWorkspaceManager
     {

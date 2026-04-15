@@ -188,6 +188,90 @@ public sealed class QueryEngineStreamingTests
     }
 
     [Fact]
+    public async Task SubmitMessageAsync_MergesMessageStartUsageWhenStreamingDeltaIsPartial()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(CreateStreamingResponse(
+            ("message_start", new
+            {
+                type = "message_start",
+                message = new
+                {
+                    id = "msg-stream-usage",
+                    type = "message",
+                    role = "assistant",
+                    model = ClaudeModels.DefaultMainModel,
+                    content = Array.Empty<object>(),
+                    stop_reason = (string?)null,
+                    stop_sequence = (string?)null,
+                    usage = new
+                    {
+                        input_tokens = 11,
+                        output_tokens = 0,
+                        cache_read_input_tokens = 7,
+                        cache_creation_input_tokens = 13,
+                    },
+                },
+            }),
+            ("content_block_start", new
+            {
+                type = "content_block_start",
+                index = 0,
+                content_block = new
+                {
+                    type = "text",
+                    text = "Hi",
+                },
+            }),
+            ("content_block_stop", new
+            {
+                type = "content_block_stop",
+                index = 0,
+            }),
+            ("message_delta", new
+            {
+                type = "message_delta",
+                delta = new
+                {
+                    stop_reason = "end_turn",
+                    stop_sequence = (string?)null,
+                },
+                usage = new
+                {
+                    output_tokens = 2,
+                },
+            }),
+            ("message_stop", new
+            {
+                type = "message_stop",
+            })));
+
+        var engine = TestSupport.CreateQueryEngine(
+            TestSupport.CreateAnthropicClient(handler),
+            new ToolRegistry(),
+            new ContextProvider
+            {
+                WorkingDirectory = temp.Root,
+            },
+            new DefaultPermissionChecker(),
+            new QueryEngineConfig
+            {
+                UseStreamingApi = true,
+                EnableAutoCompact = false,
+            },
+            journal: new RecordingJournal());
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("hello"));
+        var messageEnd = Assert.Single(events.OfType<MessageEndEvent>());
+
+        Assert.Equal(11, messageEnd.Usage?.InputTokens);
+        Assert.Equal(2, messageEnd.Usage?.OutputTokens);
+        Assert.Equal(7, messageEnd.Usage?.CacheReadInputTokens);
+        Assert.Equal(13, messageEnd.Usage?.CacheCreationInputTokens);
+    }
+
+    [Fact]
     public async Task SessionMemoryCompactAsync_PersistsSummaryToSessionMemoryFile()
     {
         using var temp = new TempDirectory();

@@ -57,25 +57,48 @@ public class CostCommand : ICommand
     {
         var usage = context.QueryEngine.TotalUsage;
         var messages = context.QueryEngine.Messages;
+        var pricing = ResolvePricing(context.QueryEngine.CurrentModel);
 
-        // Simplified cost estimate using Sonnet pricing.
-        var inputCost = usage.InputTokens * 3.0 / 1_000_000;
-        var outputCost = usage.OutputTokens * 15.0 / 1_000_000;
-        var cacheCost = usage.CacheReadInputTokens * 0.3 / 1_000_000;
-        var totalCost = inputCost + outputCost + cacheCost;
+        var inputCost = usage.InputTokens * pricing.InputPerMillion / 1_000_000;
+        var outputCost = usage.OutputTokens * pricing.OutputPerMillion / 1_000_000;
+        var cacheReadCost = usage.CacheReadInputTokens * pricing.CacheReadPerMillion / 1_000_000;
+        var cacheWriteCost = usage.CacheCreationInputTokens * pricing.CacheWritePerMillion / 1_000_000;
+        var totalCost = inputCost + outputCost + cacheReadCost + cacheWriteCost;
 
         context.WriteLine($"""
 
           Token Usage:
             Input:       {usage.InputTokens,10:N0}  (${inputCost:F4})
+            Cache Write: {usage.CacheCreationInputTokens,10:N0}  (${cacheWriteCost:F4})
+            Cache Read:  {usage.CacheReadInputTokens,10:N0}  (${cacheReadCost:F4})
             Output:      {usage.OutputTokens,10:N0}  (${outputCost:F4})
-            Cache Read:  {usage.CacheReadInputTokens,10:N0}  (${cacheCost:F4})
             ───────────────────────────
+            Input Total: {usage.TotalInputTokens,10:N0}
+            Hit Rate:    {usage.CacheHitRate,10:P1}
             Total:       {usage.TotalTokens,10:N0}  (${totalCost:F4})
             Messages:    {messages.Count,10:N0}
         """);
         return Task.CompletedTask;
     }
+
+    private static UsagePricing ResolvePricing(string modelOrAlias)
+    {
+        var stableId = ClaudeModelCatalog.TryResolve(modelOrAlias)?.StableId;
+        return stableId switch
+        {
+            "claude-haiku-4-5" => new UsagePricing(1.0, 1.25, 0.10, 5.0),
+            "claude-3-5-haiku" => new UsagePricing(0.8, 1.0, 0.08, 4.0),
+            "claude-opus-4" or "claude-opus-4-1" => new UsagePricing(15.0, 18.75, 1.5, 75.0),
+            "claude-opus-4-5" or "claude-opus-4-6" => new UsagePricing(5.0, 6.25, 0.5, 25.0),
+            _ => new UsagePricing(3.0, 3.75, 0.3, 15.0),
+        };
+    }
+
+    private sealed record UsagePricing(
+        double InputPerMillion,
+        double CacheWritePerMillion,
+        double CacheReadPerMillion,
+        double OutputPerMillion);
 }
 
 /// <summary>

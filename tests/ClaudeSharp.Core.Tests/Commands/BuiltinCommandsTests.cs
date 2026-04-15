@@ -66,6 +66,7 @@ public sealed class BuiltinCommandsTests
                 InputTokens = 2_000,
                 OutputTokens = 1_000,
                 CacheReadInputTokens = 500,
+                CacheCreationInputTokens = 250,
             });
         var lines = new List<string>();
         var clearRequested = false;
@@ -89,6 +90,8 @@ public sealed class BuiltinCommandsTests
 
         var output = string.Join(Environment.NewLine, lines);
         Assert.Contains("Token Usage:", output, StringComparison.Ordinal);
+        Assert.Contains("Cache Write:", output, StringComparison.Ordinal);
+        Assert.Contains("Hit Rate:", output, StringComparison.Ordinal);
         Assert.Contains("Messages:", output, StringComparison.Ordinal);
         Assert.Contains("Conversation cleared.", output, StringComparison.Ordinal);
         Assert.Empty(bundle.Engine.Messages);
