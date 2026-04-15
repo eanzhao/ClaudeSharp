@@ -1,4 +1,5 @@
 using Anthropic.Models.Messages;
+using Aexon.Core.Query;
 using Microsoft.Extensions.AI;
 
 namespace Aexon.Cli;
@@ -31,12 +32,12 @@ internal sealed class AnthropicThinkingMiddleware(IChatClient inner) : Delegatin
         if (options?.AdditionalProperties == null)
             return options;
 
-        if (!options.AdditionalProperties.TryGetValue("ThinkingMode", out var modeObj) ||
+        if (!options.AdditionalProperties.TryGetValue(ChatClientPropertyKeys.ThinkingMode, out var modeObj) ||
             modeObj is not string modeStr)
             return options;
 
         var budget = 10240;
-        if (options.AdditionalProperties.TryGetValue("ThinkingBudgetTokens", out var budgetObj))
+        if (options.AdditionalProperties.TryGetValue(ChatClientPropertyKeys.ThinkingBudgetTokens, out var budgetObj))
             budget = Convert.ToInt32(budgetObj);
 
         ThinkingConfigParam? thinkingConfig = modeStr switch

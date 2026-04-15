@@ -1,3 +1,5 @@
+using System.Net;
+using Aexon.Cli;
 using Aexon.Core.Context;
 using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
@@ -206,6 +208,134 @@ public class QueryEngineTests
     }
 
     [Fact]
+    public async Task SubmitMessageAsync_RetriesRateLimitUsingRetryAfterHeaderAndTracksQuota()
+    {
+        using var temp = new TempDirectory();
+        var responseObserver = new ApiResponseObserver();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateErrorResponse(
+            HttpStatusCode.TooManyRequests,
+            "rate_limit_error",
+            "too many requests",
+            ("retry-after", "7"),
+            ("anthropic-ratelimit-requests-remaining", "0"),
+            ("anthropic-ratelimit-requests-reset", "2026-04-15T02:00:00Z")));
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse(
+            "hello after retry",
+            headers:
+            [
+                ("anthropic-ratelimit-requests-limit", "10"),
+                ("anthropic-ratelimit-requests-remaining", "9"),
+                ("anthropic-ratelimit-requests-reset", "2026-04-15T02:05:00Z"),
+                ("anthropic-ratelimit-tokens-limit", "50000"),
+                ("anthropic-ratelimit-tokens-remaining", "48000"),
+                ("anthropic-ratelimit-tokens-reset", "2026-04-15T02:05:00Z"),
+            ]));
+
+        var delays = new List<TimeSpan>();
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateRetryingChatClient(
+                handler,
+                responseObserver,
+                delayAsync: (delay, _) =>
+                {
+                    delays.Add(delay);
+                    return Task.CompletedTask;
+                }),
+            config: new QueryEngineConfig
+            {
+                UseStreamingApi = false,
+                EnableAutoCompact = false,
+                ApiMaxRetryCount = 2,
+            });
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("retry me"));
+
+        var complete = Assert.IsType<QueryCompleteEvent>(events[^1]);
+        Assert.True(complete.Success);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal([TimeSpan.FromSeconds(7)], delays);
+        Assert.NotNull(engine.LatestQuotaStatus);
+        Assert.Equal(9, engine.LatestQuotaStatus!.RequestsRemaining);
+        Assert.Equal(48000, engine.LatestQuotaStatus.TokensRemaining);
+    }
+
+    [Fact]
+    public async Task SubmitMessageAsync_RetriesTimeoutUsingExponentialBackoff()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueException(new TaskCanceledException("request timed out"));
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("timeout recovered"));
+
+        var delays = new List<TimeSpan>();
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateRetryingChatClient(
+                handler,
+                delayAsync: (delay, _) =>
+                {
+                    delays.Add(delay);
+                    return Task.CompletedTask;
+                }),
+            config: new QueryEngineConfig
+            {
+                UseStreamingApi = false,
+                EnableAutoCompact = false,
+                ApiMaxRetryCount = 2,
+                ApiRetryBaseDelay = TimeSpan.FromSeconds(2),
+                ApiRetryMaxDelay = TimeSpan.FromSeconds(10),
+            });
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("timeout"));
+
+        var complete = Assert.IsType<QueryCompleteEvent>(events[^1]);
+        Assert.True(complete.Success);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal([TimeSpan.FromSeconds(2)], delays);
+    }
+
+    [Fact]
+    public async Task SubmitMessageAsync_DoesNotRetryBadRequest()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateErrorResponse(
+            HttpStatusCode.BadRequest,
+            "invalid_request_error",
+            "bad request"));
+
+        var delays = new List<TimeSpan>();
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateRetryingChatClient(
+                handler,
+                delayAsync: (delay, _) =>
+                {
+                    delays.Add(delay);
+                    return Task.CompletedTask;
+                }),
+            config: new QueryEngineConfig
+            {
+                UseStreamingApi = false,
+                EnableAutoCompact = false,
+                ApiMaxRetryCount = 3,
+            });
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("bad request"));
+
+        var complete = Assert.IsType<QueryCompleteEvent>(events[^1]);
+        Assert.False(complete.Success);
+        Assert.Single(handler.Requests);
+        Assert.Empty(delays);
+        Assert.Contains("bad request", complete.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ClearMessagesAsync_ResetsJournalHead()
     {
         using var temp = new TempDirectory();
@@ -219,6 +349,14 @@ public class QueryEngineTests
 
         Assert.Empty(engine.Messages);
         Assert.Equal(1, journal.ResetHeadCount);
+    }
+
+    private static async Task<List<QueryEvent>> CollectAsync(IAsyncEnumerable<QueryEvent> events)
+    {
+        var result = new List<QueryEvent>();
+        await foreach (var evt in events)
+            result.Add(evt);
+        return result;
     }
 
     private static QueryEngine CreateEngine(
