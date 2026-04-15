@@ -94,6 +94,7 @@ public record TombstoneMessage : ConversationMessage
 [JsonDerivedType(typeof(ToolUseBlock), "tool_use")]
 [JsonDerivedType(typeof(ToolResultBlock), "tool_result")]
 [JsonDerivedType(typeof(ThinkingBlock), "thinking")]
+[JsonDerivedType(typeof(AttachmentBlock), "attachment")]
 public abstract record ContentBlock
 {
     [JsonPropertyName("type")]
@@ -168,6 +169,27 @@ public record ThinkingBlock(string Text, string? Signature = null) : ContentBloc
 
     [JsonPropertyName("signature")]
     public string? Signature { get; init; } = Signature;
+}
+
+/// <summary>
+/// References an attachment registered in the session.
+/// </summary>
+public record AttachmentBlock : ContentBlock
+{
+    [JsonPropertyName("type")]
+    public override string Type => "attachment";
+
+    [JsonPropertyName("attachment_id")]
+    public required string AttachmentId { get; init; }
+
+    [JsonPropertyName("file_name")]
+    public required string FileName { get; init; }
+
+    [JsonPropertyName("mime_type")]
+    public required string MimeType { get; init; }
+
+    [JsonPropertyName("size_bytes")]
+    public required long SizeBytes { get; init; }
 }
 
 // ─── Token Usage ──────────────────────────────────────
