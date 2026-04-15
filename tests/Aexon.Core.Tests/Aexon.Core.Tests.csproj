@@ -17,6 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Aexon.Cli\Aexon.Cli.csproj" />
     <ProjectReference Include="..\..\src\Aexon.Core\Aexon.Core.csproj" />
     <ProjectReference Include="..\..\src\Aexon.Commands\Aexon.Commands.csproj" />
     <ProjectReference Include="..\..\src\Aexon.Tools\Aexon.Tools.csproj" />

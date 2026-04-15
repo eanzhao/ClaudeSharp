@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Aexon.Cli;
 using Aexon.Core.Commands;
 using Aexon.Core.Compaction;
 using Aexon.Core.Context;
@@ -24,18 +25,35 @@ internal static class TestSupport
     public static JsonElement Json(object value) =>
         JsonSerializer.SerializeToElement(value);
 
-    public static AnthropicClient CreateAnthropicClient(HttpMessageHandler handler)
+    public static AnthropicClient CreateAnthropicClient(
+        HttpMessageHandler handler,
+        ApiResponseObserver? responseObserver = null)
     {
         return new AnthropicClient
         {
             ApiKey = "test-key",
-            HttpClient = new HttpClient(handler, disposeHandler: false),
+            HttpClient = responseObserver?.CreateHttpClient(handler) ??
+                         new HttpClient(handler, disposeHandler: false),
+            MaxRetries = 0,
         };
     }
 
     public static IChatClient CreateChatClient(HttpMessageHandler handler)
     {
         return CreateAnthropicClient(handler).AsIChatClient();
+    }
+
+    public static IChatClient CreateRetryingChatClient(
+        HttpMessageHandler handler,
+        ApiResponseObserver? responseObserver = null,
+        Func<TimeSpan, CancellationToken, Task>? delayAsync = null)
+    {
+        var observer = responseObserver ?? new ApiResponseObserver();
+        var baseClient = CreateAnthropicClient(handler, observer).AsIChatClient();
+        return new AnthropicRetryMiddleware(
+            new AnthropicThinkingMiddleware(baseClient),
+            observer,
+            delayAsync);
     }
 
     public static QueryEngine CreateQueryEngine(
@@ -54,7 +72,8 @@ internal static class TestSupport
         ISessionMemoryCompactor? sessionMemoryCompactor = null,
         IContextPressurePipeline? contextPressurePipeline = null,
         IHookRuntime? hooks = null,
-        SessionMemoryFile? sessionMemoryFile = null)
+        SessionMemoryFile? sessionMemoryFile = null,
+        AskUserQuestionHandler? askUserQuestion = null)
     {
         return new QueryEngine(
             chatClient,
@@ -72,7 +91,8 @@ internal static class TestSupport
             sessionMemoryFile: sessionMemoryFile,
             initialMessages: initialMessages,
             initialUsage: initialUsage,
-            initialMetadata: initialMetadata);
+            initialMetadata: initialMetadata,
+            askUserQuestion: askUserQuestion);
     }
 }
 
@@ -312,7 +332,10 @@ internal sealed class FakeAnthropicHandler : HttpMessageHandler
     public static HttpResponseMessage CreateMessageResponse(
         string text = "ok",
         int inputTokens = 1,
-        int outputTokens = 1)
+        int outputTokens = 1,
+        int cacheReadInputTokens = 0,
+        int cacheCreationInputTokens = 0,
+        params (string Name, string Value)[] headers)
     {
         var payload = JsonSerializer.Serialize(new
         {
@@ -330,15 +353,47 @@ internal sealed class FakeAnthropicHandler : HttpMessageHandler
             {
                 input_tokens = inputTokens,
                 output_tokens = outputTokens,
-                cache_read_input_tokens = 0,
-                cache_creation_input_tokens = 0,
+                cache_read_input_tokens = cacheReadInputTokens,
+                cache_creation_input_tokens = cacheCreationInputTokens,
             },
         });
 
-        return new HttpResponseMessage(HttpStatusCode.OK)
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json"),
         };
+
+        foreach (var (name, value) in headers)
+            response.Headers.TryAddWithoutValidation(name, value);
+
+        return response;
+    }
+
+    public static HttpResponseMessage CreateErrorResponse(
+        HttpStatusCode statusCode,
+        string errorType,
+        string message,
+        params (string Name, string Value)[] headers)
+    {
+        var payload = JsonSerializer.Serialize(new
+        {
+            type = "error",
+            error = new
+            {
+                type = errorType,
+                message,
+            },
+        });
+
+        var response = new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+        };
+
+        foreach (var (name, value) in headers)
+            response.Headers.TryAddWithoutValidation(name, value);
+
+        return response;
     }
 
     protected override async Task<HttpResponseMessage> SendAsync(

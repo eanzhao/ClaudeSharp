@@ -59,15 +59,16 @@ internal sealed class ChatClientRuntime : IDisposable
                 provider switch
                 {
                     AiProvider.OpenAI => new OpenAIReasoningMiddleware(inner),
-                    AiProvider.Anthropic => new AnthropicThinkingMiddleware(inner),
                     _ => inner,
                 })
             .Use((inner, serviceProvider) =>
-                new RetryingChatClient(
-                    inner,
-                    pipelineSettings.MaxRetryAttempts,
-                    pipelineSettings.RetryDelay,
-                    serviceProvider.GetService<ILogger<RetryingChatClient>>()))
+                provider == AiProvider.Anthropic
+                    ? inner
+                    : new RetryingChatClient(
+                        inner,
+                        pipelineSettings.MaxRetryAttempts,
+                        pipelineSettings.RetryDelay,
+                        serviceProvider.GetService<ILogger<RetryingChatClient>>()))
             .UseLogging()
             .UseOpenTelemetry(
                 sourceName: "Aexon.Chat",

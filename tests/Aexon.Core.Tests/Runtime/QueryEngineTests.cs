@@ -1,3 +1,5 @@
+using System.Net;
+using Aexon.Cli;
 using Aexon.Core.Context;
 using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
@@ -36,6 +38,25 @@ public class QueryEngineTests
         Assert.Equal("alpha", journal.Metadata.Title);
         Assert.Equal(PermissionMode.Plan, journal.Metadata.Mode);
         Assert.Equal(["two"], journal.Metadata.Tags.OrderBy(tag => tag));
+    }
+
+    [Fact]
+    public async Task EnterAndExitPlanModeAsync_RestoresPreviousPermissionMode()
+    {
+        using var temp = new TempDirectory();
+        var journal = new RecordingJournal();
+        var engine = CreateEngine(temp.Root, journal);
+
+        await engine.SetPermissionModeAsync(PermissionMode.Auto);
+
+        var entered = await engine.EnterPlanModeAsync();
+        var restoredMode = await engine.ExitPlanModeAsync();
+
+        Assert.True(entered);
+        Assert.Equal(PermissionMode.Auto, restoredMode);
+        Assert.False(engine.IsPlanModeActive);
+        Assert.Equal(PermissionMode.Auto, engine.SessionMetadata.Mode);
+        Assert.Equal(PermissionMode.Auto, journal.Metadata.Mode);
     }
 
     [Fact]
@@ -148,6 +169,173 @@ public class QueryEngineTests
     }
 
     [Fact]
+    public async Task SubmitMessageAsync_EmitsPromptCacheBreakEventAfterWarmCacheMiss()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse(
+            text: "first",
+            inputTokens: 50,
+            outputTokens: 10,
+            cacheCreationInputTokens: 1_200));
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse(
+            text: "second",
+            inputTokens: 60,
+            outputTokens: 10));
+        var client = TestSupport.CreateChatClient(handler);
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: client,
+            config: new QueryEngineConfig
+            {
+                EnableAutoCompact = false,
+                Model = ClaudeModels.DefaultMainModel,
+            });
+
+        await foreach (var _ in engine.SubmitMessageAsync("warm up"))
+        {
+        }
+
+        var secondTurnEvents = new List<QueryEvent>();
+        await foreach (var evt in engine.SubmitMessageAsync("trigger miss"))
+            secondTurnEvents.Add(evt);
+
+        var cacheEvent = Assert.Single(secondTurnEvents.OfType<PromptCacheStatusEvent>());
+        Assert.True(cacheEvent.BreakDetected);
+        Assert.Equal(0, cacheEvent.Usage.CacheReadInputTokens);
+        Assert.Equal(0, cacheEvent.Usage.CacheCreationInputTokens);
+    }
+
+    [Fact]
+    public async Task SubmitMessageAsync_RetriesRateLimitUsingRetryAfterHeaderAndTracksQuota()
+    {
+        using var temp = new TempDirectory();
+        var responseObserver = new ApiResponseObserver();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateErrorResponse(
+            HttpStatusCode.TooManyRequests,
+            "rate_limit_error",
+            "too many requests",
+            ("retry-after", "7"),
+            ("anthropic-ratelimit-requests-remaining", "0"),
+            ("anthropic-ratelimit-requests-reset", "2026-04-15T02:00:00Z")));
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse(
+            "hello after retry",
+            headers:
+            [
+                ("anthropic-ratelimit-requests-limit", "10"),
+                ("anthropic-ratelimit-requests-remaining", "9"),
+                ("anthropic-ratelimit-requests-reset", "2026-04-15T02:05:00Z"),
+                ("anthropic-ratelimit-tokens-limit", "50000"),
+                ("anthropic-ratelimit-tokens-remaining", "48000"),
+                ("anthropic-ratelimit-tokens-reset", "2026-04-15T02:05:00Z"),
+            ]));
+
+        var delays = new List<TimeSpan>();
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateRetryingChatClient(
+                handler,
+                responseObserver,
+                delayAsync: (delay, _) =>
+                {
+                    delays.Add(delay);
+                    return Task.CompletedTask;
+                }),
+            config: new QueryEngineConfig
+            {
+                UseStreamingApi = false,
+                EnableAutoCompact = false,
+                ApiMaxRetryCount = 2,
+            });
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("retry me"));
+
+        var complete = Assert.IsType<QueryCompleteEvent>(events[^1]);
+        Assert.True(complete.Success);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal([TimeSpan.FromSeconds(7)], delays);
+        Assert.NotNull(engine.LatestQuotaStatus);
+        Assert.Equal(9, engine.LatestQuotaStatus!.RequestsRemaining);
+        Assert.Equal(48000, engine.LatestQuotaStatus.TokensRemaining);
+    }
+
+    [Fact]
+    public async Task SubmitMessageAsync_RetriesTimeoutUsingExponentialBackoff()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueException(new TaskCanceledException("request timed out"));
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("timeout recovered"));
+
+        var delays = new List<TimeSpan>();
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateRetryingChatClient(
+                handler,
+                delayAsync: (delay, _) =>
+                {
+                    delays.Add(delay);
+                    return Task.CompletedTask;
+                }),
+            config: new QueryEngineConfig
+            {
+                UseStreamingApi = false,
+                EnableAutoCompact = false,
+                ApiMaxRetryCount = 2,
+                ApiRetryBaseDelay = TimeSpan.FromSeconds(2),
+                ApiRetryMaxDelay = TimeSpan.FromSeconds(10),
+            });
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("timeout"));
+
+        var complete = Assert.IsType<QueryCompleteEvent>(events[^1]);
+        Assert.True(complete.Success);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal([TimeSpan.FromSeconds(2)], delays);
+    }
+
+    [Fact]
+    public async Task SubmitMessageAsync_DoesNotRetryBadRequest()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateErrorResponse(
+            HttpStatusCode.BadRequest,
+            "invalid_request_error",
+            "bad request"));
+
+        var delays = new List<TimeSpan>();
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateRetryingChatClient(
+                handler,
+                delayAsync: (delay, _) =>
+                {
+                    delays.Add(delay);
+                    return Task.CompletedTask;
+                }),
+            config: new QueryEngineConfig
+            {
+                UseStreamingApi = false,
+                EnableAutoCompact = false,
+                ApiMaxRetryCount = 3,
+            });
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("bad request"));
+
+        var complete = Assert.IsType<QueryCompleteEvent>(events[^1]);
+        Assert.False(complete.Success);
+        Assert.Single(handler.Requests);
+        Assert.Empty(delays);
+        Assert.Contains("bad request", complete.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ClearMessagesAsync_ResetsJournalHead()
     {
         using var temp = new TempDirectory();
@@ -161,6 +349,14 @@ public class QueryEngineTests
 
         Assert.Empty(engine.Messages);
         Assert.Equal(1, journal.ResetHeadCount);
+    }
+
+    private static async Task<List<QueryEvent>> CollectAsync(IAsyncEnumerable<QueryEvent> events)
+    {
+        var result = new List<QueryEvent>();
+        await foreach (var evt in events)
+            result.Add(evt);
+        return result;
     }
 
     private static QueryEngine CreateEngine(

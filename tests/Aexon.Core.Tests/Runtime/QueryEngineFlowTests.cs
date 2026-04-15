@@ -7,6 +7,7 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Query;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
+using Aexon.Tools;
 
 namespace Aexon.Core.Tests.Runtime;
 
@@ -131,6 +132,68 @@ public sealed class QueryEngineFlowTests
     }
 
     [Fact]
+    public async Task SubmitMessageAsync_AllowsAskUserQuestionToolToContinueConversation()
+    {
+        using var temp = new TempDirectory();
+        var handler = new ScriptedAnthropicHandler();
+        handler.EnqueueResponse(CreateMessageResponse(
+            content:
+            [
+                new
+                {
+                    type = "tool_use",
+                    id = "tool-1",
+                    name = "AskUserQuestion",
+                    caller = new { type = "direct" },
+                    input = new
+                    {
+                        question = "Which option should I use?",
+                        options = new[] { "alpha", "beta" },
+                    },
+                },
+            ],
+            stopReason: "tool_use"));
+        handler.EnqueueResponse(CreateMessageResponse(
+            content:
+            [
+                new { type = "text", text = "Using beta." },
+            ],
+            stopReason: "end_turn"));
+
+        var journal = new RecordingJournal();
+        UserQuestionRequest? prompted = null;
+        var engine = CreateEngine(
+            temp.Root,
+            handler,
+            BuildRegistry(new AskUserQuestionTool()),
+            journal,
+            new StubPermissionChecker(),
+            new QueryEngineConfig
+            {
+                MaxTurns = 3,
+            },
+            askUserQuestion: (request, _) =>
+            {
+                prompted = request;
+                return Task.FromResult(new UserQuestionResponse("beta"));
+            });
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("help me decide"));
+
+        Assert.Contains(events, evt => evt is ToolResultEvent result &&
+                                       result.ToolName == "AskUserQuestion" &&
+                                       result.Result == "beta");
+        Assert.Contains(events, evt => evt is TextDeltaEvent text && text.Text == "Using beta.");
+        Assert.NotNull(prompted);
+        Assert.Equal("Which option should I use?", prompted!.Question);
+        Assert.Equal(["alpha", "beta"], prompted.Options);
+        Assert.Equal(4, journal.AppendedMessages.Count);
+        Assert.Equal("beta", Assert.IsType<ToolResultBlock>(
+            Assert.IsType<UserMessage>(journal.AppendedMessages[2]).Content[0]).Content);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
     public async Task SubmitMessageAsync_ReportsApiFailureAndStops()
     {
         using var temp = new TempDirectory();
@@ -157,7 +220,8 @@ public sealed class QueryEngineFlowTests
         ToolRegistry tools,
         RecordingJournal journal,
         IPermissionChecker permissions,
-        QueryEngineConfig? config = null)
+        QueryEngineConfig? config = null,
+        AskUserQuestionHandler? askUserQuestion = null)
     {
         var provider = new ContextProvider
         {
@@ -171,7 +235,8 @@ public sealed class QueryEngineFlowTests
             provider,
             permissions,
             config ?? new QueryEngineConfig(),
-            journal: journal);
+            journal: journal,
+            askUserQuestion: askUserQuestion);
     }
 
     private static ToolRegistry BuildRegistry(params ITool[] tools)

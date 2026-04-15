@@ -94,6 +94,25 @@ public interface ITool
 // Context types
 
 /// <summary>
+/// Represents a request for interactive user input during tool execution.
+/// </summary>
+public sealed record UserQuestionRequest(
+    string Question,
+    IReadOnlyList<string>? Options = null);
+
+/// <summary>
+/// Represents the user's answer to an interactive tool prompt.
+/// </summary>
+public sealed record UserQuestionResponse(string Answer);
+
+/// <summary>
+/// Handles user questions raised by tools during execution.
+/// </summary>
+public delegate Task<UserQuestionResponse> AskUserQuestionHandler(
+    UserQuestionRequest request,
+    CancellationToken cancellationToken);
+
+/// <summary>
 /// Represents tool execution context.
 /// </summary>
 public class ToolExecutionContext
@@ -127,6 +146,11 @@ public class ToolExecutionContext
     /// Gets a value indicating whether the session is non-interactive.
     /// </summary>
     public bool IsNonInteractiveSession { get; init; }
+
+    /// <summary>
+    /// Gets the callback used when a tool needs to ask the user a follow-up question.
+    /// </summary>
+    public AskUserQuestionHandler? AskUserQuestionAsync { get; init; }
 
     /// <summary>
     /// Gets the model used by the main loop.

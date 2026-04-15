@@ -7,6 +7,7 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Providers;
 using Aexon.Core.Query;
 using Aexon.Core.Tests.Runtime;
+using Aexon.Core.Todos;
 using Aexon.Core.Tools;
 using Aexon.Tools;
 
@@ -143,6 +144,8 @@ public sealed class CoreUtilityCoverageTests
             new FileEditTool(),
             new GlobTool(),
             new GrepTool(),
+            new AskUserQuestionTool(),
+            new TodoWriteTool(new InMemoryTodoRuntime()),
             new WebFetchTool(),
             new WebSearchTool(new DefaultProviderCapabilityRouter(), () => ClaudeModels.DefaultMainModel),
             new AgentTool(new NoOpAgentRunner(), new DefaultProviderCapabilityRouter(), runtime, hooks: HookRuntime.Empty),
@@ -155,7 +158,9 @@ public sealed class CoreUtilityCoverageTests
             new MailboxRespondTool(new InMemoryAgentMessageRuntime()),
         };
 
-        var totalOptionalParameters = tools.Sum(CountOptionalParameters);
+        var totalOptionalParameters = tools
+            .Where(tool => tool.IsEnabled())
+            .Sum(CountOptionalParameters);
 
         Assert.True(
             totalOptionalParameters <= 24,

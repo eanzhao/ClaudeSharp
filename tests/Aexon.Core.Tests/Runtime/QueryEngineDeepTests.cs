@@ -8,6 +8,7 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Query;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
+using Aexon.Tools;
 using Microsoft.Extensions.AI;
 
 namespace Aexon.Core.Tests.Runtime;
@@ -271,6 +272,154 @@ public sealed class QueryEngineDeepTests
         Assert.Equal("search", tools[0].GetProperty("name").GetString());
     }
 
+    [Fact]
+    public async Task SubmitMessageAsync_AddsPromptCacheBreakpointsForSupportedModels()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("ok"));
+
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateChatClient(handler),
+            initialMessages:
+            [
+                UserMessage.FromText("first"),
+                new AssistantMessage
+                {
+                    Content = [new TextBlock("second")],
+                },
+            ],
+            config: new QueryEngineConfig
+            {
+                Model = ClaudeModels.DefaultMainModel,
+            });
+
+        await CollectAsync(engine.SubmitMessageAsync("follow up"));
+
+        var request = JsonDocument.Parse(handler.Bodies[0]).RootElement;
+        var system = request.GetProperty("system");
+        var messages = request.GetProperty("messages");
+        var lastMessage = messages[messages.GetArrayLength() - 1];
+
+        Assert.Equal(JsonValueKind.Array, system.ValueKind);
+        Assert.Equal("ephemeral", system[0].GetProperty("cache_control").GetProperty("type").GetString());
+        Assert.Equal("ephemeral", messages[1].GetProperty("content")[0].GetProperty("cache_control").GetProperty("type").GetString());
+        Assert.False(lastMessage.GetProperty("content")[0].TryGetProperty("cache_control", out _));
+    }
+
+    [Fact]
+    public async Task SubmitMessageAsync_SpreadsMessagePromptCacheBreakpointsAcrossLongHistory()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("ok"));
+
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateChatClient(handler),
+            initialMessages: BuildLongConversationMessages(45),
+            config: new QueryEngineConfig
+            {
+                Model = ClaudeModels.DefaultMainModel,
+            });
+
+        await CollectAsync(engine.SubmitMessageAsync("follow up"));
+
+        var request = JsonDocument.Parse(handler.Bodies[0]).RootElement;
+        var messageCacheBreakpointCount = request.GetProperty("messages")
+            .EnumerateArray()
+            .SelectMany(message => message.GetProperty("content").EnumerateArray())
+            .Count(block => block.TryGetProperty("cache_control", out _));
+
+        Assert.Equal(3, messageCacheBreakpointCount);
+    }
+
+    [Fact]
+    public async Task SubmitMessageAsync_SkipsPromptCachingForUnsupportedModels()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("ok"));
+
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: TestSupport.CreateChatClient(handler),
+            initialMessages:
+            [
+                UserMessage.FromText("first"),
+                new AssistantMessage
+                {
+                    Content = [new TextBlock("second")],
+                },
+            ],
+            config: new QueryEngineConfig
+            {
+                Model = "claude-3-5-sonnet",
+            });
+
+        await CollectAsync(engine.SubmitMessageAsync("follow up"));
+
+        var request = JsonDocument.Parse(handler.Bodies[0]).RootElement;
+
+        Assert.True(request.TryGetProperty("system", out _));
+        Assert.DoesNotContain("\"cache_control\"", handler.Bodies[0], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SubmitMessageAsync_FiltersAndEnforcesPlanModeTools()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(CreateToolUseResponse("Write", new { file_path = "/tmp/out.txt", content = "hi" }));
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse("done"));
+
+        var registry = BuildRegistry(
+            new FakeTool { Name = "Read", ReadOnly = true, ConcurrencySafe = true },
+            new FakeTool { Name = "Glob", ReadOnly = true, ConcurrencySafe = true },
+            new FakeTool { Name = "Grep", ReadOnly = true, ConcurrencySafe = true },
+            new FakeTool { Name = "WebFetch", ReadOnly = true, ConcurrencySafe = true },
+            new FakeTool { Name = "Write" });
+        var journal = new RecordingJournal();
+        var engine = CreateEngine(
+            temp.Root,
+            journal,
+            client: TestSupport.CreateChatClient(handler),
+            tools: registry);
+        registry.Register(new EnterPlanModeTool(engine));
+        registry.Register(new ExitPlanModeTool(engine));
+        await engine.EnterPlanModeAsync();
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("plan this change"));
+
+        var request = JsonDocument.Parse(handler.Bodies[0]).RootElement;
+        var tools = request.GetProperty("tools")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("name").GetString()!)
+            .ToArray();
+        var systemProperty = request.GetProperty("system");
+        var system = systemProperty.ValueKind switch
+        {
+            JsonValueKind.String => systemProperty.GetString(),
+            JsonValueKind.Array => string.Join(
+                "\n",
+                systemProperty.EnumerateArray().Select(item => item.GetProperty("text").GetString())),
+            _ => null,
+        };
+
+        Assert.Equal(["ExitPlanMode", "Glob", "Grep", "Read", "WebFetch"], tools);
+        Assert.DoesNotContain("EnterPlanMode", tools);
+        Assert.DoesNotContain("Write", tools);
+        Assert.Contains("# Plan Mode", system);
+        Assert.Contains(events, evt => evt is ToolResultEvent result &&
+                                       result.ToolName == "Write" &&
+                                       result.IsError &&
+                                       result.Result.Contains("not available in the current mode", StringComparison.Ordinal));
+    }
+
     private static QueryEngine CreateEngine(
         string workingDirectory,
         RecordingJournal journal,
@@ -317,8 +466,28 @@ public sealed class QueryEngineDeepTests
         return result;
     }
 
-    private static HttpResponseMessage CreateToolUseResponse()
+    private static IReadOnlyList<ConversationMessage> BuildLongConversationMessages(int count)
     {
+        var messages = new List<ConversationMessage>(count);
+        for (var i = 0; i < count; i++)
+        {
+            messages.Add(i % 2 == 0
+                ? UserMessage.FromText($"user-{i}")
+                : new AssistantMessage
+                {
+                    Content = [new TextBlock($"assistant-{i}")],
+                });
+        }
+
+        return messages;
+    }
+
+    private static HttpResponseMessage CreateToolUseResponse(
+        string toolName = "search",
+        object? input = null)
+    {
+        input ??= new { query = "claude" };
+
         var payload = JsonSerializer.Serialize(new
         {
             id = "msg-1",
@@ -333,9 +502,9 @@ public sealed class QueryEngineDeepTests
                 {
                     type = "tool_use",
                     id = "tool-1",
-                    name = "search",
+                    name = toolName,
                     caller = new { type = "direct" },
-                    input = new { query = "claude" },
+                    input,
                 },
             },
             usage = new

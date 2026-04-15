@@ -1,3 +1,4 @@
+using Aexon.Core.Query;
 using Anthropic.Models.Messages;
 using Microsoft.Extensions.AI;
 
@@ -31,12 +32,12 @@ internal sealed class AnthropicThinkingMiddleware(IChatClient inner) : Delegatin
         if (options?.AdditionalProperties == null)
             return options;
 
-        if (!options.AdditionalProperties.TryGetValue("ThinkingMode", out var modeObj) ||
+        if (!options.AdditionalProperties.TryGetValue(ChatClientPropertyKeys.ThinkingMode, out var modeObj) ||
             modeObj is not string modeStr)
             return options;
 
         var budget = 10240;
-        if (options.AdditionalProperties.TryGetValue("ThinkingBudgetTokens", out var budgetObj))
+        if (options.AdditionalProperties.TryGetValue(ChatClientPropertyKeys.ThinkingBudgetTokens, out var budgetObj))
             budget = Convert.ToInt32(budgetObj);
 
         ThinkingConfigParam? thinkingConfig = modeStr switch
@@ -51,12 +52,24 @@ internal sealed class AnthropicThinkingMiddleware(IChatClient inner) : Delegatin
             return options;
 
         var cloned = options.Clone();
-        cloned.RawRepresentationFactory = _ => new MessageCreateParams
+        var existingFactory = cloned.RawRepresentationFactory;
+        cloned.RawRepresentationFactory = requestOptions =>
         {
-            Model = options.ModelId ?? "claude-sonnet-4-6",
-            MaxTokens = options.MaxOutputTokens ?? 16384,
-            Messages = [],
-            Thinking = thinkingConfig,
+            if (existingFactory?.Invoke(requestOptions) is MessageCreateParams existingRequest)
+            {
+                return new MessageCreateParams(existingRequest)
+                {
+                    Thinking = thinkingConfig,
+                };
+            }
+
+            return new MessageCreateParams
+            {
+                Model = options.ModelId ?? "claude-sonnet-4-6",
+                MaxTokens = options.MaxOutputTokens ?? 16384,
+                Messages = [],
+                Thinking = thinkingConfig,
+            };
         };
 
         return cloned;

@@ -1458,14 +1458,7 @@ public sealed class AgentToolTests
         Assert.Equal("claude-sonnet-4-6", request.GetProperty("model").GetString());
         Assert.Equal("Summarize the subsystem", request.GetProperty("messages")[0].GetProperty("content")[0].GetProperty("text").GetString());
         Assert.Equal("search", request.GetProperty("tools")[0].GetProperty("name").GetString());
-        var systemProp = request.GetProperty("system");
-        var systemText = systemProp.ValueKind == System.Text.Json.JsonValueKind.String
-            ? systemProp.GetString()!
-            : systemProp.EnumerateArray()
-                .Where(e => e.GetProperty("type").GetString() == "text")
-                .Select(e => e.GetProperty("text").GetString())
-                .FirstOrDefault() ?? string.Empty;
-        Assert.Contains("child appendix", systemText, StringComparison.Ordinal);
+        Assert.Contains("child appendix", ReadSystemText(request.GetProperty("system")), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1496,15 +1489,9 @@ public sealed class AgentToolTests
         Assert.True(workspaceManager.DisposeCalled);
 
         var request = JsonDocument.Parse(handler.Bodies[0]).RootElement;
-        var systemProp2 = request.GetProperty("system");
-        var systemText2 = systemProp2.ValueKind == System.Text.Json.JsonValueKind.String
-            ? systemProp2.GetString()!
-            : string.Join(" ", systemProp2.EnumerateArray()
-                .Where(e => e.GetProperty("type").GetString() == "text")
-                .Select(e => e.GetProperty("text").GetString()));
         Assert.Contains(
             $"Working Directory: {isolated}",
-            systemText2,
+            ReadSystemText(request.GetProperty("system")),
             StringComparison.Ordinal);
     }
 
@@ -1613,6 +1600,16 @@ public sealed class AgentToolTests
 
         Assert.True(predicate(), "Condition was not met before timeout.");
     }
+
+    private static string ReadSystemText(JsonElement system) =>
+        system.ValueKind switch
+        {
+            JsonValueKind.String => system.GetString() ?? string.Empty,
+            JsonValueKind.Array => string.Concat(system.EnumerateArray()
+                .Where(block => block.TryGetProperty("text", out _))
+                .Select(block => block.GetProperty("text").GetString())),
+            _ => string.Empty,
+        };
 
     private sealed class RecordingWorkspaceManager : IAgentWorkspaceManager
     {

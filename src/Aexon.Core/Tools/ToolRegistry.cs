@@ -35,10 +35,10 @@ public class ToolRegistry
     /// <summary>
     /// Gets enabled tools.
     /// </summary>
-    public IReadOnlyList<ITool> GetEnabledTools()
+    public IReadOnlyList<ITool> GetEnabledTools(Func<ITool, bool>? predicate = null)
     {
         return _tools.Values
-            .Where(t => t.IsEnabled())
+            .Where(t => t.IsEnabled() && (predicate == null || predicate(t)))
             .OrderBy(t => t.Name, StringComparer.Ordinal)
             .ToList();
     }
@@ -52,9 +52,9 @@ public class ToolRegistry
     /// <summary>
     /// Gets tool definitions.
     /// </summary>
-    public IReadOnlyList<JsonElement> GetToolDefinitions()
+    public IReadOnlyList<JsonElement> GetToolDefinitions(Func<ITool, bool>? predicate = null)
     {
-        var tools = GetEnabledTools();
+        var tools = GetEnabledTools(predicate);
         var definitions = new List<JsonElement>();
 
         foreach (var tool in tools)
@@ -75,9 +75,10 @@ public class ToolRegistry
     /// <summary>
     /// Gets tool definitions.
     /// </summary>
-    public async Task<IReadOnlyList<JsonElement>> GetToolDefinitionsAsync()
+    public async Task<IReadOnlyList<JsonElement>> GetToolDefinitionsAsync(
+        Func<ITool, bool>? predicate = null)
     {
-        var tools = GetEnabledTools();
+        var tools = GetEnabledTools(predicate);
         var definitions = new List<JsonElement>();
 
         foreach (var tool in tools)

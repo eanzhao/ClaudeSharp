@@ -13,6 +13,7 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Providers;
 using Aexon.Core.Query;
 using Aexon.Core.Storage;
+using Aexon.Core.Todos;
 using Aexon.Core.Tools;
 using Aexon.Tools;
 using Microsoft.Extensions.AI;
@@ -171,21 +172,24 @@ internal static class Program
                 model);
         }
 
-        var agentMetadataEntries = resumed?.ContinueExistingSession == true
+        var metadataEntries = resumed?.ContinueExistingSession == true
             ? (await transcriptStore.LoadProjectionAsync(
                 session,
                 new TranscriptLoadOptions())).MetadataEntries
             : [];
+        var todoRuntime = await PersistentTodoRuntime.CreateAsync(
+            journal,
+            metadataEntries);
         var agentTaskRuntime = await PersistentAgentTaskRuntime.CreateAsync(
             journal,
-            agentMetadataEntries,
+            metadataEntries,
             autoPrunePolicy: agentSettings.Settings.BuildRetentionPolicy());
         var agentTeamRuntime = await PersistentAgentTeamRuntime.CreateAsync(
             journal,
-            agentMetadataEntries);
+            metadataEntries);
         var agentMessageRuntime = await PersistentAgentMessageRuntime.CreateAsync(
             journal,
-            agentMetadataEntries);
+            metadataEntries);
         var messageActivationRuntime = new InMemoryAgentMessageActivationRuntime();
         var toolRegistry = BuildToolRegistry(
             providerRouter,
@@ -197,6 +201,7 @@ internal static class Program
             agentTaskRuntime,
             agentTeamRuntime,
             agentMessageRuntime,
+            todoRuntime,
             messageActivationRuntime,
             agentRuntimeOptions,
             agentSettings.Settings.BackgroundRunConcurrency);
@@ -219,7 +224,10 @@ internal static class Program
             sessionMemoryFile: sessionMemoryFile,
             initialMessages: resumed?.Messages,
             initialUsage: resumed?.TotalUsage,
-            initialMetadata: resumed?.Metadata);
+            initialMetadata: resumed?.Metadata,
+            askUserQuestion: PromptUserQuestionAsync);
+        toolRegistry.Register(new EnterPlanModeTool(queryEngine));
+        toolRegistry.Register(new ExitPlanModeTool(queryEngine));
         var permissionContext = contextProvider.GetPermissionContext();
         var appStateStore = new AppStateStore();
         var appStateBridge = new AppStateHostBridge(
@@ -244,7 +252,8 @@ internal static class Program
                     agentTaskRuntime: agentTaskRuntime,
                     agentMessageRuntime: agentMessageRuntime,
                     agentTeamRuntime: agentTeamRuntime,
-                    agentRuntimeOptions: agentRuntimeOptions));
+                    agentRuntimeOptions: agentRuntimeOptions,
+                    todoRuntime: todoRuntime));
                 await appStateBridge.PublishAsync();
             }
             catch
@@ -317,6 +326,7 @@ internal static class Program
         IAgentTaskRuntime agentTaskRuntime,
         IAgentTeamRuntime agentTeamRuntime,
         IAgentMessageRuntime agentMessageRuntime,
+        ITodoRuntime todoRuntime,
         IAgentMessageActivationRuntime messageActivationRuntime,
         AgentRuntimeOptions agentRuntimeOptions,
         int backgroundRunConcurrency)
@@ -330,6 +340,8 @@ internal static class Program
         registry.Register(new FileEditTool());
         registry.Register(new GlobTool());
         registry.Register(new GrepTool());
+        registry.Register(new AskUserQuestionTool());
+        registry.Register(new TodoWriteTool(todoRuntime));
         registry.Register(new TeamCreateTool(agentTeamRuntime));
         registry.Register(new TeamStatusTool(agentTeamRuntime));
         registry.Register(new TeamDissolveTool(agentTeamRuntime));
@@ -385,6 +397,65 @@ internal static class Program
         return "default";
     }
 
+    private static Task<UserQuestionResponse> PromptUserQuestionAsync(
+        UserQuestionRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (Console.IsInputRedirected)
+            throw new InvalidOperationException("当前会话不是交互式输入，无法向用户提问。");
+
+        Console.WriteLine();
+        Console.WriteLine($"[提问] {request.Question}");
+
+        if (request.Options is { Count: > 0 } options)
+            return Task.FromResult(PromptForOptionSelection(options));
+
+        return Task.FromResult(new UserQuestionResponse(ReadRequiredAnswer("> ")));
+    }
+
+    private static UserQuestionResponse PromptForOptionSelection(IReadOnlyList<string> options)
+    {
+        for (var i = 0; i < options.Count; i++)
+            Console.WriteLine($"{i + 1}. {options[i]}");
+
+        while (true)
+        {
+            var answer = ReadRequiredAnswer("请选择编号或直接输入选项内容: ");
+            if (int.TryParse(answer, out var index) &&
+                index >= 1 &&
+                index <= options.Count)
+            {
+                return new UserQuestionResponse(options[index - 1]);
+            }
+
+            var matched = options.FirstOrDefault(
+                option => string.Equals(option, answer, StringComparison.OrdinalIgnoreCase));
+            if (matched != null)
+                return new UserQuestionResponse(matched);
+
+            Console.WriteLine("输入无效，请重新选择。");
+        }
+    }
+
+    private static string ReadRequiredAnswer(string prompt)
+    {
+        while (true)
+        {
+            Console.Write(prompt);
+            var answer = Console.ReadLine();
+            if (answer == null)
+                throw new InvalidOperationException("用户输入已结束，无法继续等待回答。");
+
+            answer = answer.Trim();
+            if (!string.IsNullOrWhiteSpace(answer))
+                return answer;
+
+            Console.WriteLine("请输入内容。");
+        }
+    }
+
     private static CommandRegistry BuildCommandRegistry()
     {
         var registry = new CommandRegistry();
@@ -398,6 +469,7 @@ internal static class Program
         registry.Register(new ModelCommand());
         registry.Register(new MicrocompactCommand());
         registry.Register(new ModeCommand());
+        registry.Register(new PlanCommand());
         registry.Register(new PartialCompactCommand());
         registry.Register(new SessionCommand());
         registry.Register(new SessionMemoryCompactCommand());
@@ -628,6 +700,19 @@ Environment:
                     case MessageEndEvent:
                         if (wroteAssistantText)
                             Console.WriteLine();
+                        break;
+
+                    case PromptCacheStatusEvent cacheStatus when cacheStatus.BreakDetected:
+                        if (cacheStatus.Usage.CacheCreationInputTokens > 0)
+                        {
+                            Console.WriteLine(
+                                $"[cache] prompt cache 断了：这次没命中旧缓存，已按当前前缀重建 {cacheStatus.Usage.CacheCreationInputTokens:N0} 个 token。");
+                        }
+                        else
+                        {
+                            Console.WriteLine(
+                                "[cache] prompt cache 断了：这次没命中旧缓存，可能是前缀变化、缓存过期，或当前上下文还没达到缓存门槛。");
+                        }
                         break;
 
                     case QueryCompleteEvent complete when !complete.Success:

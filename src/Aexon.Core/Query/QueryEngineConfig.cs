@@ -104,6 +104,31 @@ public class QueryEngineConfig
     /// Gets auto compact failure limit.
     /// </summary>
     public int AutoCompactFailureLimit { get; set; } = 3;
+
+    /// <summary>
+    /// Gets the per-request timeout applied to chat provider calls.
+    /// </summary>
+    public TimeSpan ApiRequestTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Gets the maximum number of retry attempts after the initial API call fails.
+    /// </summary>
+    public int ApiMaxRetryCount { get; set; } = 3;
+
+    /// <summary>
+    /// Gets the initial delay used by exponential retry backoff.
+    /// </summary>
+    public TimeSpan ApiRetryBaseDelay { get; set; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Gets the maximum delay used by exponential retry backoff.
+    /// </summary>
+    public TimeSpan ApiRetryMaxDelay { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Gets the exponential backoff multiplier applied on each retry.
+    /// </summary>
+    public double ApiRetryBackoffMultiplier { get; set; } = 2.0;
 }
 
 /// <summary>

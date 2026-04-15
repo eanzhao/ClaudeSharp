@@ -232,21 +232,23 @@ internal static class ChatMessageConverter
         if (usage == null)
             return TokenUsage.Empty;
 
-        int cacheRead = (int)(usage.CachedInputTokenCount ?? 0);
-        int cacheCreation = 0;
+        long cacheRead = usage.CachedInputTokenCount ?? 0;
+        long cacheCreation = 0;
 
         if (usage.AdditionalCounts != null &&
             usage.AdditionalCounts.TryGetValue("CacheCreationInputTokens", out var ccVal))
         {
-            cacheCreation = (int)ccVal;
+            cacheCreation = ccVal;
         }
+
+        var directInput = Math.Max(0, (usage.InputTokenCount ?? 0) - cacheRead - cacheCreation);
 
         return new TokenUsage
         {
-            InputTokens = (int)(usage.InputTokenCount ?? 0),
-            OutputTokens = (int)(usage.OutputTokenCount ?? 0),
-            CacheReadInputTokens = cacheRead,
-            CacheCreationInputTokens = cacheCreation,
+            InputTokens = ToInt32(directInput),
+            OutputTokens = ToInt32(usage.OutputTokenCount ?? 0),
+            CacheReadInputTokens = ToInt32(cacheRead),
+            CacheCreationInputTokens = ToInt32(cacheCreation),
         };
     }
 
@@ -281,9 +283,17 @@ internal static class ChatMessageConverter
                         turn.ContentBlocks.Add(block);
                         turn.ToolUseBlocks.Add(block);
                         break;
-                    }
+                }
             }
         }
     }
+
+    private static int ToInt32(long value) =>
+        value switch
+        {
+            > int.MaxValue => int.MaxValue,
+            < int.MinValue => int.MinValue,
+            _ => (int)value,
+        };
 
 }
