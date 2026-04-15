@@ -7,8 +7,9 @@ using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
-using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
+using Microsoft.Extensions.AI;
 using ApiCacheControlEphemeral = Anthropic.Models.Messages.CacheControlEphemeral;
+using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
 using ApiInputSchema = Anthropic.Models.Messages.InputSchema;
 using ApiMessageCreateParams = Anthropic.Models.Messages.MessageCreateParams;
 using ApiMessageCreateParamsSystem = Anthropic.Models.Messages.MessageCreateParamsSystem;
@@ -22,7 +23,6 @@ using ApiToolChoiceAuto = Anthropic.Models.Messages.ToolChoiceAuto;
 using ApiToolResultBlockParam = Anthropic.Models.Messages.ToolResultBlockParam;
 using ApiToolUnion = Anthropic.Models.Messages.ToolUnion;
 using ApiToolUseBlockParam = Anthropic.Models.Messages.ToolUseBlockParam;
-using Microsoft.Extensions.AI;
 
 namespace Aexon.Core.Query;
 
