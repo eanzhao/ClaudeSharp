@@ -13,6 +13,7 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Providers;
 using Aexon.Core.Query;
 using Aexon.Core.Storage;
+using Aexon.Core.Todos;
 using Aexon.Core.Tools;
 using Aexon.Tools;
 using Microsoft.Extensions.AI;
@@ -166,21 +167,24 @@ internal static class Program
                 model);
         }
 
-        var agentMetadataEntries = resumed?.ContinueExistingSession == true
+        var metadataEntries = resumed?.ContinueExistingSession == true
             ? (await transcriptStore.LoadProjectionAsync(
                 session,
                 new TranscriptLoadOptions())).MetadataEntries
             : [];
+        var todoRuntime = await PersistentTodoRuntime.CreateAsync(
+            journal,
+            metadataEntries);
         var agentTaskRuntime = await PersistentAgentTaskRuntime.CreateAsync(
             journal,
-            agentMetadataEntries,
+            metadataEntries,
             autoPrunePolicy: agentSettings.Settings.BuildRetentionPolicy());
         var agentTeamRuntime = await PersistentAgentTeamRuntime.CreateAsync(
             journal,
-            agentMetadataEntries);
+            metadataEntries);
         var agentMessageRuntime = await PersistentAgentMessageRuntime.CreateAsync(
             journal,
-            agentMetadataEntries);
+            metadataEntries);
         var messageActivationRuntime = new InMemoryAgentMessageActivationRuntime();
         var toolRegistry = BuildToolRegistry(
             providerRouter,
@@ -191,6 +195,7 @@ internal static class Program
             agentTaskRuntime,
             agentTeamRuntime,
             agentMessageRuntime,
+            todoRuntime,
             messageActivationRuntime,
             agentRuntimeOptions,
             agentSettings.Settings.BackgroundRunConcurrency);
@@ -215,6 +220,8 @@ internal static class Program
             initialUsage: resumed?.TotalUsage,
             initialMetadata: resumed?.Metadata,
             askUserQuestion: PromptUserQuestionAsync);
+        toolRegistry.Register(new EnterPlanModeTool(queryEngine));
+        toolRegistry.Register(new ExitPlanModeTool(queryEngine));
         var permissionContext = contextProvider.GetPermissionContext();
         var appStateStore = new AppStateStore();
         var appStateBridge = new AppStateHostBridge(
@@ -239,7 +246,8 @@ internal static class Program
                     agentTaskRuntime: agentTaskRuntime,
                     agentMessageRuntime: agentMessageRuntime,
                     agentTeamRuntime: agentTeamRuntime,
-                    agentRuntimeOptions: agentRuntimeOptions));
+                    agentRuntimeOptions: agentRuntimeOptions,
+                    todoRuntime: todoRuntime));
                 await appStateBridge.PublishAsync();
             }
             catch
@@ -311,6 +319,7 @@ internal static class Program
         IAgentTaskRuntime agentTaskRuntime,
         IAgentTeamRuntime agentTeamRuntime,
         IAgentMessageRuntime agentMessageRuntime,
+        ITodoRuntime todoRuntime,
         IAgentMessageActivationRuntime messageActivationRuntime,
         AgentRuntimeOptions agentRuntimeOptions,
         int backgroundRunConcurrency)
@@ -325,6 +334,7 @@ internal static class Program
         registry.Register(new GlobTool());
         registry.Register(new GrepTool());
         registry.Register(new AskUserQuestionTool());
+        registry.Register(new TodoWriteTool(todoRuntime));
         registry.Register(new TeamCreateTool(agentTeamRuntime));
         registry.Register(new TeamStatusTool(agentTeamRuntime));
         registry.Register(new TeamDissolveTool(agentTeamRuntime));
@@ -452,6 +462,7 @@ internal static class Program
         registry.Register(new ModelCommand());
         registry.Register(new MicrocompactCommand());
         registry.Register(new ModeCommand());
+        registry.Register(new PlanCommand());
         registry.Register(new PartialCompactCommand());
         registry.Register(new SessionCommand());
         registry.Register(new SessionMemoryCompactCommand());
