@@ -12,7 +12,6 @@ using Aexon.Core.Tools;
 using Microsoft.Extensions.AI;
 using ApiCacheControlEphemeral = Anthropic.Models.Messages.CacheControlEphemeral;
 using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
-using ApiInputJsonDelta = Anthropic.Models.Messages.InputJsonDelta;
 using ApiInputSchema = Anthropic.Models.Messages.InputSchema;
 using ApiMessageCreateParams = Anthropic.Models.Messages.MessageCreateParams;
 using ApiMessageCreateParamsSystem = Anthropic.Models.Messages.MessageCreateParamsSystem;
@@ -29,7 +28,6 @@ using ApiTool = Anthropic.Models.Messages.Tool;
 using ApiToolChoiceAuto = Anthropic.Models.Messages.ToolChoiceAuto;
 using ApiToolResultBlockParam = Anthropic.Models.Messages.ToolResultBlockParam;
 using ApiToolUnion = Anthropic.Models.Messages.ToolUnion;
-using ApiToolUseBlock = Anthropic.Models.Messages.ToolUseBlock;
 using ApiToolUseBlockParam = Anthropic.Models.Messages.ToolUseBlockParam;
 
 namespace Aexon.Core.Query;
@@ -1851,26 +1849,6 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
             : null;
     }
 
-    private static StreamingContentBlockBuilder? CreateStreamingBlockBuilder(
-        JsonElement payload)
-    {
-        var index = payload.GetProperty("index").GetInt64();
-        var contentBlock = payload.GetProperty("content_block");
-        var blockType = contentBlock.GetProperty("type").GetString();
-
-        return blockType switch
-        {
-            "text" => new StreamingTextBlockBuilder(index),
-            "thinking" => new StreamingThinkingBlockBuilder(index),
-            "tool_use" => new StreamingToolUseBlockBuilder(
-                index,
-                contentBlock.GetProperty("id").GetString() ?? string.Empty,
-                contentBlock.GetProperty("name").GetString() ?? string.Empty,
-                contentBlock.TryGetProperty("input", out var input) ? input.Clone() : JsonDocument.Parse("{}").RootElement.Clone()),
-            _ => null,
-        };
-    }
-
     private static ApiCacheControlEphemeral CreatePromptCacheControl() => new();
 
     private static int GetStablePromptCacheMessageCount(
@@ -2004,34 +1982,119 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
             if (rawRepresentation is ApiRawMessageStreamEvent streamEvent)
                 rawRepresentation = streamEvent.Value;
 
-            switch (rawRepresentation)
+            if (rawRepresentation is ApiRawContentBlockStartEvent startEvent)
             {
-                case ApiRawContentBlockStartEvent start
-                    when start.ContentBlock.Value is ApiToolUseBlock toolUse:
-                    _pendingToolUses[start.Index] = new PendingToolUse(
-                        start.Index,
-                        toolUse.ID,
-                        toolUse.Name,
-                        toolUse.Input is { Count: > 0 }
-                            ? JsonSerializer.SerializeToElement(toolUse.Input)
+                if (startEvent.ContentBlock.TryPickToolUse(out var toolUseBlock))
+                {
+                    _pendingToolUses[startEvent.Index] = new PendingToolUse(
+                        startEvent.Index,
+                        toolUseBlock.ID ?? string.Empty,
+                        toolUseBlock.Name ?? string.Empty,
+                        toolUseBlock.Input is { Count: > 0 }
+                            ? JsonSerializer.SerializeToElement(toolUseBlock.Input)
                             : JsonSerializer.SerializeToElement(new { }));
-                    break;
+                }
 
-                case ApiRawContentBlockDeltaEvent delta
-                    when delta.Delta.Value is ApiInputJsonDelta inputJsonDelta
-                         && _pendingToolUses.TryGetValue(delta.Index, out var pending):
-                    pending.PartialJson.Append(inputJsonDelta.PartialJson);
-                    break;
-
-                case ApiRawContentBlockStopEvent stop:
-                    var hasFunctionCall = contents.OfType<FunctionCallContent>().Any();
-                    if (!_pendingToolUses.Remove(stop.Index, out var stoppedPending) || hasFunctionCall)
-                        break;
-
-                    return FinalizePendingToolUse(stoppedPending);
+                return [];
             }
 
+            if (rawRepresentation is ApiRawContentBlockDeltaEvent deltaEvent &&
+                deltaEvent.Delta.TryPickInputJson(out var inputJsonDelta) &&
+                _pendingToolUses.TryGetValue(deltaEvent.Index, out var pending))
+            {
+                pending.PartialJson.Append(inputJsonDelta.PartialJson);
+                return [];
+            }
+
+            if (rawRepresentation is ApiRawContentBlockStopEvent stopEvent)
+            {
+                var hasFunctionCall = contents.OfType<FunctionCallContent>().Any();
+                if (_pendingToolUses.Remove(stopEvent.Index, out var stoppedPending) && !hasFunctionCall)
+                    return FinalizePendingToolUse(stoppedPending);
+
+                return [];
+            }
+
+            if (rawRepresentation is JsonElement jsonEvent)
+                return TrackJsonRawUpdate(jsonEvent, contents);
+
+            if (rawRepresentation is JsonDocument jsonDocument)
+                return TrackJsonRawUpdate(jsonDocument.RootElement, contents);
+
             return [];
+        }
+
+        private IReadOnlyList<QueryEvent> TrackJsonRawUpdate(
+            JsonElement rawEvent,
+            IList<AIContent> contents)
+        {
+            if (rawEvent.ValueKind != JsonValueKind.Object ||
+                !rawEvent.TryGetProperty("type", out var typeProperty))
+                return [];
+
+            var eventType = typeProperty.GetString();
+            if (string.IsNullOrWhiteSpace(eventType))
+                return [];
+
+            switch (eventType)
+            {
+                case "content_block_start":
+                    if (!TryGetIndex(rawEvent, out var startIndex) ||
+                        !rawEvent.TryGetProperty("content_block", out var contentBlock) ||
+                        !contentBlock.TryGetProperty("type", out var blockTypeProperty) ||
+                        !string.Equals(blockTypeProperty.GetString(), "tool_use", StringComparison.Ordinal))
+                    {
+                        return [];
+                    }
+
+                    _pendingToolUses[startIndex] = new PendingToolUse(
+                        startIndex,
+                        contentBlock.TryGetProperty("id", out var idProperty)
+                            ? idProperty.GetString() ?? string.Empty
+                            : string.Empty,
+                        contentBlock.TryGetProperty("name", out var nameProperty)
+                            ? nameProperty.GetString() ?? string.Empty
+                            : string.Empty,
+                        contentBlock.TryGetProperty("input", out var inputProperty)
+                            ? inputProperty.Clone()
+                            : JsonSerializer.SerializeToElement(new { }));
+                    return [];
+
+                case "content_block_delta":
+                    if (!TryGetIndex(rawEvent, out var deltaIndex) ||
+                        !_pendingToolUses.TryGetValue(deltaIndex, out var pending) ||
+                        !rawEvent.TryGetProperty("delta", out var deltaPayload) ||
+                        !deltaPayload.TryGetProperty("type", out var deltaTypeProperty) ||
+                        !string.Equals(deltaTypeProperty.GetString(), "input_json_delta", StringComparison.Ordinal))
+                    {
+                        return [];
+                    }
+
+                    if (deltaPayload.TryGetProperty("partial_json", out var partialJsonProperty))
+                        pending.PartialJson.Append(partialJsonProperty.GetString());
+
+                    return [];
+
+                case "content_block_stop":
+                    if (!TryGetIndex(rawEvent, out var stopIndex))
+                        return [];
+
+                    var hasFunctionCall = contents.OfType<FunctionCallContent>().Any();
+                    if (_pendingToolUses.Remove(stopIndex, out var stoppedPending) && !hasFunctionCall)
+                        return FinalizePendingToolUse(stoppedPending);
+
+                    return [];
+
+                default:
+                    return [];
+            }
+        }
+
+        private static bool TryGetIndex(JsonElement rawEvent, out long index)
+        {
+            index = default;
+            return rawEvent.TryGetProperty("index", out var indexProperty) &&
+                   indexProperty.TryGetInt64(out index);
         }
 
         public IReadOnlyList<QueryEvent> FlushPendingToolUses()

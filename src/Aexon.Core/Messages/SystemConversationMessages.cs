@@ -274,7 +274,7 @@ internal static class StructuredSystemMessageCodec
         string? subtype,
         JsonElement? payload)
     {
-        var restored = subtype switch
+        SystemMessage? restored = subtype switch
         {
             SystemMessageSubtypes.CompactBoundary => Deserialize<SystemCompactBoundaryMessage>(payload),
             SystemMessageSubtypes.MicrocompactBoundary => Deserialize<SystemMicrocompactBoundaryMessage>(payload),
