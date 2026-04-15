@@ -283,7 +283,7 @@ internal static class ChatMessageConverter
                         turn.ContentBlocks.Add(block);
                         turn.ToolUseBlocks.Add(block);
                         break;
-                }
+                    }
             }
         }
     }
