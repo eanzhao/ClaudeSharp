@@ -1,0 +1,7 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aexon.Core\Aexon.Core.csproj" />
+  </ItemGroup>
+
+</Project>

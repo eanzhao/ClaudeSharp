@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/docs/" />
+  <Folder Name="/docs/plans/" />
+  <Folder Name="/src/">
+    <Project Path="src/Aexon.Cli/Aexon.Cli.csproj" />
+    <Project Path="src/Aexon.Commands/Aexon.Commands.csproj" />
+    <Project Path="src/Aexon.Core/Aexon.Core.csproj" />
+    <Project Path="src/Aexon.Tools/Aexon.Tools.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Aexon.Core.Tests/Aexon.Core.Tests.csproj" />
+  </Folder>
+</Solution>
