@@ -1,3 +1,4 @@
+using Aexon.Core.Query;
 using Microsoft.Extensions.AI;
 using OpenAI.Chat;
 using ChatMessage = Microsoft.Extensions.AI.ChatMessage;
@@ -32,7 +33,7 @@ internal sealed class OpenAIReasoningMiddleware(IChatClient inner) : DelegatingC
         if (options?.AdditionalProperties == null)
             return options;
 
-        if (!options.AdditionalProperties.TryGetValue("ThinkingMode", out var modeObj) ||
+        if (!options.AdditionalProperties.TryGetValue(ChatClientPropertyKeys.ThinkingMode, out var modeObj) ||
             modeObj is not string modeStr)
             return options;
 

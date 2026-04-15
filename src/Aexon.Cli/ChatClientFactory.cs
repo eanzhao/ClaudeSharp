@@ -31,12 +31,12 @@ internal static class ChatClientFactory
 
     private static ChatClientFactoryResult CreateAnthropic(string model, AnthropicClientSettings settings)
     {
-        var client = CreateAnthropicClient(settings);
-        var chatClient = client
-            .AsIChatClient(model, defaultMaxOutputTokens: 16384)
-            .AsBuilder()
-            .Use(inner => new AnthropicThinkingMiddleware(inner))
-            .Build();
+        var responseObserver = new ApiResponseObserver();
+        var client = CreateAnthropicClient(settings, responseObserver);
+        var chatClient = new AnthropicRetryMiddleware(
+            new AnthropicThinkingMiddleware(
+                client.AsIChatClient(model, defaultMaxOutputTokens: 16384)),
+            responseObserver);
 
         return new ChatClientFactoryResult(chatClient, settings.HasApiKey, client);
     }
@@ -65,17 +65,71 @@ internal static class ChatClientFactory
         return new ChatClientFactoryResult(chatClient, !string.IsNullOrWhiteSpace(apiKey), null);
     }
 
-    private static AnthropicClient CreateAnthropicClient(AnthropicClientSettings settings)
+    private static AnthropicClient CreateAnthropicClient(
+        AnthropicClientSettings settings,
+        ApiResponseObserver? responseObserver = null)
     {
+        var httpClient = responseObserver?.CreateHttpClient();
+
         if (settings.HasApiKey && !string.IsNullOrWhiteSpace(settings.BaseUrl))
-            return new AnthropicClient { ApiKey = settings.ApiKey!, BaseUrl = settings.BaseUrl };
+        {
+            return httpClient != null
+                ? new AnthropicClient
+                {
+                    ApiKey = settings.ApiKey!,
+                    BaseUrl = settings.BaseUrl,
+                    HttpClient = httpClient,
+                    MaxRetries = 0,
+                }
+                : new AnthropicClient
+                {
+                    ApiKey = settings.ApiKey!,
+                    BaseUrl = settings.BaseUrl,
+                    MaxRetries = 0,
+                };
+        }
 
         if (settings.HasApiKey)
-            return new AnthropicClient { ApiKey = settings.ApiKey! };
+        {
+            return httpClient != null
+                ? new AnthropicClient
+                {
+                    ApiKey = settings.ApiKey!,
+                    HttpClient = httpClient,
+                    MaxRetries = 0,
+                }
+                : new AnthropicClient
+                {
+                    ApiKey = settings.ApiKey!,
+                    MaxRetries = 0,
+                };
+        }
 
         if (!string.IsNullOrWhiteSpace(settings.BaseUrl))
-            return new AnthropicClient { BaseUrl = settings.BaseUrl };
+        {
+            return httpClient != null
+                ? new AnthropicClient
+                {
+                    BaseUrl = settings.BaseUrl,
+                    HttpClient = httpClient,
+                    MaxRetries = 0,
+                }
+                : new AnthropicClient
+                {
+                    BaseUrl = settings.BaseUrl,
+                    MaxRetries = 0,
+                };
+        }
 
-        return new AnthropicClient();
+        return httpClient != null
+            ? new AnthropicClient
+            {
+                HttpClient = httpClient,
+                MaxRetries = 0,
+            }
+            : new AnthropicClient
+            {
+                MaxRetries = 0,
+            };
     }
 }

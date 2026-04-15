@@ -7,8 +7,9 @@ using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
-using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
+using Microsoft.Extensions.AI;
 using ApiCacheControlEphemeral = Anthropic.Models.Messages.CacheControlEphemeral;
+using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
 using ApiInputSchema = Anthropic.Models.Messages.InputSchema;
 using ApiMessageCreateParams = Anthropic.Models.Messages.MessageCreateParams;
 using ApiMessageCreateParamsSystem = Anthropic.Models.Messages.MessageCreateParamsSystem;
@@ -22,7 +23,6 @@ using ApiToolChoiceAuto = Anthropic.Models.Messages.ToolChoiceAuto;
 using ApiToolResultBlockParam = Anthropic.Models.Messages.ToolResultBlockParam;
 using ApiToolUnion = Anthropic.Models.Messages.ToolUnion;
 using ApiToolUseBlockParam = Anthropic.Models.Messages.ToolUseBlockParam;
-using Microsoft.Extensions.AI;
 
 namespace Aexon.Core.Query;
 
@@ -138,13 +138,14 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
     public string? TranscriptPath => _journal?.TranscriptPath;
 
     public ConversationSessionMetadata SessionMetadata => _sessionMetadata.Clone();
-
     public bool IsPlanModeActive => CurrentPermissionMode == PermissionMode.Plan;
 
     public PermissionMode PlanModeResumeMode =>
         _planModeResumeMode == PermissionMode.Plan
             ? PermissionMode.Default
             : _planModeResumeMode;
+
+    public ApiQuotaStatus? LatestQuotaStatus { get; private set; }
 
     /// <summary>
     /// Sends a user message through the agent loop and streams query events.
@@ -207,6 +208,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
                     }
                     catch (Exception ex)
                     {
+                        UpdateQuotaStatus(TryGetQuotaStatus(ex));
                         requestError = ex.Message;
                         break;
                     }
@@ -222,6 +224,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
                 }
                 catch (Exception ex)
                 {
+                    UpdateQuotaStatus(TryGetQuotaStatus(ex));
                     requestError = ex.Message;
                 }
             }
@@ -587,8 +590,13 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
             ToolMode = ChatToolMode.Auto,
             AdditionalProperties = new AdditionalPropertiesDictionary
             {
-                ["ThinkingMode"] = _config.ThinkingMode.ToString(),
-                ["ThinkingBudgetTokens"] = _config.ThinkingBudgetTokens,
+                [ChatClientPropertyKeys.ThinkingMode] = _config.ThinkingMode.ToString(),
+                [ChatClientPropertyKeys.ThinkingBudgetTokens] = _config.ThinkingBudgetTokens,
+                [ChatClientPropertyKeys.ApiRequestTimeout] = _config.ApiRequestTimeout,
+                [ChatClientPropertyKeys.ApiMaxRetryCount] = _config.ApiMaxRetryCount,
+                [ChatClientPropertyKeys.ApiRetryBaseDelay] = _config.ApiRetryBaseDelay,
+                [ChatClientPropertyKeys.ApiRetryMaxDelay] = _config.ApiRetryMaxDelay,
+                [ChatClientPropertyKeys.ApiRetryBackoffMultiplier] = _config.ApiRetryBackoffMultiplier,
             },
         };
 
@@ -604,6 +612,31 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
         }
 
         return options;
+    }
+
+    private void UpdateQuotaStatus(ApiQuotaStatus? status)
+    {
+        if (status != null)
+            LatestQuotaStatus = status;
+    }
+
+    private static ApiQuotaStatus? ExtractQuotaStatus(AdditionalPropertiesDictionary? additionalProperties)
+    {
+        if (additionalProperties == null ||
+            !additionalProperties.TryGetValue(ChatClientPropertyKeys.ApiQuotaStatus, out var value) ||
+            value is not ApiQuotaStatus status)
+        {
+            return null;
+        }
+
+        return status;
+    }
+
+    private static ApiQuotaStatus? TryGetQuotaStatus(Exception exception)
+    {
+        return exception.Data.Contains(ChatClientPropertyKeys.ApiQuotaStatus)
+            ? exception.Data[ChatClientPropertyKeys.ApiQuotaStatus] as ApiQuotaStatus
+            : null;
     }
 
     /// <summary>
@@ -1156,6 +1189,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
         CancellationToken ct)
     {
         var response = await _chatClient.GetResponseAsync(messages, options, ct);
+        UpdateQuotaStatus(ExtractQuotaStatus(response.AdditionalProperties));
         ChatMessageConverter.PopulateAssistantTurn(response, turn);
     }
 
@@ -1196,6 +1230,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
         await foreach (var update in _chatClient.GetStreamingResponseAsync(messages, options, ct))
         {
             updates.Add(update);
+            UpdateQuotaStatus(ExtractQuotaStatus(update.AdditionalProperties));
 
             if (updates.Count == 1 && update.ResponseId != null)
                 yield return new MessageStartEvent(update.ResponseId);
