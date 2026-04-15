@@ -441,9 +441,177 @@ public sealed class QueryEngineStreamingTests
 
         var events = await CollectAsync(engine.SubmitMessageAsync("find this"));
 
-        Assert.Contains(events, e => e is TextDeltaEvent { Text: "Okay" });
-        Assert.Contains(events, e => e is MessageEndEvent { StopReason: "tool_calls" or "tool_use" });
+        Assert.IsType<StatusEvent>(events[0]);
+        var messageStart = Assert.IsType<MessageStartEvent>(events[1]);
+        var text = Assert.Single(events.OfType<TextDeltaEvent>(), evt => evt.Text == "Okay");
+        var toolUse = Assert.Single(events.OfType<ToolUseStartEvent>());
+        var messageEnd = Assert.Single(events.OfType<MessageEndEvent>());
+        var maxTurn = Assert.Single(events.OfType<TextDeltaEvent>(), evt =>
+            evt.Text.Contains("maximum turn limit of 1", StringComparison.Ordinal));
+
+        Assert.Equal("msg-stream-1", messageStart.MessageId);
+        Assert.Equal("Okay", text.Text);
+        Assert.Equal("toolu_01T1x1fJ34qAmk2tNTrN7Up6", toolUse.ToolUseId);
+        Assert.Equal("search", toolUse.ToolName);
+        Assert.Equal("search", toolUse.Input.GetProperty("command").GetString());
+        Assert.Equal("tool_use", messageEnd.StopReason);
+        Assert.Equal(2, messageEnd.Usage?.OutputTokens);
+        Assert.Contains("maximum turn limit of 1", maxTurn.Text);
+        Assert.Contains("\"stream\":true", handler.Bodies[0], StringComparison.OrdinalIgnoreCase);
         Assert.True(Assert.IsType<QueryCompleteEvent>(events[^1]).Success);
+    }
+
+    [Fact]
+    public async Task SessionMemoryCompactAsync_PersistsSummaryToSessionMemoryFile()
+    {
+        using var temp = new TempDirectory();
+        var layout = new MemdirLayout
+        {
+            MemoryBaseDirectory = temp.FullPath("mem"),
+            ProjectRootDirectory = temp.Root,
+        };
+        layout.EnsureDirectories();
+        var sessionMemoryFile = layout.CreateSessionMemoryFile("session-1");
+        var provider = new ContextProvider
+        {
+            WorkingDirectory = temp.Root,
+        };
+
+        var engine = TestSupport.CreateQueryEngine(
+            TestSupport.CreateAnthropicClient(new FakeAnthropicHandler()),
+            new ToolRegistry(),
+            provider,
+            new DefaultPermissionChecker(),
+            new QueryEngineConfig
+            {
+                EnableAutoCompact = false,
+            },
+            journal: new RecordingJournal(),
+            sessionMemoryFile: sessionMemoryFile,
+            initialMessages:
+            [
+                UserMessage.FromText("older user"),
+                new AssistantMessage { Content = [new TextBlock("older assistant")] },
+                UserMessage.FromText("middle user"),
+                new AssistantMessage { Content = [new TextBlock("middle assistant")] },
+                UserMessage.FromText("tail user"),
+            ]);
+
+        var result = await engine.SessionMemoryCompactAsync(preserveTailCount: 1);
+
+        Assert.NotNull(result);
+        Assert.True(sessionMemoryFile.Exists);
+        Assert.Equal(result!.SummaryText, await sessionMemoryFile.LoadAsync());
+        Assert.Equal(result.SummaryText, provider.SessionMemoryContent);
+        Assert.Contains(engine.Messages, message => message is SystemCompactBoundaryMessage boundary && boundary.Mode == "session_memory");
+        Assert.Contains(engine.Messages, message => message is SystemMemorySavedMessage saved && saved.FilePath == sessionMemoryFile.Path);
+    }
+
+    [Fact]
+    public async Task SubmitMessageAsync_FinalizesToolUseBlockWhenStreamingStopEventIsMissing()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(CreateStreamingResponse(
+            ("message_start", new
+            {
+                type = "message_start",
+                message = new
+                {
+                    id = "msg-stream-2",
+                    type = "message",
+                    role = "assistant",
+                    model = ClaudeModels.DefaultMainModel,
+                    content = Array.Empty<object>(),
+                    stop_reason = (string?)null,
+                    stop_sequence = (string?)null,
+                    usage = new
+                    {
+                        input_tokens = 1,
+                        output_tokens = 0,
+                        cache_read_input_tokens = 0,
+                        cache_creation_input_tokens = 0,
+                    },
+                },
+            }),
+            ("content_block_start", new
+            {
+                type = "content_block_start",
+                index = 0,
+                content_block = new
+                {
+                    type = "tool_use",
+                    id = "toolu_missing_stop",
+                    name = "search",
+                    input = new { },
+                },
+            }),
+            ("content_block_delta", new
+            {
+                type = "content_block_delta",
+                index = 0,
+                delta = new
+                {
+                    type = "input_json_delta",
+                    partial_json = "{\"command\":\"fallback\"}",
+                },
+            }),
+            ("message_delta", new
+            {
+                type = "message_delta",
+                delta = new
+                {
+                    stop_reason = "tool_use",
+                    stop_sequence = (string?)null,
+                },
+                usage = new
+                {
+                    input_tokens = 1,
+                    output_tokens = 1,
+                    cache_read_input_tokens = 0,
+                    cache_creation_input_tokens = 0,
+                },
+            }),
+            ("message_stop", new
+            {
+                type = "message_stop",
+            })));
+
+        var tools = new ToolRegistry();
+        tools.Register(new FakeTool
+        {
+            Name = "search",
+            InputSchema = TestSupport.Json(new
+            {
+                type = "object",
+                properties = new
+                {
+                    command = new { type = "string" },
+                },
+            }),
+        });
+
+        var engine = TestSupport.CreateQueryEngine(
+            TestSupport.CreateAnthropicClient(handler),
+            tools,
+            new ContextProvider
+            {
+                WorkingDirectory = temp.Root,
+            },
+            new DefaultPermissionChecker(),
+            new QueryEngineConfig
+            {
+                UseStreamingApi = true,
+                MaxTurns = 1,
+                EnableAutoCompact = false,
+            },
+            journal: new RecordingJournal());
+
+        var events = await CollectAsync(engine.SubmitMessageAsync("find this"));
+
+        var toolUse = Assert.Single(events.OfType<ToolUseStartEvent>());
+        Assert.Equal("toolu_missing_stop", toolUse.ToolUseId);
+        Assert.Equal("fallback", toolUse.Input.GetProperty("command").GetString());
     }
 
     private static async Task<List<QueryEvent>> CollectAsync(IAsyncEnumerable<QueryEvent> events)
