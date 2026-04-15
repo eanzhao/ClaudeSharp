@@ -420,6 +420,10 @@ public class QueryEngineTests
         Assert.True(meta.Attachments.ContainsKey(attachment.Id));
 
         Assert.Single(journal.Metadata.Attachments);
+        var message = Assert.IsType<AttachmentMessage>(Assert.Single(journal.AppendedMessages));
+        Assert.Equal(attachment.Id, message.AttachmentId);
+        Assert.Equal("readme.md", message.AttachmentName);
+        Assert.Equal("/tmp/readme.md", message.SourcePath);
     }
 
     [Fact]

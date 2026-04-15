@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -55,6 +56,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
     private readonly AskUserQuestionHandler? _askUserQuestion;
     private readonly ConversationSessionMetadata _sessionMetadata;
     private readonly AttachmentRegistry _attachmentRegistry = new();
+    private readonly ConcurrentQueue<ConversationMessage> _pendingExternalMessages = new();
     private readonly List<ConversationMessage> _messages;
     private TokenUsage _totalUsage;
     private int _consecutiveAutoCompactFailures;
@@ -175,6 +177,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         string? lastStopReason = null;
 
         await EnsureSessionStartedAsync(ct);
+        FlushPendingExternalMessages();
 
         await AddMessageAsync(UserMessage.FromText(userInput), ct);
 
@@ -810,6 +813,18 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                 ct);
         }
 
+        await AddMessageAsync(
+            new AttachmentMessage
+            {
+                Content = $"Attachment registered: {attachment.FileName}",
+                AttachmentId = attachment.Id,
+                AttachmentName = attachment.FileName,
+                MediaType = attachment.MimeType,
+                SourcePath = attachment.SourcePath,
+                SizeBytes = attachment.SizeBytes,
+            },
+            ct);
+
         return attachment;
     }
 
@@ -957,6 +972,21 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         _sessionMetadata.AwayTriggerReason = null;
 
         return summary;
+    }
+
+    public async Task EnqueueExternalMessageAsync(
+        ConversationMessage message,
+        CancellationToken ct = default)
+    {
+        _pendingExternalMessages.Enqueue(message);
+        if (_journal != null)
+        {
+            await _journal.AppendMessageAsync(
+                message,
+                _contextProvider.WorkingDirectory,
+                _config.Model,
+                ct);
+        }
     }
 
     private static string FormatDuration(TimeSpan duration)
@@ -1453,6 +1483,12 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
     {
         foreach (var message in messages)
             await AddMessageAsync(message, ct);
+    }
+
+    private void FlushPendingExternalMessages()
+    {
+        while (_pendingExternalMessages.TryDequeue(out var message))
+            _messages.Add(message);
     }
 
     private async Task PersistRuntimeStateAsync(CancellationToken ct)

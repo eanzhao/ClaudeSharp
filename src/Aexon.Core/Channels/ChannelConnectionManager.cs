@@ -1,3 +1,5 @@
+using Aexon.Core.Messages;
+
 namespace Aexon.Core.Channels;
 
 /// <summary>
@@ -18,6 +20,10 @@ public sealed class ChannelConnectionManager
 {
     private readonly Dictionary<string, ChannelConnection> _connections =
         new(StringComparer.OrdinalIgnoreCase);
+    private Func<ConversationMessage, CancellationToken, Task>? _messageSink;
+
+    public void SetMessageSink(Func<ConversationMessage, CancellationToken, Task>? messageSink) =>
+        _messageSink = messageSink;
 
     public ChannelConnection Register(string channelId, ChannelKind kind, string target)
     {
@@ -38,6 +44,7 @@ public sealed class ChannelConnectionManager
             return false;
 
         connection.UpdateState(state, errorMessage);
+        EmitStatusMessage(connection);
         return true;
     }
 
@@ -52,4 +59,27 @@ public sealed class ChannelConnectionManager
                 connection.ErrorMessage,
                 connection.LastUpdatedAt))
             .ToArray();
+
+    private void EmitStatusMessage(ChannelConnection connection)
+    {
+        if (_messageSink == null)
+            return;
+
+        var message = new SystemBridgeStatusMessage
+        {
+            Content = $"{connection.Kind.ToString().ToLowerInvariant()} channel '{connection.Target}' is {connection.State.ToString().ToLowerInvariant()}.",
+            BridgeName = connection.Target,
+            Status = connection.State.ToString().ToLowerInvariant(),
+            Detail = connection.ErrorMessage,
+        };
+
+        try
+        {
+            _messageSink(message, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Connection-state messages are best-effort and must not break the transport.
+        }
+    }
 }

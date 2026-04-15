@@ -1,3 +1,4 @@
+using Aexon.Core.Messages;
 using Aexon.Core.Storage;
 
 namespace Aexon.Core.Agents;
@@ -10,6 +11,7 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
     private readonly InMemoryAgentTaskRuntime _inner;
     private readonly IConversationJournal _journal;
     private readonly AgentRetentionPolicy? _autoPrunePolicy;
+    private Func<ConversationMessage, CancellationToken, Task>? _messageSink;
 
     private PersistentAgentTaskRuntime(
         InMemoryAgentTaskRuntime inner,
@@ -38,6 +40,9 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
     }
 
     public string AllocateSubagentId() => _inner.AllocateSubagentId();
+
+    public void SetMessageSink(Func<ConversationMessage, CancellationToken, Task>? messageSink) =>
+        _messageSink = messageSink;
 
     public AgentWorkItem CreateWorkItem(
         string title,
@@ -198,7 +203,10 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
         {
             Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
             if (_inner.GetLastTerminationEvent(id) is { } terminationEvent)
+            {
                 Persist(AgentTaskPersistence.CreateTerminationEventEntry(terminationEvent));
+                EmitTerminationMessage(terminationEvent);
+            }
             ApplyAutoPrune();
         }
     }
@@ -300,6 +308,32 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
             await _journal.AppendMetadataEntryAsync(
                 AgentTaskPersistence.CreateBackgroundRunDeletedEntry(backgroundRunId),
                 cancellationToken);
+        }
+    }
+
+    private void EmitTerminationMessage(AgentTerminationEvent terminationEvent)
+    {
+        if (_messageSink == null || terminationEvent.Kind == AgentTerminationKind.Completed)
+            return;
+
+        var reason = string.IsNullOrWhiteSpace(terminationEvent.Reason)
+            ? $"{terminationEvent.Kind.ToString().ToLowerInvariant()} by {terminationEvent.Source.ToString().ToLowerInvariant()}"
+            : $"{terminationEvent.Kind.ToString().ToLowerInvariant()}: {terminationEvent.Reason}";
+
+        var message = new SystemAgentsKilledMessage
+        {
+            Content = $"Agent '{terminationEvent.SubagentId}' terminated.",
+            AgentIds = [terminationEvent.SubagentId],
+            Reason = reason,
+        };
+
+        try
+        {
+            _messageSink(message, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Runtime messages are best-effort; termination persistence should still succeed.
         }
     }
 }
