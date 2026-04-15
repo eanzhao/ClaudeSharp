@@ -79,6 +79,31 @@ public sealed class ContextProviderDeepTests
     }
 
     [Fact]
+    public async Task BuildSystemPromptAsync_AddsPlanModeInstructions()
+    {
+        using var temp = new TempDirectory();
+        var provider = new ContextProvider
+        {
+            WorkingDirectory = temp.Root,
+            PermissionContext = new PermissionContext
+            {
+                Mode = PermissionMode.Plan,
+            },
+        };
+
+        var prompt = await provider.BuildSystemPromptAsync(
+            [
+                new FakeTool { Name = "Read" },
+                new FakeTool { Name = "ExitPlanMode" },
+            ],
+            new QueryEngineConfig());
+
+        Assert.Contains("# Plan Mode", prompt);
+        Assert.Contains("Read, ExitPlanMode", prompt);
+        Assert.Contains("Goal, Findings, Implementation Steps, Risks, Verification", prompt);
+    }
+
+    [Fact]
     public async Task BuildSystemPromptAsync_IncludesGitStatusAndTruncatesLargeStatus()
     {
         using var temp = new TempDirectory();

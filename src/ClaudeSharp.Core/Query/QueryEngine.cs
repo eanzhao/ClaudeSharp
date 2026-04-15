@@ -32,7 +32,7 @@ namespace ClaudeSharp.Core.Query;
 /// <summary>
 /// Runs the main conversation loop, including model calls, tool execution, and compaction.
 /// </summary>
-public class QueryEngine : IAsyncDisposable
+public class QueryEngine : IAsyncDisposable, IPlanModeController
 {
     private readonly AnthropicClient _client;
     private readonly ToolRegistry _tools;
@@ -52,6 +52,7 @@ public class QueryEngine : IAsyncDisposable
     private int _consecutiveAutoCompactFailures;
     private bool _sessionStarted;
     private bool _sessionEnded;
+    private PermissionMode _planModeResumeMode;
 
     public QueryEngine(
         AnthropicClient client,
@@ -89,8 +90,11 @@ public class QueryEngine : IAsyncDisposable
         _journal = journal;
         _sessionMemoryFile = sessionMemoryFile;
         _sessionMetadata = initialMetadata?.Clone() ?? journal?.Metadata ?? new ConversationSessionMetadata();
+        if (_sessionMetadata.Mode is PermissionMode sessionMode)
+            _contextProvider.PermissionContext.Mode = sessionMode;
         _messages = initialMessages?.ToList() ?? [];
         _totalUsage = initialUsage ?? ComputeTotalUsage(_messages);
+        _planModeResumeMode = ResolveInitialPlanModeResumeMode();
     }
 
     /// <summary>
@@ -132,6 +136,13 @@ public class QueryEngine : IAsyncDisposable
 
     public ConversationSessionMetadata SessionMetadata => _sessionMetadata.Clone();
 
+    public bool IsPlanModeActive => CurrentPermissionMode == PermissionMode.Plan;
+
+    public PermissionMode PlanModeResumeMode =>
+        _planModeResumeMode == PermissionMode.Plan
+            ? PermissionMode.Default
+            : _planModeResumeMode;
+
     /// <summary>
     /// Sends a user message through the agent loop and streams query events.
     /// </summary>
@@ -156,7 +167,7 @@ public class QueryEngine : IAsyncDisposable
 
             var systemPrompt = await BuildSystemPromptAsync();
             var apiMessages = ConvertToApiMessages(_messages);
-            var toolDefs = await _tools.GetToolDefinitionsAsync();
+            var toolDefs = await GetAvailableToolDefinitionsAsync();
 
             yield return new StatusEvent("calling_api");
 
@@ -338,7 +349,7 @@ public class QueryEngine : IAsyncDisposable
     {
         WorkingDirectory = _contextProvider.WorkingDirectory,
         PermissionContext = _contextProvider.GetPermissionContext(),
-        Tools = _tools.GetEnabledTools(),
+        Tools = GetAvailableTools(),
         Messages = _messages,
         CancellationToken = cancellationToken,
         MainLoopModel = _config.Model,
@@ -347,7 +358,7 @@ public class QueryEngine : IAsyncDisposable
     private async Task<string> BuildSystemPromptAsync()
     {
         return await _contextProvider.BuildSystemPromptAsync(
-            _tools.GetEnabledTools(),
+            GetAvailableTools(),
             _config);
     }
 
@@ -561,6 +572,17 @@ public class QueryEngine : IAsyncDisposable
         PermissionMode mode,
         CancellationToken ct = default)
     {
+        var current = CurrentPermissionMode;
+        if (mode == PermissionMode.Plan)
+        {
+            if (current != PermissionMode.Plan)
+                _planModeResumeMode = current;
+        }
+        else
+        {
+            _planModeResumeMode = mode;
+        }
+
         _contextProvider.PermissionContext.Mode = mode;
         _sessionMetadata.Mode = mode;
         if (_journal != null)
@@ -569,6 +591,24 @@ public class QueryEngine : IAsyncDisposable
                 metadata => metadata.Mode = mode,
                 ct);
         }
+    }
+
+    public async Task<bool> EnterPlanModeAsync(CancellationToken ct = default)
+    {
+        if (IsPlanModeActive)
+            return false;
+
+        await SetPermissionModeAsync(PermissionMode.Plan, ct);
+        return true;
+    }
+
+    public async Task<PermissionMode> ExitPlanModeAsync(CancellationToken ct = default)
+    {
+        var resumeMode = PlanModeResumeMode;
+        if (IsPlanModeActive)
+            await SetPermissionModeAsync(resumeMode, ct);
+
+        return resumeMode;
     }
 
     public async Task<ConversationCompactionResult?> CompactAsync(
@@ -967,6 +1007,26 @@ public class QueryEngine : IAsyncDisposable
             _config.Model,
             ct);
     }
+
+    private PermissionMode CurrentPermissionMode =>
+        _sessionMetadata.Mode ?? _contextProvider.PermissionContext.Mode;
+
+    private PermissionMode ResolveInitialPlanModeResumeMode()
+    {
+        var current = CurrentPermissionMode;
+        return current == PermissionMode.Plan
+            ? PermissionMode.Default
+            : current;
+    }
+
+    private IReadOnlyList<ITool> GetAvailableTools() =>
+        _tools.GetEnabledTools(IsToolAllowedInCurrentMode);
+
+    private Task<IReadOnlyList<JsonElement>> GetAvailableToolDefinitionsAsync() =>
+        _tools.GetToolDefinitionsAsync(IsToolAllowedInCurrentMode);
+
+    private bool IsToolAllowedInCurrentMode(ITool tool) =>
+        !IsPlanModeActive || PlanModeToolPolicy.IsAllowedInPlanMode(tool.Name);
 
     private async Task CollectAssistantTurnAsync(
         ApiMessageCreateParams request,
