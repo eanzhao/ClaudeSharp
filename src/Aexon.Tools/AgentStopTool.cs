@@ -97,7 +97,10 @@ public sealed class AgentStopTool : ITool
             return Task.FromResult(ToolResult.Error("id is required."));
 
         var id = parsed.Id.Trim();
-        var result = _taskRuntime.RequestBackgroundRunCancellation(id, parsed.Reason?.Trim());
+        var termination = AgentTerminationInfo.Cancelled(
+            parsed.Reason?.Trim(),
+            AgentTerminationSource.User);
+        var result = _taskRuntime.RequestBackgroundRunCancellation(id, termination);
 
         var message = result switch
         {

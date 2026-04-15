@@ -1,4 +1,5 @@
 using Aexon.Core.Agents;
+using Aexon.Core.Channels;
 using Aexon.Core.Configuration;
 using Aexon.Core.Mcp;
 using Aexon.Core.Permissions;
@@ -20,6 +21,7 @@ public sealed record AppStateSnapshot
     public AnthropicTokenSourceSnapshot? ActiveTokenSource { get; init; }
     public IReadOnlyDictionary<string, McpConnectionState> McpConnections { get; init; } =
         new Dictionary<string, McpConnectionState>(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlyList<ChannelConnectionSnapshot> ChannelConnections { get; init; } = [];
     public IReadOnlyDictionary<string, AgentWorkItemStatus> WorkItems { get; init; } =
         new Dictionary<string, AgentWorkItemStatus>(StringComparer.OrdinalIgnoreCase);
     public AppStateTaskAttentionSnapshot TaskAttention { get; init; } = new();

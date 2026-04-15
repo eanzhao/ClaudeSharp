@@ -139,6 +139,13 @@ public interface IConversationJournal
         string model,
         CancellationToken cancellationToken = default);
 
+    Task DeleteMessageAsync(
+        string messageId,
+        string workingDirectory,
+        string model,
+        string? reason = null,
+        CancellationToken cancellationToken = default);
+
     Task ResetHeadAsync(CancellationToken cancellationToken = default);
 }
 
@@ -336,6 +343,39 @@ public sealed class ConversationJournal : IConversationJournal
 
             _session.CurrentLeafMessageId = activeMessages[^1].Id;
             await _store.UpdateSessionAsync(_session, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task DeleteMessageAsync(
+        string messageId,
+        string workingDirectory,
+        string model,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            _session.WorkingDirectory = workingDirectory;
+            _session.Model = model;
+
+            var tombstone = new TombstoneMessage
+            {
+                DeletedMessageId = messageId,
+                Reason = reason,
+            };
+
+            await _store.AppendMessageAsync(
+                _session,
+                tombstone,
+                _session.CurrentLeafMessageId,
+                cancellationToken);
+
+            _session.CurrentLeafMessageId = tombstone.Id;
         }
         finally
         {
@@ -894,6 +934,8 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public DateTimeOffset? AwayExitedAt { get; init; }
         public string? TriggerReason { get; init; }
         public string? SummaryText { get; init; }
+        public string? DeletedMessageId { get; init; }
+        public string? Reason { get; init; }
 
         public static PersistedConversationMessage FromDomain(ConversationMessage message) =>
             message switch
@@ -935,6 +977,14 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     TriggerReason = away.TriggerReason,
                     SummaryText = away.SummaryText,
                 },
+                TombstoneMessage tombstone => new PersistedConversationMessage
+                {
+                    Kind = "tombstone",
+                    Id = tombstone.Id,
+                    Timestamp = tombstone.Timestamp,
+                    DeletedMessageId = tombstone.DeletedMessageId,
+                    Reason = tombstone.Reason,
+                },
                 _ => throw new InvalidOperationException($"Unsupported message type: {message.GetType().Name}"),
             };
 
@@ -973,6 +1023,13 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     AwayExitedAt = AwayExitedAt ?? Timestamp,
                     TriggerReason = TriggerReason ?? string.Empty,
                     SummaryText = SummaryText ?? string.Empty,
+                },
+                "tombstone" => new TombstoneMessage
+                {
+                    Id = Id,
+                    Timestamp = Timestamp,
+                    DeletedMessageId = DeletedMessageId ?? string.Empty,
+                    Reason = Reason,
                 },
                 _ => throw new InvalidOperationException($"Unsupported persisted message kind: {Kind}"),
             };

@@ -10,6 +10,7 @@ public sealed class AgentTaskStateSnapshot
 {
     public IReadOnlyList<AgentWorkItem> WorkItems { get; init; } = [];
     public IReadOnlyList<AgentBackgroundRun> BackgroundRuns { get; init; } = [];
+    public IReadOnlyList<AgentTerminationEvent> TerminationEvents { get; init; } = [];
 }
 
 /// <summary>
@@ -22,6 +23,7 @@ public static class AgentTaskPersistence
     public const string BackgroundOutputEventType = "agent-background-output";
     public const string WorkItemDeletedEventType = "agent-work-item-deleted";
     public const string BackgroundRunDeletedEventType = "agent-background-run-deleted";
+    public const string TerminationEventType = "agent-termination";
 
     public static TranscriptMetadataEntry CreateWorkItemEntry(
         AgentWorkItem item,
@@ -31,6 +33,7 @@ public static class AgentTaskPersistence
             JsonSerializer.SerializeToElement(new WorkItemPayload
             {
                 Id = item.Id,
+                SubagentId = item.SubagentId,
                 Title = item.Title,
                 Description = item.Description,
                 Owner = item.Owner,
@@ -55,11 +58,15 @@ public static class AgentTaskPersistence
             JsonSerializer.SerializeToElement(new BackgroundRunPayload
             {
                 Id = run.Id,
+                SubagentId = run.SubagentId,
                 Name = run.Name,
                 Owner = run.Owner,
                 WorkItemId = run.WorkItemId,
                 Status = run.Status,
                 StopReason = run.StopReason,
+                TerminationKind = run.TerminationInfo?.Kind,
+                TerminationSource = run.TerminationInfo?.Source,
+                TerminationOccurredAt = run.TerminationInfo?.OccurredAt,
                 StartedAt = run.StartedAt,
                 UpdatedAt = run.UpdatedAt,
                 StoppedAt = run.StoppedAt,
@@ -101,11 +108,29 @@ public static class AgentTaskPersistence
             }),
             recordedAt ?? DateTimeOffset.UtcNow);
 
+    public static TranscriptMetadataEntry CreateTerminationEventEntry(
+        AgentTerminationEvent terminationEvent,
+        DateTimeOffset? recordedAt = null) =>
+        new(
+            TerminationEventType,
+            JsonSerializer.SerializeToElement(new TerminationEventPayload
+            {
+                SubagentId = terminationEvent.SubagentId,
+                BackgroundRunId = terminationEvent.BackgroundRunId,
+                WorkItemId = terminationEvent.WorkItemId,
+                Kind = terminationEvent.Kind,
+                Source = terminationEvent.Source,
+                Reason = terminationEvent.Reason,
+                OccurredAt = terminationEvent.OccurredAt,
+            }),
+            recordedAt ?? terminationEvent.OccurredAt);
+
     public static AgentTaskStateSnapshot Restore(
         IReadOnlyList<TranscriptMetadataEntry> metadataEntries)
     {
         var workItems = new Dictionary<string, AgentWorkItem>(StringComparer.OrdinalIgnoreCase);
         var backgroundRuns = new Dictionary<string, AgentBackgroundRun>(StringComparer.OrdinalIgnoreCase);
+        var terminationEvents = new Dictionary<string, AgentTerminationEvent>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var entry in metadataEntries)
         {
@@ -171,6 +196,26 @@ public static class AgentTaskPersistence
                         !string.IsNullOrWhiteSpace(deletedBackgroundRun.Id))
                     {
                         backgroundRuns.Remove(deletedBackgroundRun.Id);
+                        terminationEvents.Remove(deletedBackgroundRun.Id);
+                    }
+
+                    break;
+
+                case TerminationEventType:
+                    if (TryReadPayload(entry.Payload, out TerminationEventPayload? terminationPayload) &&
+                        terminationPayload != null &&
+                        !string.IsNullOrWhiteSpace(terminationPayload.BackgroundRunId))
+                    {
+                        terminationEvents[terminationPayload.BackgroundRunId] = new AgentTerminationEvent
+                        {
+                            SubagentId = terminationPayload.SubagentId,
+                            BackgroundRunId = terminationPayload.BackgroundRunId,
+                            WorkItemId = terminationPayload.WorkItemId,
+                            Kind = terminationPayload.Kind,
+                            Source = terminationPayload.Source,
+                            Reason = terminationPayload.Reason,
+                            OccurredAt = terminationPayload.OccurredAt,
+                        };
                     }
 
                     break;
@@ -187,6 +232,10 @@ public static class AgentTaskPersistence
                 .OrderBy(run => run.StartedAt)
                 .ThenBy(run => run.Id, StringComparer.OrdinalIgnoreCase)
                 .ToArray(),
+            TerminationEvents = terminationEvents.Values
+                .OrderBy(evt => evt.OccurredAt)
+                .ThenBy(evt => evt.BackgroundRunId, StringComparer.OrdinalIgnoreCase)
+                .ToArray(),
         };
     }
 
@@ -195,6 +244,7 @@ public static class AgentTaskPersistence
         var item = new AgentWorkItem
         {
             Id = payload.Id,
+            SubagentId = payload.SubagentId,
             Title = payload.Title,
             Description = payload.Description,
             Owner = payload.Owner,
@@ -220,11 +270,21 @@ public static class AgentTaskPersistence
         new()
         {
             Id = payload.Id,
+            SubagentId = payload.SubagentId,
             Name = payload.Name,
             Owner = payload.Owner,
             WorkItemId = payload.WorkItemId,
             Status = payload.Status,
             StopReason = payload.StopReason,
+            TerminationInfo = payload.TerminationKind is { } kind
+                ? new AgentTerminationInfo
+                {
+                    Kind = kind,
+                    Source = payload.TerminationSource ?? AgentTerminationSource.Agent,
+                    Reason = payload.StopReason,
+                    OccurredAt = payload.TerminationOccurredAt ?? payload.StoppedAt ?? payload.UpdatedAt,
+                }
+                : null,
             StartedAt = payload.StartedAt,
             UpdatedAt = payload.UpdatedAt,
             StoppedAt = payload.StoppedAt,
@@ -253,6 +313,7 @@ public static class AgentTaskPersistence
     private sealed class WorkItemPayload
     {
         public required string Id { get; init; }
+        public string? SubagentId { get; init; }
         public required string Title { get; init; }
         public string? Description { get; init; }
         public string? Owner { get; init; }
@@ -271,11 +332,15 @@ public static class AgentTaskPersistence
     private sealed class BackgroundRunPayload
     {
         public required string Id { get; init; }
+        public string? SubagentId { get; init; }
         public required string Name { get; init; }
         public string? Owner { get; init; }
         public string? WorkItemId { get; init; }
         public AgentBackgroundRunStatus Status { get; init; }
         public string? StopReason { get; init; }
+        public AgentTerminationKind? TerminationKind { get; init; }
+        public AgentTerminationSource? TerminationSource { get; init; }
+        public DateTimeOffset? TerminationOccurredAt { get; init; }
         public DateTimeOffset StartedAt { get; init; }
         public DateTimeOffset UpdatedAt { get; init; }
         public DateTimeOffset? StoppedAt { get; init; }
@@ -290,5 +355,16 @@ public static class AgentTaskPersistence
     private sealed class DeletedEntityPayload
     {
         public required string Id { get; init; }
+    }
+
+    private sealed class TerminationEventPayload
+    {
+        public required string SubagentId { get; init; }
+        public required string BackgroundRunId { get; init; }
+        public string? WorkItemId { get; init; }
+        public AgentTerminationKind Kind { get; init; }
+        public AgentTerminationSource Source { get; init; }
+        public string? Reason { get; init; }
+        public DateTimeOffset OccurredAt { get; init; }
     }
 }

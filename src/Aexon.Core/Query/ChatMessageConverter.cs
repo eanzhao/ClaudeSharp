@@ -17,6 +17,9 @@ internal static class ChatMessageConverter
         {
             switch (msg)
             {
+                case TombstoneMessage:
+                    continue;
+
                 case UserMessage userMsg:
                     result.Add(ToMeaiUserMessage(userMsg));
                     break;
