@@ -1,4 +1,4 @@
-# ClaudeSharp 文档总览
+# Aexon 文档总览
 
 这套文档主要回答三件事：
 
@@ -9,8 +9,8 @@
 ## 建议阅读顺序
 
 1. [Claude Code 实现解析](./claude-code/implementation.md)
-2. [ClaudeSharp 实现解析](./claudesharp/implementation.md)
-3. [Claude Code 与 ClaudeSharp 对照表](./compare/claude-code-vs-claudesharp.md)
+2. [Aexon 实现解析](./claudesharp/implementation.md)
+3. [Claude Code 与 Aexon 对照表](./compare/claude-code-vs-claudesharp.md)
 
 ## 目录结构
 
@@ -33,8 +33,8 @@ docs/
 这几份文档不是空想出来的，主要基于仓库里已经存在的代码路径：
 
 - Claude Code 侧：`claude-code/src/`
-- ClaudeSharp 侧：`src/ClaudeSharp.Cli/`、`src/ClaudeSharp.Core/`、`src/ClaudeSharp.Tools/`、`src/ClaudeSharp.Commands/`
-- 测试侧：`tests/ClaudeSharp.Core.Tests/`
+- Aexon 侧：`src/Aexon.Cli/`、`src/Aexon.Core/`、`src/Aexon.Tools/`、`src/Aexon.Commands/`
+- 测试侧：`tests/Aexon.Core.Tests/`
 
 其中 `claude-code/` 是仓库里保存的一份源码快照，所以这里讲的“Claude Code 怎么实现”，本质上是在解释这份快照里能看到的实现方式，不把它当成官方架构白皮书来写。
 
@@ -42,7 +42,7 @@ docs/
 
 - 不只讲“有什么功能”，还会讲“入口在哪里、数据怎么流、状态怎么落盘”。
 - 尽量把说明落到具体文件，而不是泛泛地说“有个模块负责这个”。
-- 对 ClaudeSharp 会明确区分：
+- 对 Aexon 会明确区分：
   - 已经在线路上跑起来的主路径
   - 从 Claude Code 借鉴过来的设计
   - 当前还没覆盖、或者做了简化的部分

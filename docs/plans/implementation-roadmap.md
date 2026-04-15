@@ -1,4 +1,4 @@
-# ClaudeSharp 实现路线图
+# Aexon 实现路线图
 
 > Claude Code (.NET 10 / C#) 完整重实现 — 按核心价值排序，最精华部分优先
 
@@ -93,7 +93,7 @@ public class StreamingToolExecutor
 }
 ```
 
-**文件**: 新建 `src/ClaudeSharp.Core/Tools/StreamingToolExecutor.cs`
+**文件**: 新建 `src/Aexon.Core/Tools/StreamingToolExecutor.cs`
 
 ---
 
@@ -115,7 +115,7 @@ public class StreamingToolExecutor
 - 或 `Directory.EnumerateFiles` + 自定义 glob 匹配
 - gitignore 解析: 可用 `MAB.DotIgnore` 或自己写一个简单的
 
-**文件**: 新建 `src/ClaudeSharp.Tools/GlobTool.cs`
+**文件**: 新建 `src/Aexon.Tools/GlobTool.cs`
 
 ---
 
@@ -140,7 +140,7 @@ public class StreamingToolExecutor
 - 正则检测重定向和管道
 - 特殊处理 `git` 子命令 (`git log` = 只读, `git push` = 写入)
 
-**文件**: 增强 `src/ClaudeSharp.Tools/BashTool.cs` 或新建 `BashClassifier.cs`
+**文件**: 增强 `src/Aexon.Tools/BashTool.cs` 或新建 `BashClassifier.cs`
 
 ---
 
@@ -168,7 +168,7 @@ public class SessionStorage
 }
 ```
 
-**文件**: 新建 `src/ClaudeSharp.Core/Storage/SessionStorage.cs`
+**文件**: 新建 `src/Aexon.Core/Storage/SessionStorage.cs`
 
 ---
 
@@ -190,7 +190,7 @@ AnsiConsole.MarkupLine("[green]✓[/] File written: path/to/file");
 AnsiConsole.MarkupLine("[red]✗[/] Permission denied");
 ```
 
-**文件**: 新建 `src/ClaudeSharp.Cli/ConsoleRenderer.cs`
+**文件**: 新建 `src/Aexon.Cli/ConsoleRenderer.cs`
 
 ---
 
@@ -258,7 +258,7 @@ public class AgentTool : ITool
 }
 ```
 
-**文件**: 新建 `src/ClaudeSharp.Tools/AgentTool.cs`
+**文件**: 新建 `src/Aexon.Tools/AgentTool.cs`
 
 ---
 
@@ -313,7 +313,7 @@ public class CompactionService
 }
 ```
 
-**文件**: 新建 `src/ClaudeSharp.Core/Services/CompactionService.cs`
+**文件**: 新建 `src/Aexon.Core/Services/CompactionService.cs`
 
 ---
 
@@ -354,7 +354,7 @@ public class CompactionService
 }
 ```
 
-**文件**: 新建 `src/ClaudeSharp.Core/Hooks/HookRegistry.cs`
+**文件**: 新建 `src/Aexon.Core/Hooks/HookRegistry.cs`
 
 ---
 
@@ -390,7 +390,7 @@ Claude 调用 MCP 工具 → 转发到 MCP server → 返回结果
 
 **推荐**: 使用 [ModelContextProtocol](https://github.com/modelcontextprotocol/csharp-sdk) .NET SDK
 
-**文件**: 新建 `src/ClaudeSharp.Core/Services/Mcp/` 目录
+**文件**: 新建 `src/Aexon.Core/Services/Mcp/` 目录
 
 ---
 
@@ -418,7 +418,7 @@ When creating a commit, follow these rules:
 3. ...
 ```
 
-**文件**: 新建 `src/ClaudeSharp.Core/Skills/SkillLoader.cs`
+**文件**: 新建 `src/Aexon.Core/Skills/SkillLoader.cs`
 
 ---
 
