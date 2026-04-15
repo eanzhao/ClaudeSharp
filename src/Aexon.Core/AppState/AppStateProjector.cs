@@ -1,4 +1,5 @@
 using Aexon.Core.Agents;
+using Aexon.Core.Channels;
 using Aexon.Core.Configuration;
 using Aexon.Core.Mcp;
 using Aexon.Core.Permissions;
@@ -20,6 +21,7 @@ public sealed class AppStateProjector
         ManagedSettingsSnapshot? managedSettings = null,
         AnthropicTokenSourceSnapshot? activeTokenSource = null,
         McpConnectionManager? mcpConnectionManager = null,
+        ChannelConnectionManager? channelConnectionManager = null,
         IAgentTaskRuntime? agentTaskRuntime = null,
         IAgentTeamRuntime? agentTeamRuntime = null,
         IAgentMessageRuntime? agentMessageRuntime = null,
@@ -40,6 +42,7 @@ public sealed class AppStateProjector
             ManagedSettings = managedSettings ?? ManagedSettingsSnapshot.Empty,
             ActiveTokenSource = activeTokenSource,
             McpConnections = SnapshotMcpConnections(mcpConnectionManager),
+            ChannelConnections = SnapshotChannelConnections(channelConnectionManager),
             WorkItems = workItems,
             TaskAttention = SnapshotTaskAttention(agentTaskRuntime),
             Teams = SnapshotTeams(agentTeamRuntime),
@@ -61,6 +64,12 @@ public sealed class AppStateProjector
                 snapshot => snapshot.ServerId,
                 snapshot => snapshot.State,
                 StringComparer.OrdinalIgnoreCase);
+    }
+
+    internal static IReadOnlyList<ChannelConnectionSnapshot> SnapshotChannelConnections(
+        ChannelConnectionManager? manager)
+    {
+        return manager?.Snapshot() ?? [];
     }
 
     internal static IReadOnlyDictionary<string, AgentWorkItemStatus> SnapshotWorkItems(
