@@ -27,6 +27,11 @@ public record MessageStartEvent(string MessageId) : QueryEvent;
 /// </summary>
 public record MessageEndEvent(string? StopReason, Messages.TokenUsage? Usage) : QueryEvent;
 
+/// <summary>
+/// Represents prompt cache status update.
+/// </summary>
+public record PromptCacheStatusEvent(Messages.TokenUsage Usage, bool BreakDetected) : QueryEvent;
+
 // Tool events
 
 /// <summary>

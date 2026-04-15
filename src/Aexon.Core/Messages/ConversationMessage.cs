@@ -172,6 +172,12 @@ public record TokenUsage
     public int CacheReadInputTokens { get; init; }
     public int CacheCreationInputTokens { get; init; }
 
+    public int TotalInputTokens => InputTokens + CacheReadInputTokens + CacheCreationInputTokens;
+
+    public double CacheHitRate => TotalInputTokens == 0
+        ? 0
+        : (double)CacheReadInputTokens / TotalInputTokens;
+
     public int TotalTokens => InputTokens + OutputTokens + CacheReadInputTokens + CacheCreationInputTokens;
 
     public static TokenUsage Empty => new();

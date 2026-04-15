@@ -314,7 +314,9 @@ internal sealed class FakeAnthropicHandler : HttpMessageHandler
     public static HttpResponseMessage CreateMessageResponse(
         string text = "ok",
         int inputTokens = 1,
-        int outputTokens = 1)
+        int outputTokens = 1,
+        int cacheReadInputTokens = 0,
+        int cacheCreationInputTokens = 0)
     {
         var payload = JsonSerializer.Serialize(new
         {
@@ -332,8 +334,8 @@ internal sealed class FakeAnthropicHandler : HttpMessageHandler
             {
                 input_tokens = inputTokens,
                 output_tokens = outputTokens,
-                cache_read_input_tokens = 0,
-                cache_creation_input_tokens = 0,
+                cache_read_input_tokens = cacheReadInputTokens,
+                cache_creation_input_tokens = cacheCreationInputTokens,
             },
         });
 

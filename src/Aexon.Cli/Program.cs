@@ -692,6 +692,19 @@ Environment:
                             Console.WriteLine();
                         break;
 
+                    case PromptCacheStatusEvent cacheStatus when cacheStatus.BreakDetected:
+                        if (cacheStatus.Usage.CacheCreationInputTokens > 0)
+                        {
+                            Console.WriteLine(
+                                $"[cache] prompt cache 断了：这次没命中旧缓存，已按当前前缀重建 {cacheStatus.Usage.CacheCreationInputTokens:N0} 个 token。");
+                        }
+                        else
+                        {
+                            Console.WriteLine(
+                                "[cache] prompt cache 断了：这次没命中旧缓存，可能是前缀变化、缓存过期，或当前上下文还没达到缓存门槛。");
+                        }
+                        break;
+
                     case QueryCompleteEvent complete when !complete.Success:
                         Console.WriteLine();
                         Console.WriteLine($"请求失败: {complete.ErrorMessage}");

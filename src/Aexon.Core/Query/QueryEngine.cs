@@ -7,6 +7,21 @@ using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
 using Aexon.Core.Storage;
 using Aexon.Core.Tools;
+using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
+using ApiCacheControlEphemeral = Anthropic.Models.Messages.CacheControlEphemeral;
+using ApiInputSchema = Anthropic.Models.Messages.InputSchema;
+using ApiMessageCreateParams = Anthropic.Models.Messages.MessageCreateParams;
+using ApiMessageCreateParamsSystem = Anthropic.Models.Messages.MessageCreateParamsSystem;
+using ApiMessageParam = Anthropic.Models.Messages.MessageParam;
+using ApiMessageParamContent = Anthropic.Models.Messages.MessageParamContent;
+using ApiRole = Anthropic.Models.Messages.Role;
+using ApiTextBlockParam = Anthropic.Models.Messages.TextBlockParam;
+using ApiThinkingBlockParam = Anthropic.Models.Messages.ThinkingBlockParam;
+using ApiTool = Anthropic.Models.Messages.Tool;
+using ApiToolChoiceAuto = Anthropic.Models.Messages.ToolChoiceAuto;
+using ApiToolResultBlockParam = Anthropic.Models.Messages.ToolResultBlockParam;
+using ApiToolUnion = Anthropic.Models.Messages.ToolUnion;
+using ApiToolUseBlockParam = Anthropic.Models.Messages.ToolUseBlockParam;
 using Microsoft.Extensions.AI;
 
 namespace Aexon.Core.Query;
@@ -16,6 +31,8 @@ namespace Aexon.Core.Query;
 /// </summary>
 public class QueryEngine : IAsyncDisposable, IPlanModeController
 {
+    private const int MaxPromptCacheBreakpoints = 4;
+    private const int PromptCacheLookbackWindowBlocks = 20;
     private readonly IChatClient _chatClient;
     private readonly ToolRegistry _tools;
     private readonly IToolRuntime _toolRuntime;
@@ -35,6 +52,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
     private int _consecutiveAutoCompactFailures;
     private bool _sessionStarted;
     private bool _sessionEnded;
+    private bool _promptCacheWarm;
     private PermissionMode _planModeResumeMode;
 
     public QueryEngine(
@@ -151,13 +169,24 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
                 yield return compactionEvent;
 
             var systemPrompt = await BuildSystemPromptAsync();
+            var promptCachingEnabled = SupportsPromptCaching(_config.Model);
+            var hasSystemPromptCacheBreakpoint =
+                promptCachingEnabled && !string.IsNullOrWhiteSpace(systemPrompt);
+            var messagePromptCacheBreakpointBudget = promptCachingEnabled
+                ? MaxPromptCacheBreakpoints - (hasSystemPromptCacheBreakpoint ? 1 : 0)
+                : 0;
             var chatMessages = ChatMessageConverter.ToMeaiMessages(_messages);
             var toolDefs = await GetAvailableToolDefinitionsAsync();
 
             yield return new StatusEvent("calling_api");
 
             var assistantTurn = new AssistantTurnAccumulator();
-            var chatOptions = BuildChatOptions(systemPrompt, toolDefs);
+            var chatOptions = BuildChatOptions(
+                systemPrompt,
+                toolDefs,
+                promptCachingEnabled,
+                hasSystemPromptCacheBreakpoint,
+                messagePromptCacheBreakpointBudget);
 
             string? requestError = null;
 
@@ -218,8 +247,14 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
                 yield break;
             }
 
+            PromptCacheStatusEvent? promptCacheStatusEvent = null;
             if (assistantTurn.Usage != null)
+            {
                 _totalUsage += assistantTurn.Usage;
+                promptCacheStatusEvent = CreatePromptCacheStatusEvent(
+                    promptCachingEnabled,
+                    assistantTurn.Usage);
+            }
 
             if (!_config.UseStreamingApi)
             {
@@ -229,6 +264,9 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
 
             if (assistantTurn.MessageId != null || assistantTurn.Usage != null || assistantTurn.ContentBlocks.Count > 0)
                 yield return new MessageEndEvent(assistantTurn.StopReason, assistantTurn.Usage);
+
+            if (promptCacheStatusEvent != null)
+                yield return promptCacheStatusEvent;
 
             await AddMessageAsync(new AssistantMessage
             {
@@ -340,7 +378,205 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
             _config);
     }
 
-    private ChatOptions BuildChatOptions(string systemPrompt, IReadOnlyList<JsonElement> toolDefs)
+    /// <summary>
+    /// Converts internal messages into Anthropic Messages API payloads.
+    /// </summary>
+    private static List<ApiMessageParam> ConvertToApiMessages(
+        List<ConversationMessage> messages,
+        int promptCacheMessageBreakpointBudget)
+    {
+        var pendingMessages = new List<PendingApiMessage>();
+        var promptCacheCandidates = new List<PromptCacheBlockCandidate>();
+        var stableMessageCount = promptCacheMessageBreakpointBudget > 0
+            ? GetStablePromptCacheMessageCount(messages)
+            : 0;
+        var contentPosition = 0;
+
+        for (var messageIndex = 0; messageIndex < messages.Count; messageIndex++)
+        {
+            var msg = messages[messageIndex];
+            var includeInStablePrefix = messageIndex < stableMessageCount;
+
+            switch (msg)
+            {
+                case UserMessage userMsg:
+                    var userContents = new List<ApiContentBlockParam>();
+                    foreach (var block in userMsg.Content)
+                    {
+                        if (block is TextBlock tb)
+                        {
+                            var contentIndex = userContents.Count;
+                            userContents.Add(new ApiContentBlockParam(new ApiTextBlockParam(tb.Text)));
+                            Action? applyCacheControl = null;
+                            if (!string.IsNullOrWhiteSpace(tb.Text))
+                            {
+                                applyCacheControl = () => userContents[contentIndex] =
+                                    new ApiContentBlockParam(new ApiTextBlockParam(tb.Text)
+                                    {
+                                        CacheControl = CreatePromptCacheControl(),
+                                    });
+                            }
+
+                            RegisterPromptCacheCandidate(
+                                promptCacheCandidates,
+                                includeInStablePrefix,
+                                ref contentPosition,
+                                applyCacheControl);
+                        }
+                        else if (block is ToolResultBlock trb)
+                        {
+                            var contentIndex = userContents.Count;
+                            userContents.Add(new ApiContentBlockParam(new ApiToolResultBlockParam(trb.ToolUseId)
+                            {
+                                Content = trb.Content,
+                                IsError = trb.IsError,
+                            }));
+                            RegisterPromptCacheCandidate(
+                                promptCacheCandidates,
+                                includeInStablePrefix,
+                                ref contentPosition,
+                                () => userContents[contentIndex] =
+                                    new ApiContentBlockParam(new ApiToolResultBlockParam(trb.ToolUseId)
+                                    {
+                                        Content = trb.Content,
+                                        IsError = trb.IsError,
+                                        CacheControl = CreatePromptCacheControl(),
+                                    }));
+                        }
+                    }
+
+                    pendingMessages.Add(new PendingApiMessage(ApiRole.User, userContents));
+                    break;
+
+                case AssistantMessage assistantMsg:
+                    var assistantContents = new List<ApiContentBlockParam>();
+                    foreach (var block in assistantMsg.Content)
+                    {
+                        if (block is TextBlock tb)
+                        {
+                            var contentIndex = assistantContents.Count;
+                            assistantContents.Add(new ApiContentBlockParam(new ApiTextBlockParam(tb.Text)));
+                            Action? applyCacheControl = null;
+                            if (!string.IsNullOrWhiteSpace(tb.Text))
+                            {
+                                applyCacheControl = () => assistantContents[contentIndex] =
+                                    new ApiContentBlockParam(new ApiTextBlockParam(tb.Text)
+                                    {
+                                        CacheControl = CreatePromptCacheControl(),
+                                    });
+                            }
+
+                            RegisterPromptCacheCandidate(
+                                promptCacheCandidates,
+                                includeInStablePrefix,
+                                ref contentPosition,
+                                applyCacheControl);
+                        }
+                        else if (block is ToolUseBlock tub)
+                        {
+                            var input = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+                                tub.Input.GetRawText()) ?? new Dictionary<string, JsonElement>();
+                            var contentIndex = assistantContents.Count;
+                            assistantContents.Add(new ApiContentBlockParam(new ApiToolUseBlockParam
+                            {
+                                ID = tub.ToolUseId,
+                                Name = tub.Name,
+                                Input = input,
+                            }));
+                            RegisterPromptCacheCandidate(
+                                promptCacheCandidates,
+                                includeInStablePrefix,
+                                ref contentPosition,
+                                () => assistantContents[contentIndex] =
+                                    new ApiContentBlockParam(new ApiToolUseBlockParam
+                                    {
+                                        ID = tub.ToolUseId,
+                                        Name = tub.Name,
+                                        Input = input,
+                                        CacheControl = CreatePromptCacheControl(),
+                                    }));
+                        }
+                        else if (block is ThinkingBlock thinking && !string.IsNullOrWhiteSpace(thinking.Signature))
+                        {
+                            assistantContents.Add(new ApiContentBlockParam(new ApiThinkingBlockParam
+                            {
+                                Signature = thinking.Signature,
+                                Thinking = thinking.Text,
+                            }));
+                            RegisterPromptCacheCandidate(
+                                promptCacheCandidates,
+                                includeInStablePrefix,
+                                ref contentPosition,
+                                null);
+                        }
+                    }
+
+                    if (assistantContents.Count == 0)
+                        continue;
+
+                    pendingMessages.Add(new PendingApiMessage(ApiRole.Assistant, assistantContents));
+                    break;
+            }
+        }
+
+        ApplyPromptCacheBreakpoints(promptCacheCandidates, promptCacheMessageBreakpointBudget);
+        return pendingMessages
+            .Select(message => new ApiMessageParam
+            {
+                Role = message.Role,
+                Content = new ApiMessageParamContent(message.Content),
+            })
+            .ToList();
+    }
+
+    private static ApiMessageCreateParamsSystem CreateApiSystemPrompt(
+        string systemPrompt,
+        bool includeCacheBreakpoint)
+    {
+        if (!includeCacheBreakpoint)
+            return new ApiMessageCreateParamsSystem(systemPrompt, null);
+
+        var textBlock = new ApiTextBlockParam(systemPrompt)
+        {
+            CacheControl = CreatePromptCacheControl(),
+        };
+
+        return new ApiMessageCreateParamsSystem(new[] { textBlock }, null);
+    }
+
+    private static List<ApiToolUnion> ConvertToolDefinitions(
+        IReadOnlyList<JsonElement> defs)
+    {
+        var tools = new List<ApiToolUnion>();
+
+        foreach (var def in defs)
+        {
+            var schema = JsonSerializer.Deserialize<ApiInputSchema>(
+                def.GetProperty("input_schema").GetRawText());
+
+            if (schema == null)
+                continue;
+
+            var tool = new ApiTool
+            {
+                Name = def.GetProperty("name").GetString()!,
+                Description = def.GetProperty("description").GetString(),
+                InputSchema = schema,
+                Strict = false,
+            };
+
+            tools.Add(new ApiToolUnion(tool));
+        }
+
+        return tools;
+    }
+
+    private ChatOptions BuildChatOptions(
+        string systemPrompt,
+        IReadOnlyList<JsonElement> toolDefs,
+        bool promptCachingEnabled,
+        bool hasSystemPromptCacheBreakpoint,
+        int messagePromptCacheBreakpointBudget)
     {
         var options = new ChatOptions
         {
@@ -355,6 +591,17 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
                 ["ThinkingBudgetTokens"] = _config.ThinkingBudgetTokens,
             },
         };
+
+        if (promptCachingEnabled)
+        {
+            options.RawRepresentationFactory = _ => new ApiMessageCreateParams
+            {
+                Model = _config.Model,
+                MaxTokens = _config.MaxTokens,
+                System = CreateApiSystemPrompt(systemPrompt, hasSystemPromptCacheBreakpoint),
+                Messages = ConvertToApiMessages(_messages, messagePromptCacheBreakpointBudget),
+            };
+        }
 
         return options;
     }
@@ -1017,6 +1264,102 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
     {
         await EndSessionAsync(dueToClear: false, CancellationToken.None);
     }
+
+    private PromptCacheStatusEvent? CreatePromptCacheStatusEvent(
+        bool promptCachingEnabled,
+        TokenUsage usage)
+    {
+        if (!promptCachingEnabled)
+        {
+            _promptCacheWarm = false;
+            return null;
+        }
+
+        var hasCacheActivity =
+            usage.CacheReadInputTokens > 0 ||
+            usage.CacheCreationInputTokens > 0;
+        var breakDetected = _promptCacheWarm && usage.CacheReadInputTokens == 0;
+        _promptCacheWarm = hasCacheActivity;
+
+        return breakDetected
+            ? new PromptCacheStatusEvent(usage, BreakDetected: true)
+            : null;
+    }
+
+    private static ApiCacheControlEphemeral CreatePromptCacheControl() => new();
+
+    private static int GetStablePromptCacheMessageCount(
+        IReadOnlyList<ConversationMessage> messages)
+    {
+        if (messages.Count == 0)
+            return 0;
+
+        return messages[^1] is UserMessage user &&
+               user.Content.Any(block => block is not ToolResultBlock)
+            ? messages.Count - 1
+            : messages.Count;
+    }
+
+    private static void RegisterPromptCacheCandidate(
+        List<PromptCacheBlockCandidate> candidates,
+        bool includeInStablePrefix,
+        ref int contentPosition,
+        Action? applyCacheControl)
+    {
+        if (!includeInStablePrefix)
+            return;
+
+        if (applyCacheControl != null)
+            candidates.Add(new PromptCacheBlockCandidate(contentPosition, applyCacheControl));
+
+        contentPosition++;
+    }
+
+    private static void ApplyPromptCacheBreakpoints(
+        IReadOnlyList<PromptCacheBlockCandidate> candidates,
+        int breakpointBudget)
+    {
+        if (breakpointBudget <= 0 || candidates.Count == 0)
+            return;
+
+        var current = candidates[^1];
+        current.ApplyCacheControl();
+        var applied = 1;
+
+        while (applied < breakpointBudget && current.Position >= PromptCacheLookbackWindowBlocks)
+        {
+            var lowerBound = current.Position - (PromptCacheLookbackWindowBlocks - 1);
+            var next = candidates.FirstOrDefault(candidate =>
+                candidate.Position >= lowerBound &&
+                candidate.Position < current.Position);
+            if (next == null)
+                break;
+
+            next.ApplyCacheControl();
+            current = next;
+            applied++;
+        }
+    }
+
+    private static bool SupportsPromptCaching(string? modelOrAlias)
+    {
+        var descriptor = ClaudeModelCatalog.TryResolve(modelOrAlias);
+        return descriptor?.StableId is
+            "claude-3-5-haiku" or
+            "claude-3-7-sonnet" or
+            "claude-haiku-4-5" or
+            "claude-sonnet-4" or
+            "claude-sonnet-4-5" or
+            "claude-sonnet-4-6" or
+            "claude-opus-4" or
+            "claude-opus-4-1" or
+            "claude-opus-4-5" or
+            "claude-opus-4-6";
+    }
+
+    private sealed record PendingApiMessage(ApiRole Role, List<ApiContentBlockParam> Content);
+
+    private sealed record PromptCacheBlockCandidate(int Position, Action ApplyCacheControl);
 
     private static TokenUsage ComputeTotalUsage(
         IReadOnlyList<ConversationMessage> messages)

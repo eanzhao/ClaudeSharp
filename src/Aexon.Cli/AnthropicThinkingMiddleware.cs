@@ -51,12 +51,24 @@ internal sealed class AnthropicThinkingMiddleware(IChatClient inner) : Delegatin
             return options;
 
         var cloned = options.Clone();
-        cloned.RawRepresentationFactory = _ => new MessageCreateParams
+        var existingFactory = cloned.RawRepresentationFactory;
+        cloned.RawRepresentationFactory = requestOptions =>
         {
-            Model = options.ModelId ?? "claude-sonnet-4-6",
-            MaxTokens = options.MaxOutputTokens ?? 16384,
-            Messages = [],
-            Thinking = thinkingConfig,
+            if (existingFactory?.Invoke(requestOptions) is MessageCreateParams existingRequest)
+            {
+                return new MessageCreateParams(existingRequest)
+                {
+                    Thinking = thinkingConfig,
+                };
+            }
+
+            return new MessageCreateParams
+            {
+                Model = options.ModelId ?? "claude-sonnet-4-6",
+                MaxTokens = options.MaxOutputTokens ?? 16384,
+                Messages = [],
+                Thinking = thinkingConfig,
+            };
         };
 
         return cloned;

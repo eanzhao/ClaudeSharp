@@ -167,6 +167,45 @@ public class QueryEngineTests
     }
 
     [Fact]
+    public async Task SubmitMessageAsync_EmitsPromptCacheBreakEventAfterWarmCacheMiss()
+    {
+        using var temp = new TempDirectory();
+        var handler = new FakeAnthropicHandler();
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse(
+            text: "first",
+            inputTokens: 50,
+            outputTokens: 10,
+            cacheCreationInputTokens: 1_200));
+        handler.EnqueueResponse(FakeAnthropicHandler.CreateMessageResponse(
+            text: "second",
+            inputTokens: 60,
+            outputTokens: 10));
+        var client = TestSupport.CreateChatClient(handler);
+        var engine = CreateEngine(
+            temp.Root,
+            new RecordingJournal(),
+            client: client,
+            config: new QueryEngineConfig
+            {
+                EnableAutoCompact = false,
+                Model = ClaudeModels.DefaultMainModel,
+            });
+
+        await foreach (var _ in engine.SubmitMessageAsync("warm up"))
+        {
+        }
+
+        var secondTurnEvents = new List<QueryEvent>();
+        await foreach (var evt in engine.SubmitMessageAsync("trigger miss"))
+            secondTurnEvents.Add(evt);
+
+        var cacheEvent = Assert.Single(secondTurnEvents.OfType<PromptCacheStatusEvent>());
+        Assert.True(cacheEvent.BreakDetected);
+        Assert.Equal(0, cacheEvent.Usage.CacheReadInputTokens);
+        Assert.Equal(0, cacheEvent.Usage.CacheCreationInputTokens);
+    }
+
+    [Fact]
     public async Task ClearMessagesAsync_ResetsJournalHead()
     {
         using var temp = new TempDirectory();
