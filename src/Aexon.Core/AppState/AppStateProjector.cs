@@ -3,6 +3,7 @@ using Aexon.Core.Channels;
 using Aexon.Core.Configuration;
 using Aexon.Core.Mcp;
 using Aexon.Core.Permissions;
+using Aexon.Core.Query;
 using Aexon.Core.Todos;
 
 namespace Aexon.Core.AppState;
@@ -26,7 +27,8 @@ public sealed class AppStateProjector
         IAgentTeamRuntime? agentTeamRuntime = null,
         IAgentMessageRuntime? agentMessageRuntime = null,
         AgentRuntimeOptions? agentRuntimeOptions = null,
-        ITodoRuntime? todoRuntime = null)
+        ITodoRuntime? todoRuntime = null,
+        IAwayModeController? awayModeController = null)
     {
         var workItems = SnapshotWorkItems(agentTaskRuntime);
         var effectiveAutoResumeMode = agentRuntimeOptions?.AutoResumeMode ?? autoResumeMode;
@@ -48,6 +50,8 @@ public sealed class AppStateProjector
             Teams = SnapshotTeams(agentTeamRuntime),
             Mailboxes = SnapshotMailboxes(agentMessageRuntime),
             Todos = SnapshotTodos(todoRuntime),
+            IsAwayModeActive = awayModeController?.IsAwayModeActive ?? false,
+            AwayEnteredAt = awayModeController?.AwayEnteredAt,
         };
     }
 

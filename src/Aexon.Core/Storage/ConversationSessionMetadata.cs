@@ -14,6 +14,10 @@ public sealed class ConversationSessionMetadata
 
     public PermissionMode? Mode { get; set; }
 
+    public DateTimeOffset? AwayEnteredAt { get; set; }
+
+    public string? AwayTriggerReason { get; set; }
+
     public Dictionary<string, Attachment> Attachments { get; } = new(StringComparer.Ordinal);
 
     public ConversationSessionMetadata Clone()
@@ -22,6 +26,8 @@ public sealed class ConversationSessionMetadata
         {
             Title = Title,
             Mode = Mode,
+            AwayEnteredAt = AwayEnteredAt,
+            AwayTriggerReason = AwayTriggerReason,
         };
 
         foreach (var tag in Tags)

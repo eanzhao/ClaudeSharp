@@ -75,6 +75,19 @@ public record SystemMessage : ConversationMessage
 }
 
 /// <summary>
+/// Represents an away-mode summary injected when the user returns from AFK.
+/// </summary>
+public record SystemAwaySummaryMessage : ConversationMessage
+{
+    public override string Type => "system_away_summary";
+    public required DateTimeOffset AwayEnteredAt { get; init; }
+    public required DateTimeOffset AwayExitedAt { get; init; }
+    public TimeSpan AwayDuration => AwayExitedAt - AwayEnteredAt;
+    public required string TriggerReason { get; init; }
+    public required string SummaryText { get; init; }
+}
+
+/// <summary>
 /// Placeholder that marks a deleted message while preserving its position in the transcript.
 /// </summary>
 public record TombstoneMessage : ConversationMessage
