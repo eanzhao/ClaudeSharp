@@ -708,7 +708,8 @@ public class AgentsCommand : ICommand
 
             var id = parts[1];
             var reason = parts.Length > 2 ? parts[2] : null;
-            var result = context.AgentTaskRuntime.RequestBackgroundRunCancellation(id, reason);
+            var termination = AgentTerminationInfo.Cancelled(reason, AgentTerminationSource.User);
+            var result = context.AgentTaskRuntime.RequestBackgroundRunCancellation(id, termination);
 
             var message = result switch
             {
