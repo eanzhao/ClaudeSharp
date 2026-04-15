@@ -168,8 +168,19 @@ public sealed class QueryEngineDeepTests
         Assert.Contains(events, evt => evt is ToolResultEvent result && result.Result == "tool output");
         Assert.Equal(2, handler.Requests.Count);
         Assert.Contains(journal.AppendedMessages, message =>
+            message is SystemPermissionRetryMessage permissionRetry &&
+            permissionRetry.ToolName == "search" &&
+            permissionRetry.ToolUseId == "tool-1");
+        Assert.Contains(journal.AppendedMessages, message =>
             message is UserMessage user &&
             user.Content.OfType<ToolResultBlock>().Any(block => block.Content == "tool output"));
+        Assert.Contains(journal.AppendedMessages, message =>
+            message is ToolUseSummaryMessage summary &&
+            summary.ToolUseId == "tool-1" &&
+            summary.ToolName == "search");
+        Assert.Contains(journal.AppendedMessages, message => message is SystemTurnDurationMessage);
+        Assert.Contains(journal.AppendedMessages, message => message is SystemApiMetricsMessage);
+        Assert.Contains(journal.AppendedMessages, message => message is SystemStopHookSummaryMessage);
     }
 
     [Fact]

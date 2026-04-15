@@ -229,6 +229,8 @@ public sealed class QueryEngineStreamingTests
         Assert.True(sessionMemoryFile.Exists);
         Assert.Equal(result!.SummaryText, await sessionMemoryFile.LoadAsync());
         Assert.Equal(result.SummaryText, provider.SessionMemoryContent);
+        Assert.Contains(engine.Messages, message => message is SystemCompactBoundaryMessage boundary && boundary.Mode == "session_memory");
+        Assert.Contains(engine.Messages, message => message is SystemMemorySavedMessage saved && saved.FilePath == sessionMemoryFile.Path);
     }
 
     [Fact]

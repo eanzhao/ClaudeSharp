@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ClaudeSharp.Core.Messages;
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Tools;
 using ClaudeSharp.Tools.Shell;
@@ -147,21 +148,33 @@ public class BashTool : ITool
                 process.ExitCode,
                 interpretation);
 
-            return interpretation.IsError
-                ? ToolResult.Error(formatted)
-                : ToolResult.Success(formatted);
+            return CreateCommandResult(
+                parsed.Command,
+                context.WorkingDirectory,
+                process.ExitCode,
+                interpretation.IsError,
+                formatted);
         }
         catch (OperationCanceledException)
         {
             try { process.Kill(entireProcessTree: true); } catch { }
 
-            return ToolResult.Error(
+            return CreateCommandResult(
+                parsed.Command,
+                context.WorkingDirectory,
+                exitCode: null,
+                isError: true,
                 $"Command timed out after {timeout.TotalSeconds}s.\n" +
                 $"Partial output:\n{stdout}");
         }
         catch (Exception ex)
         {
-            return ToolResult.Error($"Failed to execute command: {ex.Message}");
+            return CreateCommandResult(
+                parsed.Command,
+                context.WorkingDirectory,
+                exitCode: null,
+                isError: true,
+                $"Failed to execute command: {ex.Message}");
         }
     }
 
@@ -267,5 +280,29 @@ public class BashTool : ITool
         }
 
         return sb.Length > 0 ? sb.ToString() : "(no output)";
+    }
+
+    private static ToolResult CreateCommandResult(
+        string command,
+        string workingDirectory,
+        int? exitCode,
+        bool isError,
+        string data)
+    {
+        var message = new SystemLocalCommandMessage
+        {
+            Content = $"Local command executed: {command}",
+            Command = command,
+            WorkingDirectory = workingDirectory,
+            ExitCode = exitCode,
+            IsError = isError,
+        };
+
+        return new ToolResult
+        {
+            Data = data,
+            IsError = isError,
+            NewMessages = [message],
+        };
     }
 }

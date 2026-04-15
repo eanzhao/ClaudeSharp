@@ -141,6 +141,7 @@ public class QueryEngine : IAsyncDisposable
     {
         var startTime = DateTimeOffset.UtcNow;
         var turnCount = 0;
+        string? lastStopReason = null;
 
         await EnsureSessionStartedAsync(ct);
 
@@ -220,6 +221,15 @@ public class QueryEngine : IAsyncDisposable
                         turnCount),
                     ct);
 
+                await AddRuntimeMessagesAsync(
+                    CreateStopLifecycleMessages(
+                        success: false,
+                        duration: DateTimeOffset.UtcNow - startTime,
+                        turnCount: turnCount,
+                        stopReason: lastStopReason,
+                        errorMessage: requestError),
+                    ct);
+
                 yield return new QueryCompleteEvent
                 {
                     Success = false,
@@ -233,6 +243,8 @@ public class QueryEngine : IAsyncDisposable
 
             if (assistantTurn.Usage != null)
                 _totalUsage += assistantTurn.Usage;
+
+            lastStopReason = assistantTurn.StopReason;
 
             if (!_config.UseStreamingApi)
             {
@@ -274,6 +286,15 @@ public class QueryEngine : IAsyncDisposable
                 turnCount),
             ct);
 
+        await AddRuntimeMessagesAsync(
+            CreateStopLifecycleMessages(
+                success: true,
+                duration: DateTimeOffset.UtcNow - startTime,
+                turnCount: turnCount,
+                stopReason: lastStopReason,
+                errorMessage: null),
+            ct);
+
         yield return new QueryCompleteEvent
         {
             Success = true,
@@ -297,6 +318,10 @@ public class QueryEngine : IAsyncDisposable
             {
                 case ToolPermissionRequestUpdate request:
                 {
+                    await AddMessageAsync(
+                        CreatePermissionRetryMessage(request),
+                        ct);
+
                     var permissionEvent = new PermissionRequestEvent
                     {
                         ToolName = request.Invocation.Name,
@@ -324,10 +349,17 @@ public class QueryEngine : IAsyncDisposable
                         completed.Outcome.Result.Data,
                         completed.Outcome.Result.IsError);
 
+                    if (completed.Outcome.Result.NewMessages is { Count: > 0 } newMessages)
+                        await AddRuntimeMessagesAsync(newMessages, ct);
+
                     await AddMessageAsync(UserMessage.FromToolResult(
                         completed.Outcome.Invocation.ToolUseId,
                         completed.Outcome.Result.Data,
                         completed.Outcome.Result.IsError), ct);
+
+                    await AddMessageAsync(
+                        CreateToolUseSummaryMessage(completed.Outcome),
+                        ct);
                     break;
                 }
             }
@@ -588,7 +620,12 @@ public class QueryEngine : IAsyncDisposable
         if (result == null)
             return null;
 
-        await ApplyCompactionResultAsync(result, ct);
+        await ApplyCompactionResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            mode: "compact",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.Conversation,
@@ -618,7 +655,12 @@ public class QueryEngine : IAsyncDisposable
         if (result == null)
             return null;
 
-        await ApplyCompactionResultAsync(result, ct);
+        await ApplyCompactionResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            mode: "compact_up_to",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.Conversation,
@@ -648,7 +690,12 @@ public class QueryEngine : IAsyncDisposable
         if (result == null)
             return null;
 
-        await ApplyCompactionResultAsync(result, ct);
+        await ApplyCompactionResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            mode: "compact_from",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.Conversation,
@@ -684,7 +731,11 @@ public class QueryEngine : IAsyncDisposable
         if (result == null || !result.HasChanges)
             return null;
 
-        await ApplySessionMemoryCompactionResultAsync(result, ct);
+        await ApplySessionMemoryCompactionResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.SessionMemory,
@@ -722,7 +773,11 @@ public class QueryEngine : IAsyncDisposable
         if (!result.HasChanges)
             return null;
 
-        await ApplyMicrocompactResultAsync(result, ct);
+        await ApplyMicrocompactResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.Microcompact,
@@ -790,7 +845,11 @@ public class QueryEngine : IAsyncDisposable
                         messageCount: _messages.Count),
                     ct);
 
-                await ApplyMicrocompactResultAsync(microcompact, ct);
+                await ApplyMicrocompactResultAsync(
+                    microcompact,
+                    automatic: true,
+                    reason: preparation.InitialDecision.Reason,
+                    ct);
                 await _hooks.OnPostCompactAsync(
                     new CompactHookContext(
                         CompactionLifecycleKind.Microcompact,
@@ -821,7 +880,11 @@ public class QueryEngine : IAsyncDisposable
                         messageCount: _messages.Count),
                     ct);
 
-                await ApplySessionMemoryCompactionResultAsync(sessionMemory, ct);
+                await ApplySessionMemoryCompactionResultAsync(
+                    sessionMemory,
+                    automatic: true,
+                    reason: preparation.InitialDecision.Reason,
+                    ct);
                 await _hooks.OnPostCompactAsync(
                     new CompactHookContext(
                         CompactionLifecycleKind.SessionMemory,
@@ -852,7 +915,12 @@ public class QueryEngine : IAsyncDisposable
                         messageCount: _messages.Count),
                     ct);
 
-                await ApplyCompactionResultAsync(preparation.CompactionResult, ct);
+                await ApplyCompactionResultAsync(
+                    preparation.CompactionResult,
+                    automatic: true,
+                    reason: preparation.InitialDecision.Reason,
+                    mode: "compact",
+                    ct);
                 await _hooks.OnPostCompactAsync(
                     new CompactHookContext(
                         CompactionLifecycleKind.Conversation,
@@ -890,24 +958,62 @@ public class QueryEngine : IAsyncDisposable
 
     private async Task ApplyCompactionResultAsync(
         ConversationCompactionResult result,
+        bool automatic,
+        string reason,
+        string mode,
         CancellationToken ct)
     {
-        await ApplyCheckpointAsync(result.SummaryMessage, result.ActiveMessages, ct);
+        await ApplyCheckpointAsync(
+            result.SummaryMessage,
+            result.ActiveMessages,
+            CreateCompactBoundaryMessage(
+                summaryMessageId: result.SummaryMessage.Id,
+                mode: mode,
+                automatic: automatic,
+                reason: reason,
+                foldedMessageCount: result.RemovedMessageCount,
+                preservedMessageCount: result.ActiveMessages.Count - 1),
+            ct);
     }
 
     private async Task ApplySessionMemoryCompactionResultAsync(
         SessionMemoryCompactionResult result,
+        bool automatic,
+        string reason,
         CancellationToken ct)
     {
-        await ApplyCheckpointAsync(result.MemoryMessage, result.ActiveMessages, ct);
+        await ApplyCheckpointAsync(
+            result.MemoryMessage,
+            result.ActiveMessages,
+            CreateCompactBoundaryMessage(
+                summaryMessageId: result.MemoryMessage.Id,
+                mode: "session_memory",
+                automatic: automatic,
+                reason: reason,
+                foldedMessageCount: result.FoldedMessageCount,
+                preservedMessageCount: result.ActiveMessages.Count - 1),
+            ct);
         if (_sessionMemoryFile != null)
+        {
             await _sessionMemoryFile.SaveAsync(result.SummaryText, ct);
+            await AddMessageAsync(
+                new SystemMemorySavedMessage
+                {
+                    Content = "Session memory summary saved.",
+                    MemoryKind = "session",
+                    FilePath = _sessionMemoryFile.Path,
+                    CharacterCount = result.SummaryText.Length,
+                },
+                ct);
+        }
 
         _contextProvider.SessionMemoryContent = result.SummaryText;
     }
 
     private async Task ApplyMicrocompactResultAsync(
         MicrocompactResult result,
+        bool automatic,
+        string reason,
         CancellationToken ct)
     {
         _messages.Clear();
@@ -921,21 +1027,40 @@ public class QueryEngine : IAsyncDisposable
                 _config.Model,
                 ct);
         }
+
+        await AddMessageAsync(
+            CreateMicrocompactBoundaryMessage(
+                automatic,
+                reason,
+                result.ClearedToolResultCount,
+                result.ClearedThinkingBlockCount),
+            ct);
     }
 
     private async Task ApplyCheckpointAsync(
         ConversationMessage summaryMessage,
         IReadOnlyList<ConversationMessage> activeMessages,
+        SystemCompactBoundaryMessage? boundaryMessage,
         CancellationToken ct)
     {
+        var activeSnapshot = InsertBoundaryMessage(activeMessages, summaryMessage, boundaryMessage);
         _messages.Clear();
-        _messages.AddRange(activeMessages);
+        _messages.AddRange(activeSnapshot);
 
         if (_journal != null)
         {
+            if (boundaryMessage != null)
+            {
+                await _journal.AppendMessageAsync(
+                    boundaryMessage,
+                    _contextProvider.WorkingDirectory,
+                    _config.Model,
+                    ct);
+            }
+
             await _journal.RecordConversationCheckpointAsync(
                 summaryMessage,
-                activeMessages,
+                activeSnapshot,
                 _contextProvider.WorkingDirectory,
                 _config.Model,
                 ct);
@@ -955,6 +1080,14 @@ public class QueryEngine : IAsyncDisposable
                 _config.Model,
                 ct);
         }
+    }
+
+    private async Task AddRuntimeMessagesAsync(
+        IEnumerable<ConversationMessage> messages,
+        CancellationToken ct)
+    {
+        foreach (var message in messages)
+            await AddMessageAsync(message, ct);
     }
 
     private async Task PersistRuntimeStateAsync(CancellationToken ct)
@@ -1236,6 +1369,138 @@ public class QueryEngine : IAsyncDisposable
             CacheReadInputTokens = (int)(cacheReadInputTokens ?? 0),
             CacheCreationInputTokens = (int)(cacheCreationInputTokens ?? 0),
         };
+
+    private IReadOnlyList<ConversationMessage> InsertBoundaryMessage(
+        IReadOnlyList<ConversationMessage> activeMessages,
+        ConversationMessage summaryMessage,
+        SystemCompactBoundaryMessage? boundaryMessage)
+    {
+        if (boundaryMessage == null)
+            return activeMessages.ToArray();
+
+        if (activeMessages.Count > 0 &&
+            string.Equals(activeMessages[0].Id, summaryMessage.Id, StringComparison.Ordinal))
+        {
+            return [summaryMessage, boundaryMessage, .. activeMessages.Skip(1)];
+        }
+
+        return [boundaryMessage, .. activeMessages];
+    }
+
+    private SystemCompactBoundaryMessage CreateCompactBoundaryMessage(
+        string summaryMessageId,
+        string mode,
+        bool automatic,
+        string reason,
+        int foldedMessageCount,
+        int preservedMessageCount) =>
+        new()
+        {
+            Content = $"Compaction boundary recorded for {mode}.",
+            BoundaryId = Guid.NewGuid().ToString("N"),
+            Mode = mode,
+            Automatic = automatic,
+            Reason = reason,
+            FoldedMessageCount = Math.Max(0, foldedMessageCount),
+            PreservedMessageCount = Math.Max(0, preservedMessageCount),
+            SummaryMessageId = summaryMessageId,
+        };
+
+    private SystemMicrocompactBoundaryMessage CreateMicrocompactBoundaryMessage(
+        bool automatic,
+        string reason,
+        int clearedToolResultCount,
+        int clearedThinkingBlockCount) =>
+        new()
+        {
+            Content = "Microcompact boundary recorded.",
+            BoundaryId = Guid.NewGuid().ToString("N"),
+            Automatic = automatic,
+            Reason = reason,
+            ClearedToolResultCount = Math.Max(0, clearedToolResultCount),
+            ClearedThinkingBlockCount = Math.Max(0, clearedThinkingBlockCount),
+        };
+
+    private SystemPermissionRetryMessage CreatePermissionRetryMessage(
+        ToolPermissionRequestUpdate request) =>
+        new()
+        {
+            Content = $"Permission requested for {request.Invocation.Name}.",
+            ToolName = request.Invocation.Name,
+            ToolUseId = request.Invocation.ToolUseId,
+            Attempt = CountPermissionRetries(request.Invocation.ToolUseId) + 1,
+            Reason = request.Description,
+            UpdatedInput = request.ObservedInput.Clone(),
+        };
+
+    private int CountPermissionRetries(string toolUseId) =>
+        _messages
+            .OfType<SystemPermissionRetryMessage>()
+            .Count(message => string.Equals(message.ToolUseId, toolUseId, StringComparison.Ordinal));
+
+    private ToolUseSummaryMessage CreateToolUseSummaryMessage(ToolRunOutcome outcome) =>
+        new()
+        {
+            Content = $"Tool {outcome.Invocation.Name} completed.",
+            ToolUseId = outcome.Invocation.ToolUseId,
+            ToolName = outcome.Invocation.Name,
+            IsError = outcome.Result.IsError,
+            ResultPreview = BuildResultPreview(outcome.Result.Data),
+        };
+
+    private IEnumerable<ConversationMessage> CreateStopLifecycleMessages(
+        bool success,
+        TimeSpan duration,
+        int turnCount,
+        string? stopReason,
+        string? errorMessage)
+    {
+        yield return new SystemTurnDurationMessage
+        {
+            Content = "Turn duration recorded.",
+            TurnCount = turnCount,
+            DurationMs = duration.TotalMilliseconds,
+            Model = _config.Model,
+        };
+
+        yield return new SystemApiMetricsMessage
+        {
+            Content = "API metrics recorded.",
+            Model = _config.Model,
+            Usage = _totalUsage,
+            DurationMs = duration.TotalMilliseconds,
+            StopReason = stopReason,
+            Success = success,
+        };
+
+        yield return new SystemStopHookSummaryMessage
+        {
+            Content = success
+                ? "Stop hooks completed."
+                : "Stop-failure hooks completed.",
+            HookEvent = success ? "stop" : "stop_failure",
+            Success = success,
+            DurationMs = duration.TotalMilliseconds,
+            Summary = success
+                ? "Stop hook lifecycle finished successfully."
+                : "Stop hook lifecycle finished after a failed turn.",
+            ErrorMessage = errorMessage,
+        };
+    }
+
+    private static string BuildResultPreview(string result)
+    {
+        if (string.IsNullOrWhiteSpace(result))
+            return string.Empty;
+
+        var collapsed = string.Join(
+            ' ',
+            result.Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries));
+
+        return collapsed.Length <= 160
+            ? collapsed
+            : $"{collapsed[..157]}...";
+    }
 
     private static StreamingContentBlockBuilder? CreateStreamingBlockBuilder(
         JsonElement payload)

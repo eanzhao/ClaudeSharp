@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ClaudeSharp.Core.Messages;
 using ClaudeSharp.Core.Permissions;
 using ClaudeSharp.Core.Tests.Runtime;
 using ClaudeSharp.Core.Tools;
@@ -103,6 +104,10 @@ public sealed class BashToolingTests
         Assert.False(result.IsError);
         Assert.Equal("hello", result.Data);
         Assert.Contains("hello", progressMessages, StringComparer.Ordinal);
+        var message = Assert.IsType<SystemLocalCommandMessage>(Assert.Single(result.NewMessages!));
+        Assert.Equal("printf 'hello\\n'", message.Command);
+        Assert.Equal(temp.Root, message.WorkingDirectory);
+        Assert.False(message.IsError);
     }
 
     [Fact]
@@ -136,8 +141,14 @@ public sealed class BashToolingTests
         Assert.Contains("STDERR:", failed.Data, StringComparison.Ordinal);
         Assert.Contains("oops", failed.Data, StringComparison.Ordinal);
         Assert.Contains("Exit code: 3", failed.Data, StringComparison.Ordinal);
+        var failedMessage = Assert.IsType<SystemLocalCommandMessage>(Assert.Single(failed.NewMessages!));
+        Assert.Equal(3, failedMessage.ExitCode);
+        Assert.True(failedMessage.IsError);
         Assert.True(timedOut.IsError);
         Assert.Contains("Command timed out after", timedOut.Data, StringComparison.Ordinal);
+        var timedOutMessage = Assert.IsType<SystemLocalCommandMessage>(Assert.Single(timedOut.NewMessages!));
+        Assert.Null(timedOutMessage.ExitCode);
+        Assert.True(timedOutMessage.IsError);
     }
 
     [Fact]

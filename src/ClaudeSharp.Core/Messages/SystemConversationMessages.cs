@@ -73,6 +73,7 @@ public record SystemPermissionRetryMessage : SystemMessage
     }
 
     public string? ToolName { get; init; }
+    public string? ToolUseId { get; init; }
     public int Attempt { get; init; }
     public string? Reason { get; init; }
     public JsonElement? UpdatedInput { get; init; }
