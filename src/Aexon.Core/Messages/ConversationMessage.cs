@@ -74,6 +74,16 @@ public record SystemMessage : ConversationMessage
     public string? Subtype { get; init; }
 }
 
+/// <summary>
+/// Placeholder that marks a deleted message while preserving its position in the transcript.
+/// </summary>
+public record TombstoneMessage : ConversationMessage
+{
+    public override string Type => "tombstone";
+    public required string DeletedMessageId { get; init; }
+    public string? Reason { get; init; }
+}
+
 // Content block types
 
 /// <summary>
