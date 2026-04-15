@@ -418,6 +418,31 @@ public sealed class ConversationJournal : IConversationJournal
                 JsonSerializer.SerializeToElement(new { tag = addedTag }),
                 DateTimeOffset.UtcNow);
         }
+
+        if (before.AwayEnteredAt != after.AwayEnteredAt)
+        {
+            if (after.AwayEnteredAt.HasValue)
+            {
+                yield return new TranscriptMetadataEntry(
+                    "away-enter",
+                    JsonSerializer.SerializeToElement(new
+                    {
+                        trigger = after.AwayTriggerReason ?? string.Empty,
+                        entered_at = after.AwayEnteredAt.Value,
+                    }),
+                    DateTimeOffset.UtcNow);
+            }
+            else
+            {
+                yield return new TranscriptMetadataEntry(
+                    "away-exit",
+                    JsonSerializer.SerializeToElement(new
+                    {
+                        exited_at = DateTimeOffset.UtcNow,
+                    }),
+                    DateTimeOffset.UtcNow);
+            }
+        }
     }
 }
 
@@ -683,6 +708,8 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
             Tags = session.Metadata.Tags.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase).ToArray(),
             Mode = session.Metadata.Mode?.ToString(),
             CurrentLeafMessageId = session.CurrentLeafMessageId,
+            AwayEnteredAt = session.Metadata.AwayEnteredAt,
+            AwayTriggerReason = session.Metadata.AwayTriggerReason,
         };
 
         var json = JsonSerializer.Serialize(manifest, ManifestSerializerOptions);
@@ -745,6 +772,8 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         {
             Title = manifest.Title,
             Mode = ParsePermissionMode(manifest.Mode),
+            AwayEnteredAt = manifest.AwayEnteredAt,
+            AwayTriggerReason = manifest.AwayTriggerReason,
         };
 
         foreach (var tag in manifest.Tags ?? [])
@@ -782,6 +811,21 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                         metadata.Tags.Remove(tag);
                     break;
                 }
+
+            case "away-enter":
+                {
+                    var enteredAtStr = TryReadString(entry.Payload, "entered_at");
+                    metadata.AwayEnteredAt = DateTimeOffset.TryParse(enteredAtStr, out var parsed)
+                        ? parsed
+                        : entry.RecordedAt ?? DateTimeOffset.UtcNow;
+                    metadata.AwayTriggerReason = TryReadString(entry.Payload, "trigger");
+                    break;
+                }
+
+            case "away-exit":
+                metadata.AwayEnteredAt = null;
+                metadata.AwayTriggerReason = null;
+                break;
         }
     }
 
@@ -829,6 +873,8 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public string[]? Tags { get; init; }
         public string? Mode { get; init; }
         public string? CurrentLeafMessageId { get; init; }
+        public DateTimeOffset? AwayEnteredAt { get; init; }
+        public string? AwayTriggerReason { get; init; }
     }
 
     private sealed class PersistedConversationMessage
@@ -844,6 +890,10 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public string? ApiError { get; init; }
         public string? SystemContent { get; init; }
         public string? Subtype { get; init; }
+        public DateTimeOffset? AwayEnteredAt { get; init; }
+        public DateTimeOffset? AwayExitedAt { get; init; }
+        public string? TriggerReason { get; init; }
+        public string? SummaryText { get; init; }
 
         public static PersistedConversationMessage FromDomain(ConversationMessage message) =>
             message switch
@@ -875,6 +925,16 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     SystemContent = system.Content,
                     Subtype = system.Subtype,
                 },
+                SystemAwaySummaryMessage away => new PersistedConversationMessage
+                {
+                    Kind = "system_away_summary",
+                    Id = away.Id,
+                    Timestamp = away.Timestamp,
+                    AwayEnteredAt = away.AwayEnteredAt,
+                    AwayExitedAt = away.AwayExitedAt,
+                    TriggerReason = away.TriggerReason,
+                    SummaryText = away.SummaryText,
+                },
                 _ => throw new InvalidOperationException($"Unsupported message type: {message.GetType().Name}"),
             };
 
@@ -904,6 +964,15 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     Timestamp = Timestamp,
                     Content = SystemContent ?? string.Empty,
                     Subtype = Subtype,
+                },
+                "system_away_summary" => new SystemAwaySummaryMessage
+                {
+                    Id = Id,
+                    Timestamp = Timestamp,
+                    AwayEnteredAt = AwayEnteredAt ?? Timestamp,
+                    AwayExitedAt = AwayExitedAt ?? Timestamp,
+                    TriggerReason = TriggerReason ?? string.Empty,
+                    SummaryText = SummaryText ?? string.Empty,
                 },
                 _ => throw new InvalidOperationException($"Unsupported persisted message kind: {Kind}"),
             };

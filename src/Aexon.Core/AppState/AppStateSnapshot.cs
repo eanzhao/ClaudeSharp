@@ -26,4 +26,6 @@ public sealed record AppStateSnapshot
     public IReadOnlyList<AppStateTeamSnapshot> Teams { get; init; } = [];
     public IReadOnlyList<AppStateMailboxSnapshot> Mailboxes { get; init; } = [];
     public IReadOnlyList<AppStateTodoSnapshot> Todos { get; init; } = [];
+    public bool IsAwayModeActive { get; init; }
+    public DateTimeOffset? AwayEnteredAt { get; init; }
 }

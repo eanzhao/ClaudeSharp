@@ -1981,3 +1981,79 @@ public class MicrocompactCommand : ICommand
             $"  Cleared {result.ClearedToolResultCount} tool-result messages and {result.ClearedThinkingBlockCount} thinking blocks.");
     }
 }
+
+/// <summary>
+/// Represents away command.
+/// </summary>
+public class AwayCommand : ICommand
+{
+    public string Name => "away";
+    public string Description => "Enter or exit away (AFK) mode";
+    public string[] Aliases => ["afk"];
+
+    public async Task ExecuteAsync(string args, CommandContext context)
+    {
+        var trimmed = args.Trim();
+
+        if (string.Equals(trimmed, "status", StringComparison.OrdinalIgnoreCase))
+        {
+            if (context.QueryEngine.IsAwayModeActive)
+            {
+                var entered = context.QueryEngine.AwayEnteredAt;
+                var reason = context.QueryEngine.AwayTriggerReason ?? "none";
+                var elapsed = entered.HasValue
+                    ? DateTimeOffset.UtcNow - entered.Value
+                    : TimeSpan.Zero;
+                context.WriteLine($"  Away mode: active (since {elapsed.TotalMinutes:F0}m ago, reason: {reason})");
+            }
+            else
+            {
+                context.WriteLine("  Away mode: inactive");
+            }
+
+            return;
+        }
+
+        if (string.Equals(trimmed, "exit", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, "back", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(trimmed, "return", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!context.QueryEngine.IsAwayModeActive)
+            {
+                context.WriteLine("  Away mode is not active.");
+                return;
+            }
+
+            var summary = await context.QueryEngine.ExitAwayModeAsync(context.CancellationToken);
+            if (summary != null)
+            {
+                context.WriteLine($"  Welcome back! {summary.SummaryText}");
+            }
+            else
+            {
+                context.WriteLine("  Away mode exited.");
+            }
+
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(trimmed) &&
+            !string.Equals(trimmed, "enter", StringComparison.OrdinalIgnoreCase))
+        {
+            var reason = trimmed;
+            var entered = await context.QueryEngine.EnterAwayModeAsync(reason, context.CancellationToken);
+            context.WriteLine(
+                entered
+                    ? $"  Away mode enabled. Reason: {reason}"
+                    : "  Away mode is already active.");
+            return;
+        }
+
+        var defaultReason = "user initiated";
+        var changed = await context.QueryEngine.EnterAwayModeAsync(defaultReason, context.CancellationToken);
+        context.WriteLine(
+            changed
+                ? $"  Away mode enabled. Reason: {defaultReason}"
+                : "  Away mode is already active.");
+    }
+}

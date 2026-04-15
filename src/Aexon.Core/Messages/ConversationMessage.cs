@@ -74,6 +74,19 @@ public record SystemMessage : ConversationMessage
     public string? Subtype { get; init; }
 }
 
+/// <summary>
+/// Represents an away-mode summary injected when the user returns from AFK.
+/// </summary>
+public record SystemAwaySummaryMessage : ConversationMessage
+{
+    public override string Type => "system_away_summary";
+    public required DateTimeOffset AwayEnteredAt { get; init; }
+    public required DateTimeOffset AwayExitedAt { get; init; }
+    public TimeSpan AwayDuration => AwayExitedAt - AwayEnteredAt;
+    public required string TriggerReason { get; init; }
+    public required string SummaryText { get; init; }
+}
+
 // Content block types
 
 /// <summary>

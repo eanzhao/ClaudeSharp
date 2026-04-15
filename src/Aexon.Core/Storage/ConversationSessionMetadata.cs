@@ -13,12 +13,18 @@ public sealed class ConversationSessionMetadata
 
     public PermissionMode? Mode { get; set; }
 
+    public DateTimeOffset? AwayEnteredAt { get; set; }
+
+    public string? AwayTriggerReason { get; set; }
+
     public ConversationSessionMetadata Clone()
     {
         var clone = new ConversationSessionMetadata
         {
             Title = Title,
             Mode = Mode,
+            AwayEnteredAt = AwayEnteredAt,
+            AwayTriggerReason = AwayTriggerReason,
         };
 
         foreach (var tag in Tags)
