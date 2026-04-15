@@ -9,6 +9,33 @@ namespace Aexon.Core.Tests.Tools;
 public sealed class CronToolsTests
 {
     [Fact]
+    public async Task CronTools_ExposeMetadataAndSchemas()
+    {
+        var runtime = new InMemoryCronRuntime();
+        var createTool = new CronCreateTool(runtime);
+        var deleteTool = new CronDeleteTool(runtime);
+        var listTool = new CronListTool(runtime);
+
+        Assert.Equal("CronCreate", createTool.Name);
+        Assert.Equal(["CronCreateTool"], createTool.Aliases);
+        Assert.Contains("scheduled cron job", await createTool.GetDescriptionAsync(), StringComparison.Ordinal);
+        Assert.Contains("id", createTool.GetInputSchema().GetProperty("required").ToString(), StringComparison.Ordinal);
+        Assert.Contains("schedule", createTool.GetInputSchema().GetProperty("required").ToString(), StringComparison.Ordinal);
+        Assert.Contains("command", createTool.GetInputSchema().GetProperty("required").ToString(), StringComparison.Ordinal);
+
+        Assert.Equal("CronDelete", deleteTool.Name);
+        Assert.Equal(["CronDeleteTool"], deleteTool.Aliases);
+        Assert.Contains("Delete a scheduled cron job", await deleteTool.GetDescriptionAsync(), StringComparison.Ordinal);
+        Assert.Contains("id", deleteTool.GetInputSchema().GetProperty("required").ToString(), StringComparison.Ordinal);
+
+        Assert.Equal("CronList", listTool.Name);
+        Assert.Equal(["CronListTool"], listTool.Aliases);
+        Assert.Contains("List all scheduled cron jobs", await listTool.GetDescriptionAsync(), StringComparison.Ordinal);
+        Assert.True(listTool.GetInputSchema().GetProperty("properties").TryGetProperty("include_history", out _));
+        Assert.True(listTool.GetInputSchema().GetProperty("properties").TryGetProperty("job_id", out _));
+    }
+
+    [Fact]
     public async Task CronCreateTool_CreatesJob()
     {
         var runtime = new InMemoryCronRuntime();
@@ -96,6 +123,27 @@ public sealed class CronToolsTests
     }
 
     [Fact]
+    public async Task CronCreateTool_ExecuteAsync_DuplicateId_ReturnsError()
+    {
+        var runtime = new InMemoryCronRuntime();
+        runtime.CreateJob("existing", "0 * * * *", "echo test");
+        var tool = new CronCreateTool(runtime);
+        var context = CreateContext();
+
+        var result = await tool.ExecuteAsync(
+            Json(new
+            {
+                id = "existing",
+                schedule = "0 * * * *",
+                command = "echo hello",
+            }),
+            context);
+
+        Assert.True(result.IsError);
+        Assert.Contains("already exists", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CronDeleteTool_DeletesJob()
     {
         var runtime = new InMemoryCronRuntime();
@@ -125,6 +173,21 @@ public sealed class CronToolsTests
 
         Assert.False(validation.IsValid);
         Assert.Contains("not found", validation.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CronDeleteTool_ExecuteAsync_NotFound_ReturnsError()
+    {
+        var runtime = new InMemoryCronRuntime();
+        var tool = new CronDeleteTool(runtime);
+        var context = CreateContext();
+
+        var result = await tool.ExecuteAsync(
+            Json(new { id = "missing" }),
+            context);
+
+        Assert.True(result.IsError);
+        Assert.Contains("not found", result.Data, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -186,6 +249,42 @@ public sealed class CronToolsTests
         Assert.Contains("Execution history", result.Data, StringComparison.Ordinal);
         Assert.Contains("exec-1", result.Data, StringComparison.Ordinal);
         Assert.Contains("success", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CronListTool_WithJobFilter_OnlyIncludesMatchingHistory()
+    {
+        var runtime = new InMemoryCronRuntime();
+        runtime.CreateJob("first", "*/5 * * * *", "echo one");
+        runtime.CreateJob("second", "*/5 * * * *", "echo two");
+        runtime.RecordExecution(new CronExecutionRecord
+        {
+            Id = "exec-1",
+            JobId = "first",
+            StartedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Success = true,
+            Output = "one",
+        });
+        runtime.RecordExecution(new CronExecutionRecord
+        {
+            Id = "exec-2",
+            JobId = "second",
+            StartedAt = DateTimeOffset.UtcNow,
+            CompletedAt = DateTimeOffset.UtcNow,
+            Success = true,
+            Output = "two",
+        });
+
+        var tool = new CronListTool(runtime);
+        var context = CreateContext();
+        var result = await tool.ExecuteAsync(
+            Json(new { include_history = true, job_id = "second" }),
+            context);
+
+        Assert.False(result.IsError);
+        Assert.Contains("exec-2", result.Data, StringComparison.Ordinal);
+        Assert.DoesNotContain("exec-1", result.Data, StringComparison.Ordinal);
     }
 
     [Fact]

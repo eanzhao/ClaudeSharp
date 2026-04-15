@@ -118,6 +118,18 @@ public sealed class CronExpressionTests
     }
 
     [Fact]
+    public void NextOccurrence_DayOfMonthAndDayOfWeek_UsesOrSemantics()
+    {
+        var cron = CronExpression.TryParse("0 9 15 * 1")!;
+        var from = new DateTimeOffset(2026, 4, 1, 12, 0, 0, TimeSpan.Zero);
+
+        var next = cron.NextOccurrence(from);
+
+        Assert.NotNull(next);
+        Assert.Equal(new DateTimeOffset(2026, 4, 6, 9, 0, 0, TimeSpan.Zero), next.Value);
+    }
+
+    [Fact]
     public void NextOccurrence_CrossYearBoundary_ReturnsNextYear()
     {
         var cron = CronExpression.TryParse("0 0 1 1 *")!;

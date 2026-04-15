@@ -12,6 +12,8 @@ public sealed class CronExpression
     private readonly HashSet<int> _daysOfMonth;
     private readonly HashSet<int> _months;
     private readonly HashSet<int> _daysOfWeek;
+    private readonly bool _daysOfMonthWildcard;
+    private readonly bool _daysOfWeekWildcard;
     private readonly string _raw;
 
     private CronExpression(
@@ -20,7 +22,9 @@ public sealed class CronExpression
         HashSet<int> hours,
         HashSet<int> daysOfMonth,
         HashSet<int> months,
-        HashSet<int> daysOfWeek)
+        HashSet<int> daysOfWeek,
+        bool daysOfMonthWildcard,
+        bool daysOfWeekWildcard)
     {
         _raw = raw;
         _minutes = minutes;
@@ -28,6 +32,8 @@ public sealed class CronExpression
         _daysOfMonth = daysOfMonth;
         _months = months;
         _daysOfWeek = daysOfWeek;
+        _daysOfMonthWildcard = daysOfMonthWildcard;
+        _daysOfWeekWildcard = daysOfWeekWildcard;
     }
 
     /// <summary>
@@ -60,7 +66,9 @@ public sealed class CronExpression
             hours,
             daysOfMonth,
             months,
-            daysOfWeek);
+            daysOfWeek,
+            IsWildcardField(parts[2]),
+            IsWildcardField(parts[4]));
     }
 
     /// <summary>
@@ -84,8 +92,7 @@ public sealed class CronExpression
                 continue;
             }
 
-            if (!_daysOfMonth.Contains(candidate.Day) ||
-                !_daysOfWeek.Contains((int)candidate.DayOfWeek))
+            if (!MatchesDay(candidate))
             {
                 candidate = candidate.AddDays(1);
                 candidate = new DateTimeOffset(
@@ -120,6 +127,23 @@ public sealed class CronExpression
     /// </summary>
     public override string ToString() => _raw;
 
+    private bool MatchesDay(DateTimeOffset candidate)
+    {
+        var dayOfMonthMatches = _daysOfMonth.Contains(candidate.Day);
+        var dayOfWeekMatches = _daysOfWeek.Contains((int)candidate.DayOfWeek);
+
+        if (_daysOfMonthWildcard && _daysOfWeekWildcard)
+            return true;
+
+        if (_daysOfMonthWildcard)
+            return dayOfWeekMatches;
+
+        if (_daysOfWeekWildcard)
+            return dayOfMonthMatches;
+
+        return dayOfMonthMatches || dayOfWeekMatches;
+    }
+
     private static DateTimeOffset NextMonth(DateTimeOffset dt)
     {
         var next = dt.Month == 12
@@ -127,6 +151,9 @@ public sealed class CronExpression
             : new DateTimeOffset(dt.Year, dt.Month + 1, 1, 0, 0, 0, dt.Offset);
         return next;
     }
+
+    private static bool IsWildcardField(string field) =>
+        string.Equals(field.Trim(), "*", StringComparison.Ordinal);
 
     private static HashSet<int>? ParseField(string field, int min, int max)
     {

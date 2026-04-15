@@ -113,13 +113,14 @@ public sealed class CronScheduler : IAsyncDisposable
         process.StartInfo = new ProcessStartInfo
         {
             FileName = shell,
-            Arguments = $"{shellArg} {command}",
             WorkingDirectory = workingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        process.StartInfo.ArgumentList.Add(shellArg);
+        process.StartInfo.ArgumentList.Add(command);
 
         process.Start();
         var stdout = await process.StandardOutput.ReadToEndAsync(cancellationToken);
