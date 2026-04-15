@@ -1,11 +1,36 @@
-claude-code/
-.idea/
-.DS_Store
+## Build output
 **/bin/
 **/obj/
+
+## Test results and coverage
 **/TestResults/
 coverage/
 coverage-threshold/
 runtime-coverage/
 foundations-coverage/
+
+## IDE and editor
+.idea/
+.vs/
+*.user
+*.suo
+*.DotSettings.user
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Secrets and environment
 appsettings.secrets.json
+.env
+.env.*
+
+## NuGet
+*.nupkg
+packages/
+
+## Misc
+*.cache
+
+## Original TypeScript source (reference only)
+claude-code/

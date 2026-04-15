@@ -1,45 +1,65 @@
-# ClaudeSharp
+# Aexon
 
-A .NET 10 reimplementation of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's agentic coding CLI — written in C#.
+[![CI](https://github.com/eanzhao/Aexon/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/eanzhao/Aexon/actions/workflows/ci.yml)
+[![NuGet](https://img.shields.io/nuget/v/Aexon?logo=nuget&label=NuGet)](https://www.nuget.org/packages/Aexon/)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/Aexon?logo=nuget&label=downloads)](https://www.nuget.org/packages/Aexon/)
+
+A .NET 10 reimplementation of [Claude Code](https://docs.anthropic.com/en/docs/claude-code), written in C#.
 
 ## Overview
 
-ClaudeSharp provides an interactive terminal REPL where Claude can execute tools (shell commands, file operations, code search) to assist with software engineering tasks. It faithfully reproduces the core agentic loop architecture of the original TypeScript implementation using idiomatic .NET patterns.
+Aexon is an interactive terminal coding assistant with an agentic tool loop, streaming responses, resumable sessions, and built-in automation for common engineering workflows.
 
-This project is maintained for **educational and security research** purposes, studying agentic developer tooling architecture and software supply-chain practices. See [`claude-code/README.md`](claude-code/README.md) for full research context.
+The project is maintained for educational, interoperability, and security research work around agentic developer tooling. It is usable today, but you should still review permissions, hooks, and external tool access before running it against real codebases.
 
-## Features
+## Current Status
 
-- **Interactive REPL** — multi-turn conversation with streaming responses
-- **Agentic tool loop** — Claude autonomously calls tools, validates inputs locally, and iterates with permission checks
-- **Built-in tools** — Bash, file read/write/edit, glob/grep, web fetch/search
-- **Subagents and background runs** — a read-only `Agent` tool plus `/agents` commands for inspection, waiting, tailing, pruning, and stop requests
-- **Hooks and MCP** — load lifecycle hooks and stdio MCP servers from `settings.json`
-- **Permission system** — read-only operations auto-approved, write operations prompt for confirmation
-- **Slash commands** — session, compaction, and agent-management commands in addition to the REPL basics
-- **Session persistence** — transcripts are stored as JSONL and can be resumed with `--continue` / `--resume`, or forked with `--fork-session`
-- **Context compaction** — compact, microcompact, and session-memory flows are built into the main loop
-- **Token cost tracking** — input/output/cache token counts with cost estimation
-- **Context-aware prompts** — git status, working directory, project memory (CLAUDE.md)
+- Interactive REPL with streaming assistant responses
+- Built-in tool loop for Bash, file read/write/edit, glob/grep, web fetch, and web search
+- Subagents, background runs, mailbox management, and team orchestration commands
+- Hooks and stdio MCP server loading from project or user settings
+- Session resume, session forking, compaction, session memory, and token/cost tracking
+- Cross-platform CI on Ubuntu, Windows, and macOS with formatting checks, tests, and an 80% total line-coverage gate
+- Published on NuGet as the `Aexon` .NET tool package
 
-## Project Structure
+## Installation
 
+Recommended: install Aexon as a global .NET tool from NuGet.
+
+```bash
+dotnet tool install --global Aexon
+aexon --help
 ```
-src/
-├── ClaudeSharp.Cli/          # Entry point, REPL shell, CLI option parsing
-├── ClaudeSharp.Core/         # QueryEngine, agents, hooks, MCP, permissions, context, storage
-├── ClaudeSharp.Tools/        # Built-in tools, web tools, and subagent-facing tools
-└── ClaudeSharp.Commands/     # Built-in slash commands (/help, /agents, /compact, /session, ...)
+
+Update an existing installation:
+
+```bash
+dotnet tool update --global Aexon
 ```
+
+Install into a local tool directory instead of your global PATH:
+
+```bash
+dotnet tool install --tool-path ./.tools Aexon
+./.tools/aexon --help
+```
+
+If you specifically want to download the NuGet package artifact, you can use the NuGet CLI:
+
+```bash
+nuget install Aexon -Source https://api.nuget.org/v3/index.json -OutputDirectory ./packages
+```
+
+`nuget install` downloads the package, while `dotnet tool install` is the command that gives you an executable `aexon` command on your machine.
 
 ## Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download) (10.0.100+)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download) (10.0.100+) for local builds and `dotnet` CLI workflows
 - An Anthropic API key, provided through `ANTHROPIC_API_KEY` or an `appsettings*.json` file
 
 ## Configuration
 
-ClaudeSharp resolves Anthropic settings in this order:
+Aexon resolves Anthropic settings in this order:
 
 1. `ANTHROPIC_API_KEY`
 2. `<working directory>/appsettings.secrets.json`
@@ -62,7 +82,7 @@ Both of the following JSON shapes are supported:
 
 ```json
 {
-  "ClaudeSharp": {
+  "Aexon": {
     "Anthropic": {
       "apiKey": "YOUR_ANTHROPIC_API_KEY",
       "baseUrl": "https://api.anthropic.com"
@@ -73,60 +93,85 @@ Both of the following JSON shapes are supported:
 
 ## Getting Started
 
+Run from source:
+
 ```bash
-# Build
-dotnet build
+dotnet restore Aexon.slnx
+dotnet build Aexon.slnx --configuration Release
 
-# Run (interactive mode)
-dotnet run --project src/ClaudeSharp.Cli
+# Interactive mode
+dotnet run --project src/Aexon.Cli
 
-# Or place your key in ./appsettings.secrets.json first
-cat > appsettings.secrets.json <<'JSON'
-{
-  "Anthropic": {
-    "apiKey": "YOUR_ANTHROPIC_API_KEY"
-  }
-}
-JSON
+# Non-interactive prompt
+dotnet run --project src/Aexon.Cli -- "explain this codebase"
+```
 
-# Run with an initial prompt (non-interactive)
-dotnet run --project src/ClaudeSharp.Cli -- "explain this codebase"
+Run from an installed tool:
 
-# Specify working directory and model
-dotnet run --project src/ClaudeSharp.Cli -- --cwd /path/to/project --model opus "your prompt"
+```bash
+# Interactive mode
+aexon
+
+# Prompt mode
+aexon "explain this codebase"
+
+# Override working directory and model
+aexon --cwd /path/to/project --model opus "summarize this repo"
 
 # Resume the latest session
-dotnet run --project src/ClaudeSharp.Cli -- --continue
+aexon --continue
 ```
 
 ## Hooks And MCP Settings
 
-Hooks and MCP server definitions are merged from the matching `settings.json` files in these locations unless `--settings` is provided:
+Unless `--settings` is provided, Aexon merges matching `settings.json` files from these locations:
 
-- `~/.claudesharp/settings.json`
+- `~/.aexon/settings.json`
 - `~/.claude/settings.json`
-- `<working directory>/.claudesharp/settings.json`
+- `<working directory>/.aexon/settings.json`
 - `<working directory>/.claude/settings.json`
 
 The current MCP implementation supports stdio servers and registers their tools dynamically at startup.
 
+## Project Memory Files
+
+Aexon loads project instructions from these files when present:
+
+- `CLAUDE.md`
+- `.claude/CLAUDE.md`
+- `.claude/rules/*.md`
+- `CLAUDE.local.md`
+
 ## Test And Coverage
 
-```bash
-# Run the full test suite
-dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --no-restore
+Local verification:
 
-# Enforce the total project line-coverage gate
-dotnet test tests/ClaudeSharp.Core.Tests/ClaudeSharp.Core.Tests.csproj --configuration Release --no-restore \
+```bash
+dotnet restore Aexon.slnx
+dotnet build Aexon.slnx --configuration Release --no-restore
+dotnet format Aexon.slnx --verify-no-changes --no-restore --severity error
+dotnet test Aexon.slnx \
+  --configuration Release \
+  --no-restore \
   /p:CollectCoverage=true \
   /p:CoverletOutputFormat=json \
-  /p:CoverletOutput=TestResults/coverage-threshold/ \
+  /p:CoverletOutput=TestResults/coverage-ci/ \
   /p:Threshold=80 \
   /p:ThresholdType=line \
   /p:ThresholdStat=total
 ```
 
-The GitHub Actions workflow in `.github/workflows/ci.yml` runs the same coverage gate on every push and pull request.
+GitHub Actions runs the same checks on push and pull request, across Ubuntu, Windows, and macOS. Coverage results are uploaded as workflow artifacts for each OS job.
+
+## Project Structure
+
+```text
+src/
+├── Aexon.Cli/          # Entry point, REPL shell, CLI option parsing
+├── Aexon.Core/         # Query engine, agents, hooks, MCP, permissions, context, storage
+├── Aexon.Tools/        # Built-in tools, web tools, and subagent-facing tools
+└── Aexon.Commands/     # Slash commands such as /agents, /mailbox, /team, /compact
+```
 
 ## CLI Options
 
@@ -148,6 +193,8 @@ The GitHub Actions workflow in `.github/workflows/ci.yml` runs the same coverage
 - `/session`, `/mode`, `/title`, `/tag`
 - `/compact`, `/microcompact`, `/pcompact`, `/session-memory`
 - `/agents`, `/agents summary`, `/agents list`, `/agents wait`, `/agents tail`, `/agents prune`, `/agents stop`
+- `/mailbox`
+- `/team`, `/team create`, `/team show`, `/team dissolve`
 
 ## Dependencies
 
@@ -160,17 +207,17 @@ The GitHub Actions workflow in `.github/workflows/ci.yml` runs the same coverage
 
 ## Architecture
 
-The core loop in `QueryEngine` follows the standard agentic pattern:
+The core loop in `QueryEngine` follows a standard agentic pattern:
 
-1. Build system prompt (environment, tools, memory)
-2. Send conversation to Claude API
-3. Stream the assistant turn when the streaming path is enabled, with a buffered fallback available
-4. Execute requested tools (with permission checks)
-5. Append tool results to conversation
-6. Repeat from step 2 until Claude stops calling tools
+1. Build the system prompt from environment, tools, memory, and runtime context
+2. Send the conversation to the Claude API
+3. Stream the assistant turn, with a buffered fallback available
+4. Execute requested tools with local permission checks
+5. Append tool results to the conversation
+6. Repeat until the model stops calling tools
 
 All I/O is async (`IAsyncEnumerable<QueryEvent>`) so the REPL can stream output progressively.
 
 ## License
 
-This project is for educational and research purposes. See [`claude-code/README.md`](claude-code/README.md) for research context and ethical considerations.
+Released under the MIT License.
