@@ -13,6 +13,7 @@ using Aexon.Core.Permissions;
 using Aexon.Core.Providers;
 using Aexon.Core.Query;
 using Aexon.Core.Storage;
+using Aexon.Core.Cron;
 using Aexon.Core.Todos;
 using Aexon.Core.Tools;
 using Aexon.Tools;
@@ -180,6 +181,9 @@ internal static class Program
         var todoRuntime = await PersistentTodoRuntime.CreateAsync(
             journal,
             metadataEntries);
+        var cronRuntime = await PersistentCronRuntime.CreateAsync(
+            journal,
+            metadataEntries);
         var agentTaskRuntime = await PersistentAgentTaskRuntime.CreateAsync(
             journal,
             metadataEntries,
@@ -202,9 +206,11 @@ internal static class Program
             agentTeamRuntime,
             agentMessageRuntime,
             todoRuntime,
+            cronRuntime,
             messageActivationRuntime,
             agentRuntimeOptions,
             agentSettings.Settings.BackgroundRunConcurrency);
+        await using var cronScheduler = new CronScheduler(cronRuntime, workingDirectory);
         var commandRegistry = BuildCommandRegistry();
         await using var mcpRuntime = managedPolicy.AllowExternalMcpServers
             ? await McpRuntime.CreateAsync(
@@ -327,6 +333,7 @@ internal static class Program
         IAgentTeamRuntime agentTeamRuntime,
         IAgentMessageRuntime agentMessageRuntime,
         ITodoRuntime todoRuntime,
+        ICronRuntime cronRuntime,
         IAgentMessageActivationRuntime messageActivationRuntime,
         AgentRuntimeOptions agentRuntimeOptions,
         int backgroundRunConcurrency)
@@ -342,6 +349,9 @@ internal static class Program
         registry.Register(new GrepTool());
         registry.Register(new AskUserQuestionTool());
         registry.Register(new TodoWriteTool(todoRuntime));
+        registry.Register(new CronCreateTool(cronRuntime));
+        registry.Register(new CronDeleteTool(cronRuntime));
+        registry.Register(new CronListTool(cronRuntime));
         registry.Register(new TeamCreateTool(agentTeamRuntime));
         registry.Register(new TeamStatusTool(agentTeamRuntime));
         registry.Register(new TeamDissolveTool(agentTeamRuntime));
