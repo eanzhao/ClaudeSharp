@@ -213,7 +213,8 @@ internal static class Program
             sessionMemoryFile: sessionMemoryFile,
             initialMessages: resumed?.Messages,
             initialUsage: resumed?.TotalUsage,
-            initialMetadata: resumed?.Metadata);
+            initialMetadata: resumed?.Metadata,
+            askUserQuestion: PromptUserQuestionAsync);
         var permissionContext = contextProvider.GetPermissionContext();
         var appStateStore = new AppStateStore();
         var appStateBridge = new AppStateHostBridge(
@@ -323,6 +324,7 @@ internal static class Program
         registry.Register(new FileEditTool());
         registry.Register(new GlobTool());
         registry.Register(new GrepTool());
+        registry.Register(new AskUserQuestionTool());
         registry.Register(new TeamCreateTool(agentTeamRuntime));
         registry.Register(new TeamStatusTool(agentTeamRuntime));
         registry.Register(new TeamDissolveTool(agentTeamRuntime));
@@ -376,6 +378,65 @@ internal static class Program
             return policy.OrganizationId;
 
         return "default";
+    }
+
+    private static Task<UserQuestionResponse> PromptUserQuestionAsync(
+        UserQuestionRequest request,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (Console.IsInputRedirected)
+            throw new InvalidOperationException("当前会话不是交互式输入，无法向用户提问。");
+
+        Console.WriteLine();
+        Console.WriteLine($"[提问] {request.Question}");
+
+        if (request.Options is { Count: > 0 } options)
+            return Task.FromResult(PromptForOptionSelection(options));
+
+        return Task.FromResult(new UserQuestionResponse(ReadRequiredAnswer("> ")));
+    }
+
+    private static UserQuestionResponse PromptForOptionSelection(IReadOnlyList<string> options)
+    {
+        for (var i = 0; i < options.Count; i++)
+            Console.WriteLine($"{i + 1}. {options[i]}");
+
+        while (true)
+        {
+            var answer = ReadRequiredAnswer("请选择编号或直接输入选项内容: ");
+            if (int.TryParse(answer, out var index) &&
+                index >= 1 &&
+                index <= options.Count)
+            {
+                return new UserQuestionResponse(options[index - 1]);
+            }
+
+            var matched = options.FirstOrDefault(
+                option => string.Equals(option, answer, StringComparison.OrdinalIgnoreCase));
+            if (matched != null)
+                return new UserQuestionResponse(matched);
+
+            Console.WriteLine("输入无效，请重新选择。");
+        }
+    }
+
+    private static string ReadRequiredAnswer(string prompt)
+    {
+        while (true)
+        {
+            Console.Write(prompt);
+            var answer = Console.ReadLine();
+            if (answer == null)
+                throw new InvalidOperationException("用户输入已结束，无法继续等待回答。");
+
+            answer = answer.Trim();
+            if (!string.IsNullOrWhiteSpace(answer))
+                return answer;
+
+            Console.WriteLine("请输入内容。");
+        }
     }
 
     private static CommandRegistry BuildCommandRegistry()
