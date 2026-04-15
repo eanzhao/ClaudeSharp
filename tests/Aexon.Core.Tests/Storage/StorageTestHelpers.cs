@@ -99,4 +99,15 @@ internal static class StorageTestData
             Id = id,
             Content = content,
         };
+
+    public static TombstoneMessage Tombstone(
+        string id,
+        string deletedMessageId,
+        string? reason = null) =>
+        new()
+        {
+            Id = id,
+            DeletedMessageId = deletedMessageId,
+            Reason = reason,
+        };
 }

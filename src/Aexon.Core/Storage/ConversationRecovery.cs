@@ -87,8 +87,9 @@ public sealed class ConversationRecovery : IConversationRecovery
     public ResumeLoadResult Recover(TranscriptProjection projection)
     {
         var chain = BuildChain(projection);
+        var tombstoned = ApplyTombstones(chain, projection.MessagesById);
         var microcompact = BuildMicrocompactState(projection.MetadataEntries);
-        var cleaned = CleanupMessages(ApplyMicrocompact(chain, microcompact));
+        var cleaned = CleanupMessages(ApplyMicrocompact(tombstoned, microcompact));
 
         return new ResumeLoadResult
         {
@@ -322,6 +323,46 @@ public sealed class ConversationRecovery : IConversationRecovery
         }).ToList();
 
         return assistant with { Content = rewritten };
+    }
+
+    private static IReadOnlyList<ConversationMessage> ApplyTombstones(
+        IReadOnlyList<ConversationMessage> messages,
+        IReadOnlyDictionary<string, StoredTranscriptMessage> messagesById)
+    {
+        var tombstones = messagesById.Values
+            .Select(stored => stored.Message)
+            .OfType<TombstoneMessage>()
+            .ToList();
+
+        if (tombstones.Count == 0)
+            return messages;
+
+        var deletedIds = tombstones
+            .Select(t => t.DeletedMessageId)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var tombstoneByDeletedId = tombstones
+            .GroupBy(t => t.DeletedMessageId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.Ordinal);
+
+        var result = new List<ConversationMessage>(messages.Count);
+        foreach (var message in messages)
+        {
+            if (message is TombstoneMessage)
+                continue;
+
+            if (deletedIds.Contains(message.Id) &&
+                tombstoneByDeletedId.TryGetValue(message.Id, out var tombstone))
+            {
+                result.Add(tombstone);
+            }
+            else
+            {
+                result.Add(message);
+            }
+        }
+
+        return result;
     }
 
     private static IReadOnlyList<ConversationMessage> CleanupMessages(

@@ -306,6 +306,22 @@ internal sealed class RecordingJournal : IConversationJournal
         return Task.CompletedTask;
     }
 
+    public int DeleteMessageCount { get; private set; }
+    public string? LastDeletedMessageId { get; private set; }
+
+    public Task DeleteMessageAsync(
+        string messageId,
+        string workingDirectory,
+        string model,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        DeleteMessageCount++;
+        LastDeletedMessageId = messageId;
+        SessionUpdates.Add((workingDirectory, model));
+        return Task.CompletedTask;
+    }
+
     public Task ResetHeadAsync(CancellationToken cancellationToken = default)
     {
         ResetHeadCount++;

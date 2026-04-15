@@ -143,6 +143,7 @@ public sealed class HeuristicConversationCompactor : IConversationCompactor
     private static string DescribeMessage(ConversationMessage message) =>
         message switch
         {
+            TombstoneMessage tombstone => $"[deleted: {tombstone.DeletedMessageId}]",
             UserMessage user => $"User: {SummarizeUserMessage(user)}",
             AssistantMessage assistant => $"Assistant: {SummarizeAssistantMessage(assistant)}",
             SystemMessage system => $"System: {Trim(system.Content)}",
