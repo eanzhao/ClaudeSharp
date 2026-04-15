@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -11,7 +12,6 @@ using Aexon.Core.Tools;
 using Microsoft.Extensions.AI;
 using ApiCacheControlEphemeral = Anthropic.Models.Messages.CacheControlEphemeral;
 using ApiContentBlockParam = Anthropic.Models.Messages.ContentBlockParam;
-using ApiInputJsonDelta = Anthropic.Models.Messages.InputJsonDelta;
 using ApiInputSchema = Anthropic.Models.Messages.InputSchema;
 using ApiMessageCreateParams = Anthropic.Models.Messages.MessageCreateParams;
 using ApiMessageCreateParamsSystem = Anthropic.Models.Messages.MessageCreateParamsSystem;
@@ -28,7 +28,6 @@ using ApiTool = Anthropic.Models.Messages.Tool;
 using ApiToolChoiceAuto = Anthropic.Models.Messages.ToolChoiceAuto;
 using ApiToolResultBlockParam = Anthropic.Models.Messages.ToolResultBlockParam;
 using ApiToolUnion = Anthropic.Models.Messages.ToolUnion;
-using ApiToolUseBlock = Anthropic.Models.Messages.ToolUseBlock;
 using ApiToolUseBlockParam = Anthropic.Models.Messages.ToolUseBlockParam;
 
 namespace Aexon.Core.Query;
@@ -55,6 +54,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
     private readonly AskUserQuestionHandler? _askUserQuestion;
     private readonly ConversationSessionMetadata _sessionMetadata;
     private readonly AttachmentRegistry _attachmentRegistry = new();
+    private readonly ConcurrentQueue<ConversationMessage> _pendingExternalMessages = new();
     private readonly List<ConversationMessage> _messages;
     private TokenUsage _totalUsage;
     private int _consecutiveAutoCompactFailures;
@@ -172,8 +172,10 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
     {
         var startTime = DateTimeOffset.UtcNow;
         var turnCount = 0;
+        string? lastStopReason = null;
 
         await EnsureSessionStartedAsync(ct);
+        FlushPendingExternalMessages();
 
         await AddMessageAsync(UserMessage.FromText(userInput), ct);
 
@@ -255,6 +257,15 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                         turnCount),
                     ct);
 
+                await AddRuntimeMessagesAsync(
+                    CreateStopLifecycleMessages(
+                        success: false,
+                        duration: DateTimeOffset.UtcNow - startTime,
+                        turnCount: turnCount,
+                        stopReason: lastStopReason,
+                        errorMessage: requestError),
+                    ct);
+
                 yield return new QueryCompleteEvent
                 {
                     Success = false,
@@ -274,6 +285,8 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                     promptCachingEnabled,
                     assistantTurn.Usage);
             }
+
+            lastStopReason = assistantTurn.StopReason;
 
             if (!_config.UseStreamingApi)
             {
@@ -318,6 +331,15 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                 turnCount),
             ct);
 
+        await AddRuntimeMessagesAsync(
+            CreateStopLifecycleMessages(
+                success: true,
+                duration: DateTimeOffset.UtcNow - startTime,
+                turnCount: turnCount,
+                stopReason: lastStopReason,
+                errorMessage: null),
+            ct);
+
         yield return new QueryCompleteEvent
         {
             Success = true,
@@ -341,6 +363,10 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
             {
                 case ToolPermissionRequestUpdate request:
                     {
+                        await AddMessageAsync(
+                            CreatePermissionRetryMessage(request),
+                            ct);
+
                         var permissionEvent = new PermissionRequestEvent
                         {
                             ToolName = request.Invocation.Name,
@@ -368,10 +394,17 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                             completed.Outcome.Result.Data,
                             completed.Outcome.Result.IsError);
 
+                        if (completed.Outcome.Result.NewMessages is { Count: > 0 } newMessages)
+                            await AddRuntimeMessagesAsync(newMessages, ct);
+
                         await AddMessageAsync(UserMessage.FromToolResult(
                             completed.Outcome.Invocation.ToolUseId,
                             completed.Outcome.Result.Data,
                             completed.Outcome.Result.IsError), ct);
+
+                        await AddMessageAsync(
+                            CreateToolUseSummaryMessage(completed.Outcome),
+                            ct);
                         break;
                     }
             }
@@ -778,6 +811,18 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                 ct);
         }
 
+        await AddMessageAsync(
+            new AttachmentMessage
+            {
+                Content = $"Attachment registered: {attachment.FileName}",
+                AttachmentId = attachment.Id,
+                AttachmentName = attachment.FileName,
+                MediaType = attachment.MimeType,
+                SourcePath = attachment.SourcePath,
+                SizeBytes = attachment.SizeBytes,
+            },
+            ct);
+
         return attachment;
     }
 
@@ -927,6 +972,21 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         return summary;
     }
 
+    public async Task EnqueueExternalMessageAsync(
+        ConversationMessage message,
+        CancellationToken ct = default)
+    {
+        _pendingExternalMessages.Enqueue(message);
+        if (_journal != null)
+        {
+            await _journal.AppendMessageAsync(
+                message,
+                _contextProvider.WorkingDirectory,
+                _config.Model,
+                ct);
+        }
+    }
+
     private static string FormatDuration(TimeSpan duration)
     {
         if (duration.TotalDays >= 1)
@@ -953,7 +1013,12 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         if (result == null)
             return null;
 
-        await ApplyCompactionResultAsync(result, ct);
+        await ApplyCompactionResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            mode: "compact",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.Conversation,
@@ -983,7 +1048,12 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         if (result == null)
             return null;
 
-        await ApplyCompactionResultAsync(result, ct);
+        await ApplyCompactionResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            mode: "compact_up_to",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.Conversation,
@@ -1013,7 +1083,12 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         if (result == null)
             return null;
 
-        await ApplyCompactionResultAsync(result, ct);
+        await ApplyCompactionResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            mode: "compact_from",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.Conversation,
@@ -1049,7 +1124,11 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         if (result == null || !result.HasChanges)
             return null;
 
-        await ApplySessionMemoryCompactionResultAsync(result, ct);
+        await ApplySessionMemoryCompactionResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.SessionMemory,
@@ -1087,7 +1166,11 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         if (!result.HasChanges)
             return null;
 
-        await ApplyMicrocompactResultAsync(result, ct);
+        await ApplyMicrocompactResultAsync(
+            result,
+            automatic: false,
+            reason: "manual",
+            ct);
         await _hooks.OnPostCompactAsync(
             new CompactHookContext(
                 CompactionLifecycleKind.Microcompact,
@@ -1155,7 +1238,11 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                         messageCount: _messages.Count),
                     ct);
 
-                await ApplyMicrocompactResultAsync(microcompact, ct);
+                await ApplyMicrocompactResultAsync(
+                    microcompact,
+                    automatic: true,
+                    reason: preparation.InitialDecision.Reason,
+                    ct);
                 await _hooks.OnPostCompactAsync(
                     new CompactHookContext(
                         CompactionLifecycleKind.Microcompact,
@@ -1186,7 +1273,11 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                         messageCount: _messages.Count),
                     ct);
 
-                await ApplySessionMemoryCompactionResultAsync(sessionMemory, ct);
+                await ApplySessionMemoryCompactionResultAsync(
+                    sessionMemory,
+                    automatic: true,
+                    reason: preparation.InitialDecision.Reason,
+                    ct);
                 await _hooks.OnPostCompactAsync(
                     new CompactHookContext(
                         CompactionLifecycleKind.SessionMemory,
@@ -1217,7 +1308,12 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                         messageCount: _messages.Count),
                     ct);
 
-                await ApplyCompactionResultAsync(preparation.CompactionResult, ct);
+                await ApplyCompactionResultAsync(
+                    preparation.CompactionResult,
+                    automatic: true,
+                    reason: preparation.InitialDecision.Reason,
+                    mode: "compact",
+                    ct);
                 await _hooks.OnPostCompactAsync(
                     new CompactHookContext(
                         CompactionLifecycleKind.Conversation,
@@ -1255,24 +1351,62 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
 
     private async Task ApplyCompactionResultAsync(
         ConversationCompactionResult result,
+        bool automatic,
+        string reason,
+        string mode,
         CancellationToken ct)
     {
-        await ApplyCheckpointAsync(result.SummaryMessage, result.ActiveMessages, ct);
+        await ApplyCheckpointAsync(
+            result.SummaryMessage,
+            result.ActiveMessages,
+            CreateCompactBoundaryMessage(
+                summaryMessageId: result.SummaryMessage.Id,
+                mode: mode,
+                automatic: automatic,
+                reason: reason,
+                foldedMessageCount: result.RemovedMessageCount,
+                preservedMessageCount: result.ActiveMessages.Count - 1),
+            ct);
     }
 
     private async Task ApplySessionMemoryCompactionResultAsync(
         SessionMemoryCompactionResult result,
+        bool automatic,
+        string reason,
         CancellationToken ct)
     {
-        await ApplyCheckpointAsync(result.MemoryMessage, result.ActiveMessages, ct);
+        await ApplyCheckpointAsync(
+            result.MemoryMessage,
+            result.ActiveMessages,
+            CreateCompactBoundaryMessage(
+                summaryMessageId: result.MemoryMessage.Id,
+                mode: "session_memory",
+                automatic: automatic,
+                reason: reason,
+                foldedMessageCount: result.FoldedMessageCount,
+                preservedMessageCount: result.ActiveMessages.Count - 1),
+            ct);
         if (_sessionMemoryFile != null)
+        {
             await _sessionMemoryFile.SaveAsync(result.SummaryText, ct);
+            await AddMessageAsync(
+                new SystemMemorySavedMessage
+                {
+                    Content = "Session memory summary saved.",
+                    MemoryKind = "session",
+                    FilePath = _sessionMemoryFile.Path,
+                    CharacterCount = result.SummaryText.Length,
+                },
+                ct);
+        }
 
         _contextProvider.SessionMemoryContent = result.SummaryText;
     }
 
     private async Task ApplyMicrocompactResultAsync(
         MicrocompactResult result,
+        bool automatic,
+        string reason,
         CancellationToken ct)
     {
         _messages.Clear();
@@ -1286,21 +1420,40 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                 _config.Model,
                 ct);
         }
+
+        await AddMessageAsync(
+            CreateMicrocompactBoundaryMessage(
+                automatic,
+                reason,
+                result.ClearedToolResultCount,
+                result.ClearedThinkingBlockCount),
+            ct);
     }
 
     private async Task ApplyCheckpointAsync(
         ConversationMessage summaryMessage,
         IReadOnlyList<ConversationMessage> activeMessages,
+        SystemCompactBoundaryMessage? boundaryMessage,
         CancellationToken ct)
     {
+        var activeSnapshot = InsertBoundaryMessage(activeMessages, summaryMessage, boundaryMessage);
         _messages.Clear();
-        _messages.AddRange(activeMessages);
+        _messages.AddRange(activeSnapshot);
 
         if (_journal != null)
         {
+            if (boundaryMessage != null)
+            {
+                await _journal.AppendMessageAsync(
+                    boundaryMessage,
+                    _contextProvider.WorkingDirectory,
+                    _config.Model,
+                    ct);
+            }
+
             await _journal.RecordConversationCheckpointAsync(
                 summaryMessage,
-                activeMessages,
+                activeSnapshot,
                 _contextProvider.WorkingDirectory,
                 _config.Model,
                 ct);
@@ -1320,6 +1473,20 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                 _config.Model,
                 ct);
         }
+    }
+
+    private async Task AddRuntimeMessagesAsync(
+        IEnumerable<ConversationMessage> messages,
+        CancellationToken ct)
+    {
+        foreach (var message in messages)
+            await AddMessageAsync(message, ct);
+    }
+
+    private void FlushPendingExternalMessages()
+    {
+        while (_pendingExternalMessages.TryDequeue(out var message))
+            _messages.Add(message);
     }
 
     private async Task PersistRuntimeStateAsync(CancellationToken ct)
@@ -1516,6 +1683,151 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         await EndSessionAsync(dueToClear: false, CancellationToken.None);
     }
 
+    private static TokenUsage CreateTokenUsage(
+        long? inputTokens,
+        long? outputTokens,
+        long? cacheReadInputTokens,
+        long? cacheCreationInputTokens) =>
+        new()
+        {
+            InputTokens = (int)(inputTokens ?? 0),
+            OutputTokens = (int)(outputTokens ?? 0),
+            CacheReadInputTokens = (int)(cacheReadInputTokens ?? 0),
+            CacheCreationInputTokens = (int)(cacheCreationInputTokens ?? 0),
+        };
+
+    private IReadOnlyList<ConversationMessage> InsertBoundaryMessage(
+        IReadOnlyList<ConversationMessage> activeMessages,
+        ConversationMessage summaryMessage,
+        SystemCompactBoundaryMessage? boundaryMessage)
+    {
+        if (boundaryMessage == null)
+            return activeMessages.ToArray();
+
+        if (activeMessages.Count > 0 &&
+            string.Equals(activeMessages[0].Id, summaryMessage.Id, StringComparison.Ordinal))
+        {
+            return [summaryMessage, boundaryMessage, .. activeMessages.Skip(1)];
+        }
+
+        return [boundaryMessage, .. activeMessages];
+    }
+
+    private SystemCompactBoundaryMessage CreateCompactBoundaryMessage(
+        string summaryMessageId,
+        string mode,
+        bool automatic,
+        string reason,
+        int foldedMessageCount,
+        int preservedMessageCount) =>
+        new()
+        {
+            Content = $"Compaction boundary recorded for {mode}.",
+            BoundaryId = Guid.NewGuid().ToString("N"),
+            Mode = mode,
+            Automatic = automatic,
+            Reason = reason,
+            FoldedMessageCount = Math.Max(0, foldedMessageCount),
+            PreservedMessageCount = Math.Max(0, preservedMessageCount),
+            SummaryMessageId = summaryMessageId,
+        };
+
+    private SystemMicrocompactBoundaryMessage CreateMicrocompactBoundaryMessage(
+        bool automatic,
+        string reason,
+        int clearedToolResultCount,
+        int clearedThinkingBlockCount) =>
+        new()
+        {
+            Content = "Microcompact boundary recorded.",
+            BoundaryId = Guid.NewGuid().ToString("N"),
+            Automatic = automatic,
+            Reason = reason,
+            ClearedToolResultCount = Math.Max(0, clearedToolResultCount),
+            ClearedThinkingBlockCount = Math.Max(0, clearedThinkingBlockCount),
+        };
+
+    private SystemPermissionRetryMessage CreatePermissionRetryMessage(
+        ToolPermissionRequestUpdate request) =>
+        new()
+        {
+            Content = $"Permission requested for {request.Invocation.Name}.",
+            ToolName = request.Invocation.Name,
+            ToolUseId = request.Invocation.ToolUseId,
+            Attempt = CountPermissionRetries(request.Invocation.ToolUseId) + 1,
+            Reason = request.Description,
+            UpdatedInput = request.ObservedInput.Clone(),
+        };
+
+    private int CountPermissionRetries(string toolUseId) =>
+        _messages
+            .OfType<SystemPermissionRetryMessage>()
+            .Count(message => string.Equals(message.ToolUseId, toolUseId, StringComparison.Ordinal));
+
+    private ToolUseSummaryMessage CreateToolUseSummaryMessage(ToolRunOutcome outcome) =>
+        new()
+        {
+            Content = $"Tool {outcome.Invocation.Name} completed.",
+            ToolUseId = outcome.Invocation.ToolUseId,
+            ToolName = outcome.Invocation.Name,
+            IsError = outcome.Result.IsError,
+            ResultPreview = BuildResultPreview(outcome.Result.Data),
+        };
+
+    private IEnumerable<ConversationMessage> CreateStopLifecycleMessages(
+        bool success,
+        TimeSpan duration,
+        int turnCount,
+        string? stopReason,
+        string? errorMessage)
+    {
+        yield return new SystemTurnDurationMessage
+        {
+            Content = "Turn duration recorded.",
+            TurnCount = turnCount,
+            DurationMs = duration.TotalMilliseconds,
+            Model = _config.Model,
+        };
+
+        yield return new SystemApiMetricsMessage
+        {
+            Content = "API metrics recorded.",
+            Model = _config.Model,
+            Usage = _totalUsage,
+            DurationMs = duration.TotalMilliseconds,
+            StopReason = stopReason,
+            Success = success,
+        };
+
+        yield return new SystemStopHookSummaryMessage
+        {
+            Content = success
+                ? "Stop hooks completed."
+                : "Stop-failure hooks completed.",
+            HookEvent = success ? "stop" : "stop_failure",
+            Success = success,
+            DurationMs = duration.TotalMilliseconds,
+            Summary = success
+                ? "Stop hook lifecycle finished successfully."
+                : "Stop hook lifecycle finished after a failed turn.",
+            ErrorMessage = errorMessage,
+        };
+    }
+
+    private static string BuildResultPreview(string result)
+    {
+        if (string.IsNullOrWhiteSpace(result))
+            return string.Empty;
+
+        var collapsed = string.Join(
+            ' ',
+            result.Split(['\r', '\n', '\t'], StringSplitOptions.RemoveEmptyEntries));
+
+        return collapsed.Length <= 160
+            ? collapsed
+            : $"{collapsed[..157]}...";
+    }
+
     private PromptCacheStatusEvent? CreatePromptCacheStatusEvent(
         bool promptCachingEnabled,
         TokenUsage usage)
@@ -1670,34 +1982,119 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
             if (rawRepresentation is ApiRawMessageStreamEvent streamEvent)
                 rawRepresentation = streamEvent.Value;
 
-            switch (rawRepresentation)
+            if (rawRepresentation is ApiRawContentBlockStartEvent startEvent)
             {
-                case ApiRawContentBlockStartEvent start
-                    when start.ContentBlock.Value is ApiToolUseBlock toolUse:
-                    _pendingToolUses[start.Index] = new PendingToolUse(
-                        start.Index,
-                        toolUse.ID,
-                        toolUse.Name,
-                        toolUse.Input is { Count: > 0 }
-                            ? JsonSerializer.SerializeToElement(toolUse.Input)
+                if (startEvent.ContentBlock.TryPickToolUse(out var toolUseBlock))
+                {
+                    _pendingToolUses[startEvent.Index] = new PendingToolUse(
+                        startEvent.Index,
+                        toolUseBlock.ID ?? string.Empty,
+                        toolUseBlock.Name ?? string.Empty,
+                        toolUseBlock.Input is { Count: > 0 }
+                            ? JsonSerializer.SerializeToElement(toolUseBlock.Input)
                             : JsonSerializer.SerializeToElement(new { }));
-                    break;
+                }
 
-                case ApiRawContentBlockDeltaEvent delta
-                    when delta.Delta.Value is ApiInputJsonDelta inputJsonDelta
-                         && _pendingToolUses.TryGetValue(delta.Index, out var pending):
-                    pending.PartialJson.Append(inputJsonDelta.PartialJson);
-                    break;
-
-                case ApiRawContentBlockStopEvent stop:
-                    var hasFunctionCall = contents.OfType<FunctionCallContent>().Any();
-                    if (!_pendingToolUses.Remove(stop.Index, out var stoppedPending) || hasFunctionCall)
-                        break;
-
-                    return FinalizePendingToolUse(stoppedPending);
+                return [];
             }
 
+            if (rawRepresentation is ApiRawContentBlockDeltaEvent deltaEvent &&
+                deltaEvent.Delta.TryPickInputJson(out var inputJsonDelta) &&
+                _pendingToolUses.TryGetValue(deltaEvent.Index, out var pending))
+            {
+                pending.PartialJson.Append(inputJsonDelta.PartialJson);
+                return [];
+            }
+
+            if (rawRepresentation is ApiRawContentBlockStopEvent stopEvent)
+            {
+                var hasFunctionCall = contents.OfType<FunctionCallContent>().Any();
+                if (_pendingToolUses.Remove(stopEvent.Index, out var stoppedPending) && !hasFunctionCall)
+                    return FinalizePendingToolUse(stoppedPending);
+
+                return [];
+            }
+
+            if (rawRepresentation is JsonElement jsonEvent)
+                return TrackJsonRawUpdate(jsonEvent, contents);
+
+            if (rawRepresentation is JsonDocument jsonDocument)
+                return TrackJsonRawUpdate(jsonDocument.RootElement, contents);
+
             return [];
+        }
+
+        private IReadOnlyList<QueryEvent> TrackJsonRawUpdate(
+            JsonElement rawEvent,
+            IList<AIContent> contents)
+        {
+            if (rawEvent.ValueKind != JsonValueKind.Object ||
+                !rawEvent.TryGetProperty("type", out var typeProperty))
+                return [];
+
+            var eventType = typeProperty.GetString();
+            if (string.IsNullOrWhiteSpace(eventType))
+                return [];
+
+            switch (eventType)
+            {
+                case "content_block_start":
+                    if (!TryGetIndex(rawEvent, out var startIndex) ||
+                        !rawEvent.TryGetProperty("content_block", out var contentBlock) ||
+                        !contentBlock.TryGetProperty("type", out var blockTypeProperty) ||
+                        !string.Equals(blockTypeProperty.GetString(), "tool_use", StringComparison.Ordinal))
+                    {
+                        return [];
+                    }
+
+                    _pendingToolUses[startIndex] = new PendingToolUse(
+                        startIndex,
+                        contentBlock.TryGetProperty("id", out var idProperty)
+                            ? idProperty.GetString() ?? string.Empty
+                            : string.Empty,
+                        contentBlock.TryGetProperty("name", out var nameProperty)
+                            ? nameProperty.GetString() ?? string.Empty
+                            : string.Empty,
+                        contentBlock.TryGetProperty("input", out var inputProperty)
+                            ? inputProperty.Clone()
+                            : JsonSerializer.SerializeToElement(new { }));
+                    return [];
+
+                case "content_block_delta":
+                    if (!TryGetIndex(rawEvent, out var deltaIndex) ||
+                        !_pendingToolUses.TryGetValue(deltaIndex, out var pending) ||
+                        !rawEvent.TryGetProperty("delta", out var deltaPayload) ||
+                        !deltaPayload.TryGetProperty("type", out var deltaTypeProperty) ||
+                        !string.Equals(deltaTypeProperty.GetString(), "input_json_delta", StringComparison.Ordinal))
+                    {
+                        return [];
+                    }
+
+                    if (deltaPayload.TryGetProperty("partial_json", out var partialJsonProperty))
+                        pending.PartialJson.Append(partialJsonProperty.GetString());
+
+                    return [];
+
+                case "content_block_stop":
+                    if (!TryGetIndex(rawEvent, out var stopIndex))
+                        return [];
+
+                    var hasFunctionCall = contents.OfType<FunctionCallContent>().Any();
+                    if (_pendingToolUses.Remove(stopIndex, out var stoppedPending) && !hasFunctionCall)
+                        return FinalizePendingToolUse(stoppedPending);
+
+                    return [];
+
+                default:
+                    return [];
+            }
+        }
+
+        private static bool TryGetIndex(JsonElement rawEvent, out long index)
+        {
+            index = default;
+            return rawEvent.TryGetProperty("index", out var indexProperty) &&
+                   indexProperty.TryGetInt64(out index);
         }
 
         public IReadOnlyList<QueryEvent> FlushPendingToolUses()

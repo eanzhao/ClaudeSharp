@@ -70,7 +70,7 @@ public record AssistantMessage : ConversationMessage
 public record SystemMessage : ConversationMessage
 {
     public override string Type => "system";
-    public required string Content { get; init; }
+    public string Content { get; init; } = string.Empty;
     public string? Subtype { get; init; }
 }
 

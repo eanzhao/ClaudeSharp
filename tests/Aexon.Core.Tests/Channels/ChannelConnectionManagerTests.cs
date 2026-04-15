@@ -1,4 +1,5 @@
 using Aexon.Core.Channels;
+using Aexon.Core.Messages;
 
 namespace Aexon.Core.Tests.Channels;
 
@@ -101,5 +102,25 @@ public sealed class ChannelConnectionManagerTests
         Assert.True(manager.TryGet("ch1", out var connection));
         Assert.Equal(ChannelConnectionState.Connected, connection!.State);
         Assert.Null(connection.ErrorMessage);
+    }
+
+    [Fact]
+    public void UpdateState_EmitsBridgeStatusMessage()
+    {
+        var manager = new ChannelConnectionManager();
+        var emittedMessages = new List<ConversationMessage>();
+        manager.SetMessageSink((message, _) =>
+        {
+            emittedMessages.Add(message);
+            return Task.CompletedTask;
+        });
+        manager.Register("ch1", ChannelKind.Bridge, "bridge:ch1");
+
+        manager.UpdateState("ch1", ChannelConnectionState.Failed, "Timeout");
+
+        var message = Assert.IsType<SystemBridgeStatusMessage>(Assert.Single(emittedMessages));
+        Assert.Equal("bridge:ch1", message.BridgeName);
+        Assert.Equal("failed", message.Status);
+        Assert.Equal("Timeout", message.Detail);
     }
 }

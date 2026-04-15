@@ -149,6 +149,8 @@ public sealed class QueryEngineStreamingTests
         Assert.True(sessionMemoryFile.Exists);
         Assert.Equal(result!.SummaryText, await sessionMemoryFile.LoadAsync());
         Assert.Equal(result.SummaryText, provider.SessionMemoryContent);
+        Assert.Contains(engine.Messages, message => message is SystemCompactBoundaryMessage boundary && boundary.Mode == "session_memory");
+        Assert.Contains(engine.Messages, message => message is SystemMemorySavedMessage saved && saved.FilePath == sessionMemoryFile.Path);
     }
 
     [Fact]
@@ -306,10 +308,10 @@ public sealed class QueryEngineStreamingTests
         Assert.Equal(
             ["Hello", " world"],
             events.OfType<TextDeltaEvent>().Select(evt => evt.Text).ToArray());
+        var assistant = Assert.IsType<AssistantMessage>(engine.Messages.OfType<AssistantMessage>().Last());
         Assert.Equal(
             "Hello world",
-            Assert.IsType<TextBlock>(
-                Assert.IsType<AssistantMessage>(engine.Messages[^1]).Content[0]).Text);
+            Assert.IsType<TextBlock>(assistant.Content[0]).Text);
         Assert.True(Assert.IsType<QueryCompleteEvent>(events[^1]).Success);
     }
 
@@ -441,8 +443,9 @@ public sealed class QueryEngineStreamingTests
 
         var events = await CollectAsync(engine.SubmitMessageAsync("find this"));
 
-        Assert.Contains(events, e => e is TextDeltaEvent { Text: "Okay" });
-        Assert.Contains(events, e => e is MessageEndEvent { StopReason: "tool_calls" or "tool_use" });
+        Assert.Contains(events, evt => evt is TextDeltaEvent { Text: "Okay" });
+        Assert.Contains(events, evt => evt is MessageEndEvent { StopReason: "tool_calls" or "tool_use" });
+        Assert.Contains("\"stream\":true", handler.Bodies[0], StringComparison.OrdinalIgnoreCase);
         Assert.True(Assert.IsType<QueryCompleteEvent>(events[^1]).Success);
     }
 

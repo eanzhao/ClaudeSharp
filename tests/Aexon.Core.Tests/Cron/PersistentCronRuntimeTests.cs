@@ -1,4 +1,5 @@
 using Aexon.Core.Cron;
+using Aexon.Core.Messages;
 using Aexon.Core.Storage;
 using Aexon.Core.Tests.Runtime;
 using Aexon.Core.Tests.Storage;
@@ -36,6 +37,12 @@ public sealed class PersistentCronRuntimeTests
     {
         var journal = new RecordingJournal();
         var runtime = await PersistentCronRuntime.CreateAsync(journal);
+        var emittedMessages = new List<ConversationMessage>();
+        runtime.SetMessageSink((message, _) =>
+        {
+            emittedMessages.Add(message);
+            return Task.CompletedTask;
+        });
 
         runtime.CreateJob("test-job", "*/5 * * * *", "echo hello");
         runtime.RecordExecution(new CronExecutionRecord
@@ -63,6 +70,10 @@ public sealed class PersistentCronRuntimeTests
         var restoredJob = restored.GetJob("test-job");
         Assert.NotNull(restoredJob);
         Assert.NotNull(restoredJob!.LastRunAt);
+
+        var scheduled = Assert.IsType<SystemScheduledTaskFireMessage>(Assert.Single(emittedMessages));
+        Assert.Equal("test-job", scheduled.TaskName);
+        Assert.Equal("completed", scheduled.Result);
     }
 
     [Fact]

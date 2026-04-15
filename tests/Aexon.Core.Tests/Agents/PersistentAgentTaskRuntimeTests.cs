@@ -1,4 +1,5 @@
 using Aexon.Core.Agents;
+using Aexon.Core.Messages;
 using Aexon.Core.Storage;
 using Aexon.Core.Tests.Runtime;
 using Aexon.Core.Tests.Storage;
@@ -15,6 +16,12 @@ public sealed class PersistentAgentTaskRuntimeTests
     {
         var journal = new RecordingJournal();
         var runtime = await PersistentAgentTaskRuntime.CreateAsync(journal);
+        var emittedMessages = new List<ConversationMessage>();
+        runtime.SetMessageSink((message, _) =>
+        {
+            emittedMessages.Add(message);
+            return Task.CompletedTask;
+        });
 
         var workItem = runtime.CreateWorkItem("Inspect runtime", owner: "subagent");
         runtime.UpdateWorkItem(workItem.Id, item =>
@@ -56,6 +63,29 @@ public sealed class PersistentAgentTaskRuntimeTests
         Assert.Equal(AgentBackgroundRunStatus.Stopped, restoredRun.Status);
         Assert.Equal(workItem.Id, restoredRun.WorkItemId);
         Assert.Equal(["Summary: all good"], restoredRun.Output);
+        Assert.Empty(emittedMessages);
+    }
+
+    [Fact]
+    public async Task CancelBackgroundRun_EmitsAgentsKilledMessage()
+    {
+        var journal = new RecordingJournal();
+        var runtime = await PersistentAgentTaskRuntime.CreateAsync(journal);
+        var emittedMessages = new List<ConversationMessage>();
+        runtime.SetMessageSink((message, _) =>
+        {
+            emittedMessages.Add(message);
+            return Task.CompletedTask;
+        });
+
+        var run = runtime.StartBackgroundRun("Inspect runtime", owner: "subagent", subagentId: "subagent-7");
+
+        var cancelled = runtime.CancelBackgroundRun(run.Id, "user requested");
+
+        Assert.True(cancelled);
+        var message = Assert.IsType<SystemAgentsKilledMessage>(Assert.Single(emittedMessages));
+        Assert.Equal(["subagent-7"], message.AgentIds);
+        Assert.Contains("user requested", message.Reason, StringComparison.Ordinal);
     }
 
     [Fact]

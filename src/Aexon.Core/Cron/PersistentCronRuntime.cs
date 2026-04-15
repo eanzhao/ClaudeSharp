@@ -1,3 +1,4 @@
+using Aexon.Core.Messages;
 using Aexon.Core.Storage;
 
 namespace Aexon.Core.Cron;
@@ -9,6 +10,7 @@ public sealed class PersistentCronRuntime : ICronRuntime
 {
     private readonly InMemoryCronRuntime _inner;
     private readonly IConversationJournal _journal;
+    private Func<ConversationMessage, CancellationToken, Task>? _messageSink;
 
     private PersistentCronRuntime(
         InMemoryCronRuntime inner,
@@ -47,6 +49,9 @@ public sealed class PersistentCronRuntime : ICronRuntime
 
     public IReadOnlyList<CronJob> ListJobs() => _inner.ListJobs();
 
+    public void SetMessageSink(Func<ConversationMessage, CancellationToken, Task>? messageSink) =>
+        _messageSink = messageSink;
+
     public bool DeleteJob(string id)
     {
         var deleted = _inner.DeleteJob(id);
@@ -61,7 +66,10 @@ public sealed class PersistentCronRuntime : ICronRuntime
         Persist(CronPersistence.CreateExecutionEntry(record));
 
         if (_inner.GetJob(record.JobId) is { } job)
+        {
             Persist(CronPersistence.CreateJobEntry(job));
+            EmitScheduledTaskFireMessage(record, job);
+        }
     }
 
     public IReadOnlyList<CronExecutionRecord> ListHistory(
@@ -78,6 +86,30 @@ public sealed class PersistentCronRuntime : ICronRuntime
         catch
         {
             // Cron persistence is best-effort; in-memory state still updates.
+        }
+    }
+
+    private void EmitScheduledTaskFireMessage(CronExecutionRecord record, CronJob job)
+    {
+        if (_messageSink == null)
+            return;
+
+        var message = new SystemScheduledTaskFireMessage
+        {
+            Content = $"Scheduled task '{job.Id}' fired.",
+            TaskName = job.Id,
+            ScheduledAt = record.StartedAt,
+            FiredAt = record.StartedAt,
+            Result = record.Success ? "completed" : "failed",
+        };
+
+        try
+        {
+            _messageSink(message, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Runtime messages are best-effort; cron execution should still succeed.
         }
     }
 }

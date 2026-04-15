@@ -3,6 +3,7 @@ using System.Text.Json;
 using Aexon.Commands;
 using Aexon.Core.Agents;
 using Aexon.Core.AppState;
+using Aexon.Core.Channels;
 using Aexon.Core.Commands;
 using Aexon.Core.Configuration;
 using Aexon.Core.Context;
@@ -194,6 +195,10 @@ internal static class Program
         var agentMessageRuntime = await PersistentAgentMessageRuntime.CreateAsync(
             journal,
             metadataEntries);
+        var channelConnectionManager = new ChannelConnectionManager();
+        var channelRouter = new ChannelRouter(
+            new BridgeChannelTransport(channelConnectionManager, agentMessageRuntime),
+            new UdsChannelTransport(channelConnectionManager, agentMessageRuntime));
         var messageActivationRuntime = new InMemoryAgentMessageActivationRuntime();
         var toolRegistry = BuildToolRegistry(
             providerRouter,
@@ -207,10 +212,10 @@ internal static class Program
             agentMessageRuntime,
             todoRuntime,
             cronRuntime,
+            channelRouter,
             messageActivationRuntime,
             agentRuntimeOptions,
             agentSettings.Settings.BackgroundRunConcurrency);
-        await using var cronScheduler = new CronScheduler(cronRuntime, workingDirectory);
         var commandRegistry = BuildCommandRegistry();
         await using var mcpRuntime = managedPolicy.AllowExternalMcpServers
             ? await McpRuntime.CreateAsync(
@@ -232,6 +237,10 @@ internal static class Program
             initialUsage: resumed?.TotalUsage,
             initialMetadata: resumed?.Metadata,
             askUserQuestion: PromptUserQuestionAsync);
+        cronRuntime.SetMessageSink(queryEngine.EnqueueExternalMessageAsync);
+        agentTaskRuntime.SetMessageSink(queryEngine.EnqueueExternalMessageAsync);
+        channelConnectionManager.SetMessageSink(queryEngine.EnqueueExternalMessageAsync);
+        await using var cronScheduler = new CronScheduler(cronRuntime, workingDirectory);
         toolRegistry.Register(new EnterPlanModeTool(queryEngine));
         toolRegistry.Register(new ExitPlanModeTool(queryEngine));
         var permissionContext = contextProvider.GetPermissionContext();
@@ -255,6 +264,7 @@ internal static class Program
                     managedSettings: managedSettings.Settings,
                     activeTokenSource: managedPolicy.ActiveTokenSource,
                     mcpConnectionManager: mcpRuntime.ConnectionManager,
+                    channelConnectionManager: channelConnectionManager,
                     agentTaskRuntime: agentTaskRuntime,
                     agentMessageRuntime: agentMessageRuntime,
                     agentTeamRuntime: agentTeamRuntime,
@@ -335,6 +345,7 @@ internal static class Program
         IAgentMessageRuntime agentMessageRuntime,
         ITodoRuntime todoRuntime,
         ICronRuntime cronRuntime,
+        ChannelRouter channelRouter,
         IAgentMessageActivationRuntime messageActivationRuntime,
         AgentRuntimeOptions agentRuntimeOptions,
         int backgroundRunConcurrency)
@@ -356,7 +367,7 @@ internal static class Program
         registry.Register(new TeamCreateTool(agentTeamRuntime));
         registry.Register(new TeamStatusTool(agentTeamRuntime));
         registry.Register(new TeamDissolveTool(agentTeamRuntime));
-        registry.Register(new SendMessageTool(agentMessageRuntime, agentTeamRuntime, messageActivationRuntime, agentTaskRuntime));
+        registry.Register(new SendMessageTool(agentMessageRuntime, agentTeamRuntime, messageActivationRuntime, agentTaskRuntime, channelRouter: channelRouter));
         registry.Register(new MailboxStatusTool(agentMessageRuntime));
         registry.Register(new MailboxRespondTool(agentMessageRuntime, messageActivationRuntime, agentTaskRuntime));
         registry.Register(new WebFetchTool());

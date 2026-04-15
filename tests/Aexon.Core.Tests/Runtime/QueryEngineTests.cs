@@ -86,13 +86,15 @@ public class QueryEngineTests
         var result = await engine.CompactAsync(preserveTailCount: 2);
 
         Assert.NotNull(result);
-        Assert.Equal(3, engine.Messages.Count);
+        Assert.Equal(4, engine.Messages.Count);
         var summary = Assert.IsType<UserMessage>(engine.Messages[0]);
         Assert.True(summary.IsMeta);
         Assert.Contains("Conversation summary before compaction", Assert.IsType<TextBlock>(summary.Content[0]).Text);
+        var boundary = Assert.IsType<SystemCompactBoundaryMessage>(engine.Messages[1]);
+        Assert.Equal("compact", boundary.Mode);
         Assert.Equal(1, journal.CheckpointCount);
         Assert.NotNull(journal.LastCheckpointSummary);
-        Assert.Equal(3, journal.LastCheckpointActiveMessages?.Count);
+        Assert.Equal(4, journal.LastCheckpointActiveMessages?.Count);
     }
 
     [Fact]
@@ -123,6 +125,9 @@ public class QueryEngineTests
         Assert.Contains(MicrocompactPlaceholders.OldToolResult, Assert.IsType<ToolResultBlock>(user.Content[0]).Content);
         var assistant = Assert.IsType<AssistantMessage>(engine.Messages[1]);
         Assert.Contains(MicrocompactPlaceholders.OldThinking, Assert.IsType<ThinkingBlock>(assistant.Content[0]).Text);
+        var boundary = Assert.IsType<SystemMicrocompactBoundaryMessage>(engine.Messages[^1]);
+        Assert.Equal(1, boundary.ClearedToolResultCount);
+        Assert.Equal(1, boundary.ClearedThinkingBlockCount);
     }
 
     [Fact]
@@ -415,6 +420,10 @@ public class QueryEngineTests
         Assert.True(meta.Attachments.ContainsKey(attachment.Id));
 
         Assert.Single(journal.Metadata.Attachments);
+        var message = Assert.IsType<AttachmentMessage>(Assert.Single(journal.AppendedMessages));
+        Assert.Equal(attachment.Id, message.AttachmentId);
+        Assert.Equal("readme.md", message.AttachmentName);
+        Assert.Equal("/tmp/readme.md", message.SourcePath);
     }
 
     [Fact]

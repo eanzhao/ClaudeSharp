@@ -1005,6 +1005,7 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public string? SummaryText { get; init; }
         public string? DeletedMessageId { get; init; }
         public string? Reason { get; init; }
+        public JsonElement? SystemData { get; init; }
 
         public static PersistedConversationMessage FromDomain(ConversationMessage message) =>
             message switch
@@ -1035,6 +1036,9 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     Timestamp = system.Timestamp,
                     SystemContent = system.Content,
                     Subtype = system.Subtype,
+                    SystemData = StructuredSystemMessageCodec.Serialize(system) is { } payload
+                        ? payload.Clone()
+                        : null,
                 },
                 SystemAwaySummaryMessage away => new PersistedConversationMessage
                 {
@@ -1077,13 +1081,12 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     Usage = Usage,
                     ApiError = ApiError,
                 },
-                "system" => new SystemMessage
-                {
-                    Id = Id,
-                    Timestamp = Timestamp,
-                    Content = SystemContent ?? string.Empty,
-                    Subtype = Subtype,
-                },
+                "system" => StructuredSystemMessageCodec.Deserialize(
+                    Id,
+                    Timestamp,
+                    SystemContent ?? string.Empty,
+                    Subtype,
+                    SystemData is { } payload ? payload.Clone() : null),
                 "system_away_summary" => new SystemAwaySummaryMessage
                 {
                     Id = Id,

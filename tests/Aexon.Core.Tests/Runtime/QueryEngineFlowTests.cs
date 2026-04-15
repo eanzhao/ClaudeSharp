@@ -117,17 +117,24 @@ public sealed class QueryEngineFlowTests
             });
 
         var events = await CollectAsync(engine.SubmitMessageAsync("find this"));
+        var conversationMessages = journal.AppendedMessages
+            .Where(message => message is not SystemMessage)
+            .ToArray();
 
         Assert.Contains(events, evt => evt is ToolResultEvent result &&
                                        result.ToolUseId == "tool-1" &&
                                        result.Result == "tool output");
-        Assert.Equal(4, journal.AppendedMessages.Count);
-        Assert.IsType<UserMessage>(journal.AppendedMessages[0]);
-        Assert.IsType<AssistantMessage>(journal.AppendedMessages[1]);
-        var toolResultMessage = Assert.IsType<UserMessage>(journal.AppendedMessages[2]);
-        Assert.IsType<AssistantMessage>(journal.AppendedMessages[3]);
+        Assert.Equal(4, conversationMessages.Length);
+        Assert.IsType<UserMessage>(conversationMessages[0]);
+        Assert.IsType<AssistantMessage>(conversationMessages[1]);
+        var toolResultMessage = Assert.IsType<UserMessage>(conversationMessages[2]);
+        Assert.IsType<AssistantMessage>(conversationMessages[3]);
         Assert.Equal(journal.AppendedMessages[1].Id, journal.ParentMessageIds[2]);
         Assert.Equal("tool output", Assert.IsType<ToolResultBlock>(toolResultMessage.Content[0]).Content);
+        Assert.Contains(journal.AppendedMessages, message => message is ToolUseSummaryMessage { ToolUseId: "tool-1", ToolName: "search" });
+        Assert.Contains(journal.AppendedMessages, message => message is SystemTurnDurationMessage { TurnCount: 2 });
+        Assert.Contains(journal.AppendedMessages, message => message is SystemApiMetricsMessage { Success: true });
+        Assert.Contains(journal.AppendedMessages, message => message is SystemStopHookSummaryMessage { Success: true, HookEvent: "stop" });
         Assert.Equal(2, handler.Requests.Count);
     }
 
@@ -179,6 +186,9 @@ public sealed class QueryEngineFlowTests
             });
 
         var events = await CollectAsync(engine.SubmitMessageAsync("help me decide"));
+        var conversationMessages = journal.AppendedMessages
+            .Where(message => message is not SystemMessage)
+            .ToArray();
 
         Assert.Contains(events, evt => evt is ToolResultEvent result &&
                                        result.ToolName == "AskUserQuestion" &&
@@ -187,9 +197,13 @@ public sealed class QueryEngineFlowTests
         Assert.NotNull(prompted);
         Assert.Equal("Which option should I use?", prompted!.Question);
         Assert.Equal(["alpha", "beta"], prompted.Options);
-        Assert.Equal(4, journal.AppendedMessages.Count);
+        Assert.Equal(4, conversationMessages.Length);
         Assert.Equal("beta", Assert.IsType<ToolResultBlock>(
-            Assert.IsType<UserMessage>(journal.AppendedMessages[2]).Content[0]).Content);
+            Assert.IsType<UserMessage>(conversationMessages[2]).Content[0]).Content);
+        Assert.Contains(journal.AppendedMessages, message => message is ToolUseSummaryMessage { ToolUseId: "tool-1", ToolName: "AskUserQuestion" });
+        Assert.Contains(journal.AppendedMessages, message => message is SystemTurnDurationMessage { TurnCount: 2 });
+        Assert.Contains(journal.AppendedMessages, message => message is SystemApiMetricsMessage { Success: true });
+        Assert.Contains(journal.AppendedMessages, message => message is SystemStopHookSummaryMessage { Success: true, HookEvent: "stop" });
         Assert.Equal(2, handler.Requests.Count);
     }
 
