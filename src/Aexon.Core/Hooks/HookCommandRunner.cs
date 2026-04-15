@@ -33,6 +33,8 @@ public interface IHookCommandRunner
 /// </summary>
 public sealed class ProcessHookCommandRunner : IHookCommandRunner
 {
+    private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     public async Task<HookCommandExecutionResult> ExecuteAsync(
         HookCommandDefinition command,
         string payloadJson,
@@ -52,7 +54,7 @@ public sealed class ProcessHookCommandRunner : IHookCommandRunner
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                StandardInputEncoding = Encoding.UTF8,
+                StandardInputEncoding = Utf8WithoutBom,
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             },
