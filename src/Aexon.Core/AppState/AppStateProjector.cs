@@ -1,7 +1,9 @@
 using Aexon.Core.Agents;
+using Aexon.Core.Channels;
 using Aexon.Core.Configuration;
 using Aexon.Core.Mcp;
 using Aexon.Core.Permissions;
+using Aexon.Core.Query;
 using Aexon.Core.Todos;
 
 namespace Aexon.Core.AppState;
@@ -20,11 +22,13 @@ public sealed class AppStateProjector
         ManagedSettingsSnapshot? managedSettings = null,
         AnthropicTokenSourceSnapshot? activeTokenSource = null,
         McpConnectionManager? mcpConnectionManager = null,
+        ChannelConnectionManager? channelConnectionManager = null,
         IAgentTaskRuntime? agentTaskRuntime = null,
         IAgentTeamRuntime? agentTeamRuntime = null,
         IAgentMessageRuntime? agentMessageRuntime = null,
         AgentRuntimeOptions? agentRuntimeOptions = null,
-        ITodoRuntime? todoRuntime = null)
+        ITodoRuntime? todoRuntime = null,
+        IAwayModeController? awayModeController = null)
     {
         var workItems = SnapshotWorkItems(agentTaskRuntime);
         var effectiveAutoResumeMode = agentRuntimeOptions?.AutoResumeMode ?? autoResumeMode;
@@ -40,11 +44,14 @@ public sealed class AppStateProjector
             ManagedSettings = managedSettings ?? ManagedSettingsSnapshot.Empty,
             ActiveTokenSource = activeTokenSource,
             McpConnections = SnapshotMcpConnections(mcpConnectionManager),
+            ChannelConnections = SnapshotChannelConnections(channelConnectionManager),
             WorkItems = workItems,
             TaskAttention = SnapshotTaskAttention(agentTaskRuntime),
             Teams = SnapshotTeams(agentTeamRuntime),
             Mailboxes = SnapshotMailboxes(agentMessageRuntime),
             Todos = SnapshotTodos(todoRuntime),
+            IsAwayModeActive = awayModeController?.IsAwayModeActive ?? false,
+            AwayEnteredAt = awayModeController?.AwayEnteredAt,
         };
     }
 
@@ -61,6 +68,12 @@ public sealed class AppStateProjector
                 snapshot => snapshot.ServerId,
                 snapshot => snapshot.State,
                 StringComparer.OrdinalIgnoreCase);
+    }
+
+    internal static IReadOnlyList<ChannelConnectionSnapshot> SnapshotChannelConnections(
+        ChannelConnectionManager? manager)
+    {
+        return manager?.Snapshot() ?? [];
     }
 
     internal static IReadOnlyDictionary<string, AgentWorkItemStatus> SnapshotWorkItems(

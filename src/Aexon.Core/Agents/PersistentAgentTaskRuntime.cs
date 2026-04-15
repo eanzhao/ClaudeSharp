@@ -37,12 +37,15 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
         return runtime;
     }
 
+    public string AllocateSubagentId() => _inner.AllocateSubagentId();
+
     public AgentWorkItem CreateWorkItem(
         string title,
         string? description = null,
-        string? owner = null)
+        string? owner = null,
+        string? subagentId = null)
     {
-        var item = _inner.CreateWorkItem(title, description, owner);
+        var item = _inner.CreateWorkItem(title, description, owner, subagentId);
         Persist(AgentTaskPersistence.CreateWorkItemEntry(item));
         return item;
     }
@@ -64,9 +67,10 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
         string name,
         string? owner = null,
         string? workItemId = null,
-        AgentBackgroundRunStatus initialStatus = AgentBackgroundRunStatus.Running)
+        AgentBackgroundRunStatus initialStatus = AgentBackgroundRunStatus.Running,
+        string? subagentId = null)
     {
-        var run = _inner.StartBackgroundRun(name, owner, workItemId, initialStatus);
+        var run = _inner.StartBackgroundRun(name, owner, workItemId, initialStatus, subagentId);
         Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
         return run;
     }
@@ -110,14 +114,34 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
         return result;
     }
 
+    public AgentBackgroundRunCancellationResult RequestBackgroundRunCancellation(
+        string id,
+        AgentTerminationInfo termination)
+    {
+        var result = _inner.RequestBackgroundRunCancellation(id, termination);
+        if (result == AgentBackgroundRunCancellationResult.Requested &&
+            _inner.GetBackgroundRun(id) is { } run)
+        {
+            Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
+        }
+
+        return result;
+    }
+
     public bool StopBackgroundRun(string id, string? reason = null)
     {
         var updated = _inner.StopBackgroundRun(id, reason);
-        if (updated && _inner.GetBackgroundRun(id) is { } run)
-        {
-            Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
-            ApplyAutoPrune();
-        }
+        if (updated)
+            PersistTerminalTransition(id);
+
+        return updated;
+    }
+
+    public bool StopBackgroundRun(string id, AgentTerminationInfo termination)
+    {
+        var updated = _inner.StopBackgroundRun(id, termination);
+        if (updated)
+            PersistTerminalTransition(id);
 
         return updated;
     }
@@ -125,11 +149,17 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
     public bool FailBackgroundRun(string id, string? reason = null)
     {
         var updated = _inner.FailBackgroundRun(id, reason);
-        if (updated && _inner.GetBackgroundRun(id) is { } run)
-        {
-            Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
-            ApplyAutoPrune();
-        }
+        if (updated)
+            PersistTerminalTransition(id);
+
+        return updated;
+    }
+
+    public bool FailBackgroundRun(string id, AgentTerminationInfo termination)
+    {
+        var updated = _inner.FailBackgroundRun(id, termination);
+        if (updated)
+            PersistTerminalTransition(id);
 
         return updated;
     }
@@ -137,20 +167,40 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
     public bool CancelBackgroundRun(string id, string? reason = null)
     {
         var updated = _inner.CancelBackgroundRun(id, reason);
-        if (updated && _inner.GetBackgroundRun(id) is { } run)
-        {
-            Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
-            ApplyAutoPrune();
-        }
+        if (updated)
+            PersistTerminalTransition(id);
 
         return updated;
     }
+
+    public bool CancelBackgroundRun(string id, AgentTerminationInfo termination)
+    {
+        var updated = _inner.CancelBackgroundRun(id, termination);
+        if (updated)
+            PersistTerminalTransition(id);
+
+        return updated;
+    }
+
+    public AgentTerminationEvent? GetLastTerminationEvent(string backgroundRunId) =>
+        _inner.GetLastTerminationEvent(backgroundRunId);
 
     public AgentPruneResult PruneHistory(AgentRetentionPolicy? policy = null)
     {
         var result = _inner.PruneHistory(policy);
         PersistPruneResult(result);
         return result;
+    }
+
+    private void PersistTerminalTransition(string id)
+    {
+        if (_inner.GetBackgroundRun(id) is { } run)
+        {
+            Persist(AgentTaskPersistence.CreateBackgroundRunEntry(run));
+            if (_inner.GetLastTerminationEvent(id) is { } terminationEvent)
+                Persist(AgentTaskPersistence.CreateTerminationEventEntry(terminationEvent));
+            ApplyAutoPrune();
+        }
     }
 
     private async Task NormalizeRecoveredStateAsync(CancellationToken cancellationToken)
@@ -164,15 +214,17 @@ public sealed class PersistentAgentTaskRuntime : IAgentTaskRuntime
             var originalStatus = run.Status;
             if (originalStatus == AgentBackgroundRunStatus.CancellationRequested)
             {
-                _inner.CancelBackgroundRun(run.Id, run.StopReason ?? "Cancellation requested before the previous Aexon process ended.");
+                _inner.CancelBackgroundRun(run.Id, AgentTerminationInfo.Cancelled(
+                    run.StopReason ?? "Cancellation requested before the previous Aexon process ended.",
+                    AgentTerminationSource.System));
             }
             else
             {
-                _inner.FailBackgroundRun(
-                    run.Id,
+                _inner.FailBackgroundRun(run.Id, AgentTerminationInfo.Failed(
                     originalStatus == AgentBackgroundRunStatus.Queued
                         ? "Background run was still queued when the previous Aexon process exited."
-                        : "Background run ended when the previous Aexon process exited.");
+                        : "Background run ended when the previous Aexon process exited.",
+                    AgentTerminationSource.System));
             }
 
             await _journal.AppendMetadataEntryAsync(

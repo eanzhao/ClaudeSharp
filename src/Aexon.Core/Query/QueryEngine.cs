@@ -36,7 +36,7 @@ namespace Aexon.Core.Query;
 /// <summary>
 /// Runs the main conversation loop, including model calls, tool execution, and compaction.
 /// </summary>
-public class QueryEngine : IAsyncDisposable, IPlanModeController
+public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeController
 {
     private const int MaxPromptCacheBreakpoints = 4;
     private const int PromptCacheLookbackWindowBlocks = 20;
@@ -54,6 +54,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
     private readonly SessionMemoryFile? _sessionMemoryFile;
     private readonly AskUserQuestionHandler? _askUserQuestion;
     private readonly ConversationSessionMetadata _sessionMetadata;
+    private readonly AttachmentRegistry _attachmentRegistry = new();
     private readonly List<ConversationMessage> _messages;
     private TokenUsage _totalUsage;
     private int _consecutiveAutoCompactFailures;
@@ -61,6 +62,9 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
     private bool _sessionEnded;
     private bool _promptCacheWarm;
     private PermissionMode _planModeResumeMode;
+    private bool _awayModeActive;
+    private DateTimeOffset? _awayEnteredAt;
+    private string? _awayTriggerReason;
 
     public QueryEngine(
         IChatClient chatClient,
@@ -104,7 +108,12 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
             _contextProvider.PermissionContext.Mode = sessionMode;
         _messages = initialMessages?.ToList() ?? [];
         _totalUsage = initialUsage ?? ComputeTotalUsage(_messages);
+        foreach (var attachment in _sessionMetadata.Attachments.Values)
+            _attachmentRegistry.Register(attachment);
         _planModeResumeMode = ResolveInitialPlanModeResumeMode();
+        _awayModeActive = _sessionMetadata.AwayEnteredAt.HasValue;
+        _awayEnteredAt = _sessionMetadata.AwayEnteredAt;
+        _awayTriggerReason = _sessionMetadata.AwayTriggerReason;
     }
 
     /// <summary>
@@ -744,6 +753,58 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
         }
     }
 
+    public IAttachmentRegistry Attachments => _attachmentRegistry;
+
+    public async Task<Attachment> RegisterAttachmentAsync(
+        string fileName,
+        string mimeType,
+        long sizeBytes,
+        AttachmentSource source,
+        string? sourcePath = null,
+        CancellationToken ct = default)
+    {
+        var attachment = _attachmentRegistry.Register(fileName, mimeType, sizeBytes, source, sourcePath);
+        _sessionMetadata.Attachments[attachment.Id] = attachment;
+        if (_journal != null)
+        {
+            var snapshot = _sessionMetadata.Attachments.ToDictionary(kv => kv.Key, kv => kv.Value);
+            await _journal.UpdateMetadataAsync(
+                metadata =>
+                {
+                    metadata.Attachments.Clear();
+                    foreach (var (id, a) in snapshot)
+                        metadata.Attachments[id] = a;
+                },
+                ct);
+        }
+
+        return attachment;
+    }
+
+    public async Task<bool> RemoveAttachmentAsync(
+        string attachmentId,
+        CancellationToken ct = default)
+    {
+        if (!_attachmentRegistry.Remove(attachmentId))
+            return false;
+
+        _sessionMetadata.Attachments.Remove(attachmentId);
+        if (_journal != null)
+        {
+            var snapshot = _sessionMetadata.Attachments.ToDictionary(kv => kv.Key, kv => kv.Value);
+            await _journal.UpdateMetadataAsync(
+                metadata =>
+                {
+                    metadata.Attachments.Clear();
+                    foreach (var (id, a) in snapshot)
+                        metadata.Attachments[id] = a;
+                },
+                ct);
+        }
+
+        return true;
+    }
+
     public async Task SetPermissionModeAsync(
         PermissionMode mode,
         CancellationToken ct = default)
@@ -785,6 +846,94 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController
             await SetPermissionModeAsync(resumeMode, ct);
 
         return resumeMode;
+    }
+
+    public bool IsAwayModeActive => _awayModeActive;
+
+    public DateTimeOffset? AwayEnteredAt => _awayEnteredAt;
+
+    public string? AwayTriggerReason => _awayTriggerReason;
+
+    public async Task<bool> EnterAwayModeAsync(string triggerReason, CancellationToken ct = default)
+    {
+        if (_awayModeActive)
+            return false;
+
+        var now = DateTimeOffset.UtcNow;
+        _awayModeActive = true;
+        _awayEnteredAt = now;
+        _awayTriggerReason = triggerReason;
+
+        _sessionMetadata.AwayEnteredAt = now;
+        _sessionMetadata.AwayTriggerReason = triggerReason;
+
+        if (_journal != null)
+        {
+            await _journal.AppendMetadataEntryAsync(
+                new TranscriptMetadataEntry(
+                    "away-enter",
+                    System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        trigger = triggerReason,
+                        entered_at = now,
+                    }),
+                    now),
+                ct);
+        }
+
+        return true;
+    }
+
+    public async Task<SystemAwaySummaryMessage?> ExitAwayModeAsync(CancellationToken ct = default)
+    {
+        if (!_awayModeActive || !_awayEnteredAt.HasValue)
+            return null;
+
+        var now = DateTimeOffset.UtcNow;
+        var enteredAt = _awayEnteredAt.Value;
+        var duration = now - enteredAt;
+        var reason = _awayTriggerReason ?? "unknown";
+
+        var summary = new SystemAwaySummaryMessage
+        {
+            AwayEnteredAt = enteredAt,
+            AwayExitedAt = now,
+            TriggerReason = reason,
+            SummaryText = $"User was away for {FormatDuration(duration)}. Reason: {reason}.",
+        };
+
+        await AddMessageAsync(summary, ct);
+
+        if (_journal != null)
+        {
+            await _journal.AppendMetadataEntryAsync(
+                new TranscriptMetadataEntry(
+                    "away-exit",
+                    System.Text.Json.JsonSerializer.SerializeToElement(new
+                    {
+                        exited_at = now,
+                        duration_ms = (long)duration.TotalMilliseconds,
+                    }),
+                    now),
+                ct);
+        }
+
+        _awayModeActive = false;
+        _awayEnteredAt = null;
+        _awayTriggerReason = null;
+        _sessionMetadata.AwayEnteredAt = null;
+        _sessionMetadata.AwayTriggerReason = null;
+
+        return summary;
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalDays >= 1)
+            return $"{(int)duration.TotalDays}d {duration.Hours}h {duration.Minutes}m";
+        if (duration.TotalHours >= 1)
+            return $"{(int)duration.TotalHours}h {duration.Minutes}m";
+        return $"{(int)duration.TotalMinutes}m {duration.Seconds}s";
     }
 
     public async Task<ConversationCompactionResult?> CompactAsync(

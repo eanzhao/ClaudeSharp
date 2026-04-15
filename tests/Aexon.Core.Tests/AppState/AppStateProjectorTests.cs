@@ -1,5 +1,6 @@
 using Aexon.Core.Agents;
 using Aexon.Core.AppState;
+using Aexon.Core.Channels;
 using Aexon.Core.Configuration;
 using Aexon.Core.Mcp;
 using Aexon.Core.Permissions;
@@ -178,5 +179,42 @@ public sealed class AppStateProjectorTests
             agentRuntimeOptions: runtimeOptions);
 
         Assert.Equal(AgentAutoResumeMode.Disabled, snapshot.AutoResumeMode);
+    }
+
+    [Fact]
+    public void CreateSnapshot_ProjectsChannelConnections()
+    {
+        var channelManager = new ChannelConnectionManager();
+        channelManager.Register("remote-1", ChannelKind.Bridge, "bridge:remote-1");
+        channelManager.UpdateState("remote-1", ChannelConnectionState.Connected);
+        channelManager.Register("/tmp/agent.sock", ChannelKind.Uds, "uds:/tmp/agent.sock");
+        channelManager.UpdateState("/tmp/agent.sock", ChannelConnectionState.Failed, "Socket not found");
+
+        var projector = new AppStateProjector();
+        var snapshot = projector.CreateSnapshot(
+            "/workspace",
+            PermissionMode.Default,
+            channelConnectionManager: channelManager);
+
+        Assert.Equal(2, snapshot.ChannelConnections.Count);
+        var bridge = Assert.Single(snapshot.ChannelConnections, c => c.Kind == ChannelKind.Bridge);
+        Assert.Equal("remote-1", bridge.ChannelId);
+        Assert.Equal(ChannelConnectionState.Connected, bridge.State);
+        Assert.Null(bridge.ErrorMessage);
+        var uds = Assert.Single(snapshot.ChannelConnections, c => c.Kind == ChannelKind.Uds);
+        Assert.Equal("/tmp/agent.sock", uds.ChannelId);
+        Assert.Equal(ChannelConnectionState.Failed, uds.State);
+        Assert.Equal("Socket not found", uds.ErrorMessage);
+    }
+
+    [Fact]
+    public void CreateSnapshot_ReturnsEmptyChannelConnectionsWhenManagerIsNull()
+    {
+        var projector = new AppStateProjector();
+        var snapshot = projector.CreateSnapshot(
+            "/workspace",
+            PermissionMode.Default);
+
+        Assert.Empty(snapshot.ChannelConnections);
     }
 }

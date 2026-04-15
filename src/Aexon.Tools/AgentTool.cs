@@ -198,15 +198,17 @@ public sealed class AgentTool : ITool
             return ToolResult.Error(_assignmentErrorMessage ?? "Failed to resolve agent assignment.");
 
         var executionContext = AgentExecutionContextSnapshot.Create(context);
+        var subagentId = _taskRuntime.AllocateSubagentId();
         var title = BuildTitle(parsed.Prompt);
         var workItem = _taskRuntime.CreateWorkItem(
             title,
             description: parsed.Prompt,
-            owner: assignment.Owner);
+            owner: assignment.Owner,
+            subagentId: subagentId);
         _taskRuntime.UpdateWorkItem(workItem.Id, item => item.Status = AgentWorkItemStatus.InProgress);
 
         if (parsed.RunInBackground)
-            return LaunchInBackground(workItem, assignment, parsed, executionContext);
+            return LaunchInBackground(workItem, assignment, parsed, executionContext, subagentId);
 
         try
         {
@@ -250,12 +252,13 @@ public sealed class AgentTool : ITool
         AgentWorkItem workItem,
         AgentAssignment assignment,
         AgentToolInput input,
-        AgentExecutionContextSnapshot executionContext)
+        AgentExecutionContextSnapshot executionContext,
+        string subagentId)
     {
         try
         {
             RegisterMailboxActivationIfNeeded(input, assignment, executionContext, workItem.Id);
-            var backgroundRun = QueueBackgroundRun(workItem, assignment, input, executionContext);
+            var backgroundRun = QueueBackgroundRun(workItem, assignment, input, executionContext, subagentId: subagentId);
             return ToolResult.Success(
                 $"{assignment.SubjectLabel} {workItem.Id} was queued in the background as {backgroundRun.Id}. " +
                 $"Use AgentStatus with id=\"{backgroundRun.Id}\" to inspect progress, or AgentStop to cancel it.");
@@ -309,13 +312,15 @@ public sealed class AgentTool : ITool
         AgentAssignment assignment,
         AgentToolInput input,
         AgentExecutionContextSnapshot executionContext,
-        AgentMessageActivationRequest? activationRequest = null)
+        AgentMessageActivationRequest? activationRequest = null,
+        string? subagentId = null)
     {
         var backgroundRun = _taskRuntime.StartBackgroundRun(
             BuildTitle(input.Prompt),
             owner: assignment.Owner,
             workItemId: workItem.Id,
-            initialStatus: AgentBackgroundRunStatus.Queued);
+            initialStatus: AgentBackgroundRunStatus.Queued,
+            subagentId: subagentId ?? workItem.SubagentId);
         _taskRuntime.AppendBackgroundRunOutput(
             backgroundRun.Id,
             $"Queued prompt: {input.Prompt.Trim()}");
@@ -353,7 +358,8 @@ public sealed class AgentTool : ITool
                             _taskRuntime.AppendBackgroundRunOutput(
                                 backgroundRun.Id,
                                 FormatResult(assignment, workItem.Id, input, result));
-                            _taskRuntime.StopBackgroundRun(backgroundRun.Id, "completed");
+                            _taskRuntime.StopBackgroundRun(backgroundRun.Id,
+                                AgentTerminationInfo.Completed("completed"));
                             await TryAutoResumeAwaitingWorkItemsAsync(
                                 assignment.Owner,
                                 backgroundRun.Id,
@@ -367,7 +373,8 @@ public sealed class AgentTool : ITool
                         _taskRuntime.AppendBackgroundRunOutput(
                             backgroundRun.Id,
                             $"{assignment.SubjectLabel} {workItem.Id} failed: {error}");
-                        _taskRuntime.FailBackgroundRun(backgroundRun.Id, error);
+                        _taskRuntime.FailBackgroundRun(backgroundRun.Id,
+                            AgentTerminationInfo.Failed(error));
                         await TryAutoResumeAwaitingWorkItemsAsync(
                             assignment.Owner,
                             backgroundRun.Id,
@@ -381,7 +388,8 @@ public sealed class AgentTool : ITool
                         _taskRuntime.AppendBackgroundRunOutput(
                             backgroundRun.Id,
                             $"{assignment.SubjectLabel} {workItem.Id} was cancelled.");
-                        _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
+                        _taskRuntime.CancelBackgroundRun(backgroundRun.Id,
+                            AgentTerminationInfo.Cancelled(source: AgentTerminationSource.Agent));
                         await TryAutoResumeAwaitingWorkItemsAsync(
                             assignment.Owner,
                             backgroundRun.Id,
@@ -395,7 +403,8 @@ public sealed class AgentTool : ITool
                         _taskRuntime.AppendBackgroundRunOutput(
                             backgroundRun.Id,
                             $"{assignment.SubjectLabel} {workItem.Id} failed: {ex.Message}");
-                        _taskRuntime.FailBackgroundRun(backgroundRun.Id, ex.Message);
+                        _taskRuntime.FailBackgroundRun(backgroundRun.Id,
+                            AgentTerminationInfo.Failed(ex.Message));
                         await TryAutoResumeAwaitingWorkItemsAsync(
                             assignment.Owner,
                             backgroundRun.Id,
@@ -423,7 +432,10 @@ public sealed class AgentTool : ITool
                     _taskRuntime.AppendBackgroundRunOutput(
                         backgroundRun.Id,
                         $"{assignment.SubjectLabel} {workItem.Id} was cancelled before execution started.");
-                    _taskRuntime.CancelBackgroundRun(backgroundRun.Id);
+                    _taskRuntime.CancelBackgroundRun(backgroundRun.Id,
+                        AgentTerminationInfo.Cancelled(
+                            "cancelled before execution started",
+                            AgentTerminationSource.Scheduler));
                     cancellationSource.Dispose();
                 });
 
@@ -435,7 +447,8 @@ public sealed class AgentTool : ITool
             _taskRuntime.AppendBackgroundRunOutput(
                 backgroundRun.Id,
                 $"{assignment.SubjectLabel} {workItem.Id} failed to start.");
-            _taskRuntime.FailBackgroundRun(backgroundRun.Id, "failed to start");
+            _taskRuntime.FailBackgroundRun(backgroundRun.Id,
+                AgentTerminationInfo.Failed("failed to start", AgentTerminationSource.System));
             throw;
         }
     }

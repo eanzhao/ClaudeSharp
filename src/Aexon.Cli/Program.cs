@@ -259,7 +259,8 @@ internal static class Program
                     agentMessageRuntime: agentMessageRuntime,
                     agentTeamRuntime: agentTeamRuntime,
                     agentRuntimeOptions: agentRuntimeOptions,
-                    todoRuntime: todoRuntime));
+                    todoRuntime: todoRuntime,
+                    awayModeController: queryEngine));
                 await appStateBridge.PublishAsync();
             }
             catch
@@ -486,6 +487,7 @@ internal static class Program
         registry.Register(new TeamCommand());
         registry.Register(new TitleCommand());
         registry.Register(new TagCommand());
+        registry.Register(new AwayCommand());
         return registry;
     }
 

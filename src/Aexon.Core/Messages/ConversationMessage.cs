@@ -74,6 +74,29 @@ public record SystemMessage : ConversationMessage
     public string? Subtype { get; init; }
 }
 
+/// <summary>
+/// Represents an away-mode summary injected when the user returns from AFK.
+/// </summary>
+public record SystemAwaySummaryMessage : ConversationMessage
+{
+    public override string Type => "system_away_summary";
+    public required DateTimeOffset AwayEnteredAt { get; init; }
+    public required DateTimeOffset AwayExitedAt { get; init; }
+    public TimeSpan AwayDuration => AwayExitedAt - AwayEnteredAt;
+    public required string TriggerReason { get; init; }
+    public required string SummaryText { get; init; }
+}
+
+/// <summary>
+/// Placeholder that marks a deleted message while preserving its position in the transcript.
+/// </summary>
+public record TombstoneMessage : ConversationMessage
+{
+    public override string Type => "tombstone";
+    public required string DeletedMessageId { get; init; }
+    public string? Reason { get; init; }
+}
+
 // Content block types
 
 /// <summary>
@@ -84,6 +107,7 @@ public record SystemMessage : ConversationMessage
 [JsonDerivedType(typeof(ToolUseBlock), "tool_use")]
 [JsonDerivedType(typeof(ToolResultBlock), "tool_result")]
 [JsonDerivedType(typeof(ThinkingBlock), "thinking")]
+[JsonDerivedType(typeof(AttachmentBlock), "attachment")]
 public abstract record ContentBlock
 {
     [JsonPropertyName("type")]
@@ -158,6 +182,27 @@ public record ThinkingBlock(string Text, string? Signature = null) : ContentBloc
 
     [JsonPropertyName("signature")]
     public string? Signature { get; init; } = Signature;
+}
+
+/// <summary>
+/// References an attachment registered in the session.
+/// </summary>
+public record AttachmentBlock : ContentBlock
+{
+    [JsonPropertyName("type")]
+    public override string Type => "attachment";
+
+    [JsonPropertyName("attachment_id")]
+    public required string AttachmentId { get; init; }
+
+    [JsonPropertyName("file_name")]
+    public required string FileName { get; init; }
+
+    [JsonPropertyName("mime_type")]
+    public required string MimeType { get; init; }
+
+    [JsonPropertyName("size_bytes")]
+    public required long SizeBytes { get; init; }
 }
 
 // ─── Token Usage ──────────────────────────────────────

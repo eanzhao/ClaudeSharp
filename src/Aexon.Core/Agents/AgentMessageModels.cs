@@ -10,6 +10,7 @@ public enum AgentMessageKind
     PlanApprovalResponse,
     ShutdownRequest,
     ShutdownResponse,
+    SystemBridgeStatus,
 }
 
 /// <summary>

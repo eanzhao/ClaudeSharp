@@ -139,6 +139,13 @@ public interface IConversationJournal
         string model,
         CancellationToken cancellationToken = default);
 
+    Task DeleteMessageAsync(
+        string messageId,
+        string workingDirectory,
+        string model,
+        string? reason = null,
+        CancellationToken cancellationToken = default);
+
     Task ResetHeadAsync(CancellationToken cancellationToken = default);
 }
 
@@ -343,6 +350,39 @@ public sealed class ConversationJournal : IConversationJournal
         }
     }
 
+    public async Task DeleteMessageAsync(
+        string messageId,
+        string workingDirectory,
+        string model,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            _session.WorkingDirectory = workingDirectory;
+            _session.Model = model;
+
+            var tombstone = new TombstoneMessage
+            {
+                DeletedMessageId = messageId,
+                Reason = reason,
+            };
+
+            await _store.AppendMessageAsync(
+                _session,
+                tombstone,
+                _session.CurrentLeafMessageId,
+                cancellationToken);
+
+            _session.CurrentLeafMessageId = tombstone.Id;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task RecordMicrocompactAsync(
         IReadOnlyList<MicrocompactEdit> edits,
         string workingDirectory,
@@ -416,6 +456,56 @@ public sealed class ConversationJournal : IConversationJournal
             yield return new TranscriptMetadataEntry(
                 "tag-add",
                 JsonSerializer.SerializeToElement(new { tag = addedTag }),
+                DateTimeOffset.UtcNow);
+        }
+
+        if (before.AwayEnteredAt != after.AwayEnteredAt)
+        {
+            if (after.AwayEnteredAt.HasValue)
+            {
+                yield return new TranscriptMetadataEntry(
+                    "away-enter",
+                    JsonSerializer.SerializeToElement(new
+                    {
+                        trigger = after.AwayTriggerReason ?? string.Empty,
+                        entered_at = after.AwayEnteredAt.Value,
+                    }),
+                    DateTimeOffset.UtcNow);
+            }
+            else
+            {
+                yield return new TranscriptMetadataEntry(
+                    "away-exit",
+                    JsonSerializer.SerializeToElement(new
+                    {
+                        exited_at = DateTimeOffset.UtcNow,
+                    }),
+                    DateTimeOffset.UtcNow);
+            }
+        }
+
+        foreach (var removedId in before.Attachments.Keys.Except(after.Attachments.Keys, StringComparer.Ordinal))
+        {
+            yield return new TranscriptMetadataEntry(
+                "attachment-remove",
+                JsonSerializer.SerializeToElement(new { attachmentId = removedId }),
+                DateTimeOffset.UtcNow);
+        }
+
+        foreach (var addedId in after.Attachments.Keys.Except(before.Attachments.Keys, StringComparer.Ordinal))
+        {
+            var a = after.Attachments[addedId];
+            yield return new TranscriptMetadataEntry(
+                "attachment-add",
+                JsonSerializer.SerializeToElement(new
+                {
+                    id = a.Id,
+                    fileName = a.FileName,
+                    mimeType = a.MimeType,
+                    sizeBytes = a.SizeBytes,
+                    source = a.Source.ToString(),
+                    sourcePath = a.SourcePath,
+                }),
                 DateTimeOffset.UtcNow);
         }
     }
@@ -683,6 +773,8 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
             Tags = session.Metadata.Tags.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase).ToArray(),
             Mode = session.Metadata.Mode?.ToString(),
             CurrentLeafMessageId = session.CurrentLeafMessageId,
+            AwayEnteredAt = session.Metadata.AwayEnteredAt,
+            AwayTriggerReason = session.Metadata.AwayTriggerReason,
         };
 
         var json = JsonSerializer.Serialize(manifest, ManifestSerializerOptions);
@@ -745,6 +837,8 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         {
             Title = manifest.Title,
             Mode = ParsePermissionMode(manifest.Mode),
+            AwayEnteredAt = manifest.AwayEnteredAt,
+            AwayTriggerReason = manifest.AwayTriggerReason,
         };
 
         foreach (var tag in manifest.Tags ?? [])
@@ -782,6 +876,37 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                         metadata.Tags.Remove(tag);
                     break;
                 }
+
+            case "away-enter":
+                {
+                    var enteredAtStr = TryReadString(entry.Payload, "entered_at");
+                    metadata.AwayEnteredAt = DateTimeOffset.TryParse(enteredAtStr, out var parsed)
+                        ? parsed
+                        : entry.RecordedAt ?? DateTimeOffset.UtcNow;
+                    metadata.AwayTriggerReason = TryReadString(entry.Payload, "trigger");
+                    break;
+                }
+
+            case "away-exit":
+                metadata.AwayEnteredAt = null;
+                metadata.AwayTriggerReason = null;
+                break;
+
+            case "attachment-add":
+                {
+                    var attachment = TryDeserializeAttachment(entry.Payload);
+                    if (attachment != null)
+                        metadata.Attachments[attachment.Id] = attachment;
+                    break;
+                }
+
+            case "attachment-remove":
+                {
+                    var id = TryReadString(entry.Payload, "attachmentId");
+                    if (!string.IsNullOrWhiteSpace(id))
+                        metadata.Attachments.Remove(id);
+                    break;
+                }
         }
     }
 
@@ -796,6 +921,34 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         }
 
         return property.GetString();
+    }
+
+    private static Attachment? TryDeserializeAttachment(JsonElement? payload)
+    {
+        if (payload is not JsonElement element || element.ValueKind != JsonValueKind.Object)
+            return null;
+
+        var id = element.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+        var fileName = element.TryGetProperty("fileName", out var fnProp) ? fnProp.GetString() : null;
+        var mimeType = element.TryGetProperty("mimeType", out var mtProp) ? mtProp.GetString() : null;
+        var sizeBytes = element.TryGetProperty("sizeBytes", out var sbProp) && sbProp.TryGetInt64(out var sz) ? sz : 0L;
+        var sourceStr = element.TryGetProperty("source", out var srcProp) ? srcProp.GetString() : null;
+        var sourcePath = element.TryGetProperty("sourcePath", out var spProp) ? spProp.GetString() : null;
+
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(fileName))
+            return null;
+
+        _ = Enum.TryParse<AttachmentSource>(sourceStr, true, out var source);
+
+        return new Attachment
+        {
+            Id = id,
+            FileName = fileName,
+            MimeType = mimeType ?? "application/octet-stream",
+            SizeBytes = sizeBytes,
+            Source = source,
+            SourcePath = sourcePath,
+        };
     }
 
     private static Permissions.PermissionMode? ParsePermissionMode(string? mode)
@@ -829,6 +982,8 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public string[]? Tags { get; init; }
         public string? Mode { get; init; }
         public string? CurrentLeafMessageId { get; init; }
+        public DateTimeOffset? AwayEnteredAt { get; init; }
+        public string? AwayTriggerReason { get; init; }
     }
 
     private sealed class PersistedConversationMessage
@@ -844,6 +999,12 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public string? ApiError { get; init; }
         public string? SystemContent { get; init; }
         public string? Subtype { get; init; }
+        public DateTimeOffset? AwayEnteredAt { get; init; }
+        public DateTimeOffset? AwayExitedAt { get; init; }
+        public string? TriggerReason { get; init; }
+        public string? SummaryText { get; init; }
+        public string? DeletedMessageId { get; init; }
+        public string? Reason { get; init; }
 
         public static PersistedConversationMessage FromDomain(ConversationMessage message) =>
             message switch
@@ -875,6 +1036,24 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     SystemContent = system.Content,
                     Subtype = system.Subtype,
                 },
+                SystemAwaySummaryMessage away => new PersistedConversationMessage
+                {
+                    Kind = "system_away_summary",
+                    Id = away.Id,
+                    Timestamp = away.Timestamp,
+                    AwayEnteredAt = away.AwayEnteredAt,
+                    AwayExitedAt = away.AwayExitedAt,
+                    TriggerReason = away.TriggerReason,
+                    SummaryText = away.SummaryText,
+                },
+                TombstoneMessage tombstone => new PersistedConversationMessage
+                {
+                    Kind = "tombstone",
+                    Id = tombstone.Id,
+                    Timestamp = tombstone.Timestamp,
+                    DeletedMessageId = tombstone.DeletedMessageId,
+                    Reason = tombstone.Reason,
+                },
                 _ => throw new InvalidOperationException($"Unsupported message type: {message.GetType().Name}"),
             };
 
@@ -905,6 +1084,22 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     Content = SystemContent ?? string.Empty,
                     Subtype = Subtype,
                 },
+                "system_away_summary" => new SystemAwaySummaryMessage
+                {
+                    Id = Id,
+                    Timestamp = Timestamp,
+                    AwayEnteredAt = AwayEnteredAt ?? Timestamp,
+                    AwayExitedAt = AwayExitedAt ?? Timestamp,
+                    TriggerReason = TriggerReason ?? string.Empty,
+                    SummaryText = SummaryText ?? string.Empty,
+                },
+                "tombstone" => new TombstoneMessage
+                {
+                    Id = Id,
+                    Timestamp = Timestamp,
+                    DeletedMessageId = DeletedMessageId ?? string.Empty,
+                    Reason = Reason,
+                },
                 _ => throw new InvalidOperationException($"Unsupported persisted message kind: {Kind}"),
             };
     }
@@ -919,6 +1114,10 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
         public string? Content { get; init; }
         public bool? IsError { get; init; }
         public string? Signature { get; init; }
+        public string? AttachmentId { get; init; }
+        public string? FileName { get; init; }
+        public string? MimeType { get; init; }
+        public long? SizeBytes { get; init; }
 
         public static PersistedContentBlock FromDomain(ContentBlock block) =>
             block switch
@@ -948,6 +1147,14 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     Text = thinking.Text,
                     Signature = thinking.Signature,
                 },
+                AttachmentBlock attachment => new PersistedContentBlock
+                {
+                    Type = "attachment",
+                    AttachmentId = attachment.AttachmentId,
+                    FileName = attachment.FileName,
+                    MimeType = attachment.MimeType,
+                    SizeBytes = attachment.SizeBytes,
+                },
                 _ => throw new InvalidOperationException($"Unsupported content block type: {block.GetType().Name}"),
             };
 
@@ -966,6 +1173,13 @@ public sealed class JsonlTranscriptStore : ITranscriptStore
                     Content ?? string.Empty,
                     IsError ?? false),
                 "thinking" => new ThinkingBlock(Text ?? string.Empty, Signature),
+                "attachment" => new AttachmentBlock
+                {
+                    AttachmentId = AttachmentId ?? string.Empty,
+                    FileName = FileName ?? string.Empty,
+                    MimeType = MimeType ?? string.Empty,
+                    SizeBytes = SizeBytes ?? 0,
+                },
                 _ => throw new InvalidOperationException($"Unsupported persisted content block type: {Type}"),
             };
     }
