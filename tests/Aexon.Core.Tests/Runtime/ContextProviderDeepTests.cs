@@ -71,10 +71,11 @@ public sealed class ContextProviderDeepTests
                 AppendSystemPrompt = "append tail",
             });
 
-        Assert.Contains("# Visible Tool", prompt);
+        Assert.Contains("# Tools", prompt);
+        Assert.Contains("## Visible", prompt);
         Assert.Contains("visible prompt", prompt);
-        Assert.DoesNotContain("Blank Tool", prompt);
-        Assert.DoesNotContain("Throw Tool", prompt);
+        Assert.DoesNotContain("## Blank", prompt);
+        Assert.DoesNotContain("## Throw", prompt);
         Assert.Contains("append tail", prompt);
     }
 
@@ -120,11 +121,70 @@ public sealed class ContextProviderDeepTests
 
         var prompt = await provider.BuildSystemPromptAsync([], new QueryEngineConfig());
 
-        Assert.Contains("# Current git status", prompt);
+        Assert.Contains("# Context", prompt);
+        Assert.Contains("## Git Status", prompt);
         Assert.Contains("Current branch:", prompt);
         Assert.Contains("Status:", prompt);
         Assert.Contains("Recent commits:", prompt);
         Assert.Contains("... (truncated)", prompt);
+    }
+
+    [Fact]
+    public async Task LoadMemoryAsync_RespectsClaudeIgnoreAndSurfacesDiagnostics()
+    {
+        using var temp = new TempDirectory();
+        temp.CreateDirectory("repo/.git");
+        temp.WriteFile("repo/.claudeignore", ".claude/\n!ignored-negation\n");
+        temp.WriteFile("repo/.claude/CLAUDE.md", "hidden");
+        temp.WriteFile("repo/app/CLAUDE.md", """
+---
+paths:
+  - src/**
+  - [unterminated
+---
+visible body
+""");
+
+        var provider = new ContextProvider
+        {
+            WorkingDirectory = temp.FullPath("repo", "app"),
+        };
+
+        await provider.LoadMemoryAsync();
+
+        Assert.NotNull(provider.MemoryContent);
+        Assert.Contains("visible body", provider.MemoryContent);
+        Assert.DoesNotContain("hidden", provider.MemoryContent, StringComparison.Ordinal);
+        Assert.Contains(provider.MemoryDiagnostics, diagnostic => diagnostic.Message.Contains("negated patterns", StringComparison.Ordinal));
+        Assert.Contains(provider.MemoryDiagnostics, diagnostic => diagnostic.Message.Contains("Invalid YAML frontmatter", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task BuildSystemPromptAsync_ReloadsManagedMemoryAndUsesFastProfile()
+    {
+        using var temp = new TempDirectory();
+        temp.WriteFile("CLAUDE.md", "alpha");
+        await InitializeGitRepositoryAsync(temp.Root);
+
+        var provider = new ContextProvider
+        {
+            WorkingDirectory = temp.Root,
+        };
+
+        await provider.LoadMemoryAsync();
+        temp.WriteFile("CLAUDE.md", "beta");
+
+        var prompt = await provider.BuildSystemPromptAsync(
+            [new FakeTool { Name = "Read", PromptText = "read prompt" }],
+            new QueryEngineConfig
+            {
+                Effort = QueryEffortLevel.Fast,
+            });
+
+        Assert.Contains("beta", prompt);
+        Assert.DoesNotContain("alpha", prompt, StringComparison.Ordinal);
+        Assert.Contains("Effort: Fast", prompt);
+        Assert.DoesNotContain("Recent commits:", prompt, StringComparison.Ordinal);
     }
 
     private static async Task InitializeGitRepositoryAsync(string workingDirectory)

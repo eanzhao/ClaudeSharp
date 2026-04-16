@@ -1,6 +1,7 @@
 using Aexon.Core.Compaction;
 using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
+using Aexon.Core.Query;
 using Aexon.Core.Storage;
 
 namespace Aexon.Core.Tests.Storage;
@@ -104,6 +105,7 @@ public sealed class TranscriptStoreTests
         {
             metadata.Title = "Session Alpha";
             metadata.Mode = PermissionMode.Auto;
+            metadata.Effort = QueryEffortLevel.Thorough;
             metadata.Tags.Add("one");
             metadata.Tags.Add("two");
         });
@@ -118,11 +120,13 @@ public sealed class TranscriptStoreTests
         Assert.NotNull(reloaded);
         Assert.Null(reloaded!.Metadata.Title);
         Assert.Equal(PermissionMode.Auto, reloaded.Metadata.Mode);
+        Assert.Equal(QueryEffortLevel.Thorough, reloaded.Metadata.Effort);
         Assert.Equal(["one"], reloaded.Metadata.Tags.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase));
 
         var projection = await store.LoadProjectionAsync(reloaded, new TranscriptLoadOptions());
         Assert.Equal(reloaded.Metadata.Title, projection.Session.Metadata.Title);
         Assert.Equal(reloaded.Metadata.Mode, projection.Session.Metadata.Mode);
+        Assert.Equal(reloaded.Metadata.Effort, projection.Session.Metadata.Effort);
         Assert.Equal(
             reloaded.Metadata.Tags.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase),
             projection.Session.Metadata.Tags.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase));
@@ -131,6 +135,7 @@ public sealed class TranscriptStoreTests
             [
                 "custom-title",
                 "mode",
+                "effort",
                 "tag-add",
                 "tag-add",
                 "custom-title",

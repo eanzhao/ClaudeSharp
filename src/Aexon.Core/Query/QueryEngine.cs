@@ -106,6 +106,8 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         _sessionMetadata = initialMetadata?.Clone() ?? journal?.Metadata ?? new ConversationSessionMetadata();
         if (_sessionMetadata.Mode is PermissionMode sessionMode)
             _contextProvider.PermissionContext.Mode = sessionMode;
+        if (_sessionMetadata.Effort is QueryEffortLevel sessionEffort)
+            _config.Effort = sessionEffort;
         _messages = initialMessages?.ToList() ?? [];
         _totalUsage = initialUsage ?? ComputeTotalUsage(_messages);
         foreach (var attachment in _sessionMetadata.Attachments.Values)
@@ -132,6 +134,11 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
     public string CurrentModel => _config.Model;
 
     /// <summary>
+    /// Gets the active effort profile.
+    /// </summary>
+    public QueryEffortLevel CurrentEffort => _config.Effort;
+
+    /// <summary>
     /// Resolves a model alias and updates the active model.
     /// </summary>
     public string SetModel(string modelOrAlias)
@@ -147,6 +154,20 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         var resolved = SetModel(modelOrAlias);
         await PersistRuntimeStateAsync(ct);
         return resolved;
+    }
+
+    public async Task SetEffortAsync(
+        QueryEffortLevel effort,
+        CancellationToken ct = default)
+    {
+        _config.Effort = effort;
+        _sessionMetadata.Effort = effort;
+        if (_journal != null)
+        {
+            await _journal.UpdateMetadataAsync(
+                metadata => metadata.Effort = effort,
+                ct);
+        }
     }
 
     public string? SessionId => _journal?.SessionId;
@@ -645,17 +666,18 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         bool hasSystemPromptCacheBreakpoint,
         int messagePromptCacheBreakpointBudget)
     {
+        var profile = QueryExecutionProfileResolver.Resolve(_config);
         var options = new ChatOptions
         {
             ModelId = _config.Model,
-            MaxOutputTokens = _config.MaxTokens,
+            MaxOutputTokens = profile.MaxOutputTokens,
             Instructions = systemPrompt,
             Tools = ChatMessageConverter.ToMeaiTools(toolDefs),
             ToolMode = ChatToolMode.Auto,
             AdditionalProperties = new AdditionalPropertiesDictionary
             {
-                [ChatClientPropertyKeys.ThinkingMode] = _config.ThinkingMode.ToString(),
-                [ChatClientPropertyKeys.ThinkingBudgetTokens] = _config.ThinkingBudgetTokens,
+                [ChatClientPropertyKeys.Effort] = profile.Effort.ToString(),
+                [ChatClientPropertyKeys.ThinkingMode] = profile.ThinkingMode.ToString(),
                 [ChatClientPropertyKeys.ApiRequestTimeout] = _config.ApiRequestTimeout,
                 [ChatClientPropertyKeys.ApiMaxRetryCount] = _config.ApiMaxRetryCount,
                 [ChatClientPropertyKeys.ApiRetryBaseDelay] = _config.ApiRetryBaseDelay,
@@ -663,13 +685,15 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
                 [ChatClientPropertyKeys.ApiRetryBackoffMultiplier] = _config.ApiRetryBackoffMultiplier,
             },
         };
+        if (profile.ThinkingBudgetTokens is { } budget)
+            options.AdditionalProperties[ChatClientPropertyKeys.ThinkingBudgetTokens] = budget;
 
         if (promptCachingEnabled)
         {
             options.RawRepresentationFactory = _ => new ApiMessageCreateParams
             {
                 Model = _config.Model,
-                MaxTokens = _config.MaxTokens,
+                MaxTokens = profile.MaxOutputTokens,
                 System = CreateApiSystemPrompt(systemPrompt, hasSystemPromptCacheBreakpoint),
                 Messages = ConvertToApiMessages(_messages, messagePromptCacheBreakpointBudget),
             };

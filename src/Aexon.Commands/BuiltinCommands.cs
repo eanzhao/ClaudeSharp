@@ -1627,6 +1627,71 @@ public class ModelCommand : ICommand
 }
 
 /// <summary>
+/// Represents effort command.
+/// </summary>
+public class EffortCommand : ICommand
+{
+    public string Name => "effort";
+    public string Description => "Show or switch the current effort profile";
+
+    public async Task ExecuteAsync(string args, CommandContext context)
+    {
+        if (string.IsNullOrWhiteSpace(args))
+        {
+            context.WriteLine($"  Current effort: {context.QueryEngine.CurrentEffort}");
+            context.WriteLine("  Available effort levels: Fast, Balanced, Thorough");
+            return;
+        }
+
+        if (!Enum.TryParse<QueryEffortLevel>(args.Trim(), true, out var effort))
+        {
+            context.WriteLine($"  Unknown effort: {args.Trim()}");
+            context.WriteLine("  Available effort levels: Fast, Balanced, Thorough");
+            return;
+        }
+
+        await context.QueryEngine.SetEffortAsync(effort, context.CancellationToken);
+        context.WriteLine($"  Switched effort to: {effort}");
+    }
+}
+
+/// <summary>
+/// Represents fast command.
+/// </summary>
+public class FastCommand : ICommand
+{
+    public string Name => "fast";
+    public string Description => "Shortcut for /effort fast";
+
+    public async Task ExecuteAsync(string args, CommandContext context)
+    {
+        var trimmed = args.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed) ||
+            string.Equals(trimmed, "on", StringComparison.OrdinalIgnoreCase))
+        {
+            await context.QueryEngine.SetEffortAsync(QueryEffortLevel.Fast, context.CancellationToken);
+            context.WriteLine("  Switched effort to: Fast");
+            return;
+        }
+
+        if (string.Equals(trimmed, "off", StringComparison.OrdinalIgnoreCase))
+        {
+            await context.QueryEngine.SetEffortAsync(QueryEffortLevel.Balanced, context.CancellationToken);
+            context.WriteLine("  Switched effort to: Balanced");
+            return;
+        }
+
+        if (string.Equals(trimmed, "status", StringComparison.OrdinalIgnoreCase))
+        {
+            context.WriteLine($"  Current effort: {context.QueryEngine.CurrentEffort}");
+            return;
+        }
+
+        context.WriteLine("  Usage: /fast [on|off|status]");
+    }
+}
+
+/// <summary>
 /// Represents session command.
 /// </summary>
 public class SessionCommand : ICommand
@@ -1648,6 +1713,7 @@ public class SessionCommand : ICommand
                 ? "  Tags: (none)"
                 : $"  Tags: {string.Join(", ", metadata.Tags.OrderBy(tag => tag, StringComparer.OrdinalIgnoreCase))}");
         context.WriteLine($"  Mode: {mode}");
+        context.WriteLine($"  Effort: {context.QueryEngine.CurrentEffort}");
         context.WriteLine($"  Auto-resume: {context.CurrentAgentAutoResumeMode.ToString().ToLowerInvariant()}");
 
         return Task.CompletedTask;

@@ -15,9 +15,13 @@ public static class ChatClientOptionDefaults
         if (string.IsNullOrWhiteSpace(options.ModelId))
             options.ModelId = config.Model;
 
-        options.MaxOutputTokens ??= config.MaxTokens;
+        var profile = QueryExecutionProfileResolver.Resolve(config);
+
+        options.MaxOutputTokens ??= profile.MaxOutputTokens;
         options.AdditionalProperties ??= new AdditionalPropertiesDictionary();
-        options.AdditionalProperties.TryAdd("ThinkingMode", config.ThinkingMode.ToString());
-        options.AdditionalProperties.TryAdd("ThinkingBudgetTokens", config.ThinkingBudgetTokens);
+        options.AdditionalProperties.TryAdd(ChatClientPropertyKeys.Effort, profile.Effort.ToString());
+        options.AdditionalProperties.TryAdd(ChatClientPropertyKeys.ThinkingMode, profile.ThinkingMode.ToString());
+        if (profile.ThinkingBudgetTokens is { } budget)
+            options.AdditionalProperties.TryAdd(ChatClientPropertyKeys.ThinkingBudgetTokens, budget);
     }
 }

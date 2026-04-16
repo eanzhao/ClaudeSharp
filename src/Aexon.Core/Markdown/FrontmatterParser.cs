@@ -35,7 +35,7 @@ public static partial class FrontmatterParser
         var quoted = QuoteProblematicValues(frontmatterText);
         return TryDeserialize(quoted, out frontmatter)
             ? new ParsedMarkdown(frontmatter, content)
-            : new ParsedMarkdown(new Dictionary<string, object?>(), content);
+            : new ParsedMarkdown(new Dictionary<string, object?>(), content, true);
     }
 
     public static IReadOnlyList<string> SplitPathValue(object? input)
@@ -248,4 +248,5 @@ public static partial class FrontmatterParser
 /// </summary>
 public sealed record ParsedMarkdown(
     IReadOnlyDictionary<string, object?> Frontmatter,
-    string Content);
+    string Content,
+    bool HadInvalidFrontmatter = false);

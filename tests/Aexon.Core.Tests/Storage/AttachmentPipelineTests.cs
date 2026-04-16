@@ -228,7 +228,10 @@ public sealed class AttachmentPipelineTests
     [Fact]
     public void SessionMetadata_Clone_CopiesAttachments()
     {
-        var metadata = new ConversationSessionMetadata();
+        var metadata = new ConversationSessionMetadata
+        {
+            Effort = QueryEffortLevel.Thorough,
+        };
         metadata.Attachments["id-1"] = new Attachment
         {
             Id = "id-1",
@@ -242,6 +245,7 @@ public sealed class AttachmentPipelineTests
 
         Assert.Single(clone.Attachments);
         Assert.Equal("test.txt", clone.Attachments["id-1"].FileName);
+        Assert.Equal(QueryEffortLevel.Thorough, clone.Effort);
 
         clone.Attachments.Remove("id-1");
         Assert.Single(metadata.Attachments);

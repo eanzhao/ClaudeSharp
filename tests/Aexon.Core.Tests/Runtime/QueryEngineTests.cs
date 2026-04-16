@@ -15,7 +15,7 @@ namespace Aexon.Core.Tests.Runtime;
 public class QueryEngineTests
 {
     [Fact]
-    public async Task SessionMetadata_ApiUpdatesTitleTagsAndMode()
+    public async Task SessionMetadata_ApiUpdatesTitleTagsModeAndEffort()
     {
         using var temp = new TempDirectory();
         var journal = new RecordingJournal();
@@ -30,13 +30,16 @@ public class QueryEngineTests
         await engine.AddSessionTagAsync("two");
         await engine.RemoveSessionTagAsync("one");
         await engine.SetPermissionModeAsync(PermissionMode.Plan);
+        await engine.SetEffortAsync(QueryEffortLevel.Thorough);
 
         var metadata = engine.SessionMetadata;
         Assert.Equal("alpha", metadata.Title);
         Assert.Equal(PermissionMode.Plan, metadata.Mode);
+        Assert.Equal(QueryEffortLevel.Thorough, metadata.Effort);
         Assert.Equal(["two"], metadata.Tags.OrderBy(tag => tag));
         Assert.Equal("alpha", journal.Metadata.Title);
         Assert.Equal(PermissionMode.Plan, journal.Metadata.Mode);
+        Assert.Equal(QueryEffortLevel.Thorough, journal.Metadata.Effort);
         Assert.Equal(["two"], journal.Metadata.Tags.OrderBy(tag => tag));
     }
 

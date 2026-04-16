@@ -2,6 +2,7 @@ using System.Text.Json;
 using Aexon.Core.Compaction;
 using Aexon.Core.Messages;
 using Aexon.Core.Permissions;
+using Aexon.Core.Query;
 using Aexon.Core.Storage;
 
 namespace Aexon.Core.Tests.Storage;
@@ -345,6 +346,9 @@ public sealed class TranscriptStoreDeepTests
             new TranscriptMetadataEntry("mode", JsonSerializer.SerializeToElement(new { mode = PermissionMode.Auto.ToString() })));
         await store.AppendMetadataAsync(
             session,
+            new TranscriptMetadataEntry("effort", JsonSerializer.SerializeToElement(new { effort = QueryEffortLevel.Fast.ToString() })));
+        await store.AppendMetadataAsync(
+            session,
             new TranscriptMetadataEntry("tag-add", JsonSerializer.SerializeToElement(new { tag = "one" })));
         await store.AppendMetadataAsync(
             session,
@@ -363,14 +367,17 @@ public sealed class TranscriptStoreDeepTests
         Assert.NotNull(reloaded);
         Assert.Null(reloaded!.Metadata.Title);
         Assert.Null(reloaded.Metadata.Mode);
+        Assert.Equal(QueryEffortLevel.Fast, reloaded.Metadata.Effort);
         Assert.Equal(["one"], reloaded.Metadata.Tags);
 
         var projection = await store.LoadProjectionAsync(reloaded, new TranscriptLoadOptions());
         Assert.Null(projection.Session.Metadata.Title);
         Assert.Null(projection.Session.Metadata.Mode);
+        Assert.Equal(QueryEffortLevel.Fast, projection.Session.Metadata.Effort);
         Assert.Equal(["one"], projection.Session.Metadata.Tags);
         Assert.Contains(projection.MetadataEntries, entry => entry.EventType == "custom-title");
         Assert.Contains(projection.MetadataEntries, entry => entry.EventType == "mode");
+        Assert.Contains(projection.MetadataEntries, entry => entry.EventType == "effort");
         Assert.Contains(projection.MetadataEntries, entry => entry.EventType == "tag-add");
     }
 
