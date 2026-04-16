@@ -128,6 +128,47 @@ public sealed class AgentToolTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_CanStartFromManagedWorktree()
+    {
+        var taskRuntime = new InMemoryAgentTaskRuntime();
+        var runner = new RecordingRunner(new AgentExecutionResult(
+            Summary: "child summary",
+            Success: true,
+            Usage: TokenUsage.Empty,
+            TurnCount: 1));
+        var worktreeRuntime = new InMemoryAgentManagedWorktreeRuntime(
+            restoredWorktrees:
+            [
+                new AgentManagedWorktree
+                {
+                    Id = "worktree-1",
+                    SourceWorkingDirectory = "/repo",
+                    WorkingDirectory = "/tmp/managed-worktree/src",
+                    RootDirectory = "/tmp/managed-worktree",
+                    RepositoryRoot = "/repo",
+                },
+            ]);
+
+        var tool = new AgentTool(
+            runner,
+            new DefaultProviderCapabilityRouter(),
+            taskRuntime,
+            hooks: HookRuntime.Empty,
+            worktreeRuntime: worktreeRuntime);
+
+        var result = await tool.ExecuteAsync(
+            JsonSerializer.SerializeToElement(new
+            {
+                prompt = "Inspect the query pipeline",
+                worktree_id = "worktree-1",
+            }),
+            CreateContext());
+
+        Assert.False(result.IsError);
+        Assert.Equal("/tmp/managed-worktree/src", Assert.Single(runner.Requests).WorkingDirectory);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_BackgroundTeammateCanBeReactivatedFromMailboxMessage()
     {
         var taskRuntime = new InMemoryAgentTaskRuntime();

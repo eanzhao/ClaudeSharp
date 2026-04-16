@@ -226,15 +226,24 @@ internal static class Program
         var cronRuntime = await PersistentCronRuntime.CreateAsync(
             journal,
             metadataEntries);
+        var agentWorkspaceManager = new GitWorktreeAgentWorkspaceManager();
         var agentTaskRuntime = await PersistentAgentTaskRuntime.CreateAsync(
             journal,
             metadataEntries,
             autoPrunePolicy: agentSettings.Settings.BuildRetentionPolicy());
+        var agentWorktreeRuntime = await PersistentAgentManagedWorktreeRuntime.CreateAsync(
+            journal,
+            metadataEntries,
+            agentWorkspaceManager);
         var agentTeamRuntime = await PersistentAgentTeamRuntime.CreateAsync(
             journal,
             metadataEntries);
         var agentMessageRuntime = await PersistentAgentMessageRuntime.CreateAsync(
             journal,
+            metadataEntries);
+        var remoteTriggerRuntime = await PersistentAgentRemoteTriggerRuntime.CreateAsync(
+            journal,
+            agentTaskRuntime,
             metadataEntries);
         var channelConnectionManager = new ChannelConnectionManager();
         var channelRouter = new ChannelRouter(
@@ -250,9 +259,12 @@ internal static class Program
             () => config.Provider,
             chatClient,
             hooks,
+            agentWorkspaceManager,
             agentTaskRuntime,
+            agentWorktreeRuntime,
             agentTeamRuntime,
             agentMessageRuntime,
+            remoteTriggerRuntime,
             todoRuntime,
             cronRuntime,
             channelRouter,
@@ -298,6 +310,7 @@ internal static class Program
         agentTaskRuntime.SetMessageSink(queryEngine.EnqueueExternalMessageAsync);
         channelConnectionManager.SetMessageSink(queryEngine.EnqueueExternalMessageAsync);
         await using var cronScheduler = new CronScheduler(cronRuntime, workingDirectory);
+        await using var remoteTriggerScheduler = new AgentRemoteTriggerScheduler(remoteTriggerRuntime);
         toolRegistry.Register(new EnterPlanModeTool(queryEngine));
         toolRegistry.Register(new ExitPlanModeTool(queryEngine));
         var permissionContext = contextProvider.GetPermissionContext();
@@ -438,9 +451,12 @@ internal static class Program
         Func<AiProvider> currentProviderAccessor,
         IChatClient chatClient,
         IHookRuntime hooks,
+        IAgentWorkspaceManager workspaceManager,
         IAgentTaskRuntime agentTaskRuntime,
+        IAgentManagedWorktreeRuntime agentWorktreeRuntime,
         IAgentTeamRuntime agentTeamRuntime,
         IAgentMessageRuntime agentMessageRuntime,
+        IAgentRemoteTriggerRuntime remoteTriggerRuntime,
         ITodoRuntime todoRuntime,
         ICronRuntime cronRuntime,
         ChannelRouter channelRouter,
@@ -464,7 +480,7 @@ internal static class Program
         registry.Register(new TodoWriteTool(todoRuntime));
         registry.Register(new WebFetchTool());
         registry.Register(new AgentTool(
-            new QueryEngineAgentRunner(chatClient, hooks: hooks),
+            new QueryEngineAgentRunner(chatClient, hooks: hooks, workspaceManager: workspaceManager),
             providerRouter,
             agentTaskRuntime,
             agentTeamRuntime,
@@ -472,8 +488,59 @@ internal static class Program
             hooks,
             backgroundRunScheduler,
             messageActivationRuntime,
+            agentWorktreeRuntime,
             runtimeOptions: agentRuntimeOptions,
             skillLoader: skillLoader));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "EnterWorktree",
+            () => new EnterWorktreeTool(agentWorktreeRuntime),
+            Aliases: ["EnterWorktreeTool"],
+            Keywords: ["worktree", "workspace", "git", "isolation", "enter"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "ExitWorktree",
+            () => new ExitWorktreeTool(agentWorktreeRuntime),
+            Aliases: ["ExitWorktreeTool"],
+            Keywords: ["worktree", "workspace", "git", "cleanup", "exit"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "TaskCreate",
+            () => new TaskCreateTool(agentTaskRuntime),
+            Aliases: ["TaskCreateTool"],
+            Keywords: ["task", "background", "create", "job"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "TaskGet",
+            () => new TaskGetTool(agentTaskRuntime),
+            Aliases: ["TaskGetTool"],
+            Keywords: ["task", "background", "status", "details"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "TaskUpdate",
+            () => new TaskUpdateTool(agentTaskRuntime),
+            Aliases: ["TaskUpdateTool"],
+            Keywords: ["task", "background", "update", "status"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "TaskList",
+            () => new TaskListTool(agentTaskRuntime),
+            Aliases: ["TaskListTool"],
+            Keywords: ["task", "background", "list", "queue"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "TaskStop",
+            () => new TaskStopTool(agentTaskRuntime),
+            Aliases: ["TaskStopTool"],
+            Keywords: ["task", "background", "stop", "cancel"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "TaskOutput",
+            () => new TaskOutputTool(agentTaskRuntime),
+            Aliases: ["TaskOutputTool"],
+            Keywords: ["task", "background", "output", "logs"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "RemoteTrigger",
+            () => new RemoteTriggerTool(remoteTriggerRuntime),
+            Aliases: ["RemoteTriggerTool"],
+            Keywords: ["trigger", "remote", "webhook", "schedule", "cron"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "Monitor",
+            () => new MonitorTool(agentTaskRuntime),
+            Aliases: ["MonitorTool"],
+            Keywords: ["monitor", "tail", "logs", "stdout", "stderr"]));
         registry.RegisterDeferred(new DeferredToolRegistration(
             "CronCreate",
             () => new CronCreateTool(cronRuntime),
