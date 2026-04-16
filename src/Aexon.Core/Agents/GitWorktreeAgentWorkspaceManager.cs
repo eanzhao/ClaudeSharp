@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace Aexon.Core.Agents;
 
 /// <summary>
@@ -30,7 +28,9 @@ public sealed class GitWorktreeAgentWorkspaceManager : IAgentWorkspaceManager
         CancellationToken cancellationToken = default)
     {
         var fullWorkingDirectory = Path.GetFullPath(workingDirectory);
-        var repoRoot = await TryResolveRepoRootAsync(fullWorkingDirectory, cancellationToken);
+        var repoRoot = await GitWorkspaceUtilities.TryResolveRepoRootAsync(
+            fullWorkingDirectory,
+            cancellationToken);
         if (repoRoot == null)
         {
             return AgentWorkspaceLease.Passthrough(
@@ -38,7 +38,7 @@ public sealed class GitWorktreeAgentWorkspaceManager : IAgentWorkspaceManager
                 "No git repository found.");
         }
 
-        var relativePath = await TryResolveRepoRelativePathAsync(
+        var relativePath = await GitWorkspaceUtilities.TryResolveRepoRelativePathAsync(
             fullWorkingDirectory,
             cancellationToken);
         if (relativePath == null)
@@ -60,7 +60,7 @@ public sealed class GitWorktreeAgentWorkspaceManager : IAgentWorkspaceManager
         {
             Directory.CreateDirectory(WorkspaceRootDirectory);
 
-            var addResult = await RunGitAsync(
+            var addResult = await GitWorkspaceUtilities.RunGitAsync(
                 repoRoot,
                 ["worktree", "add", "--detach", workspaceRoot, "HEAD"],
                 cancellationToken);
@@ -89,7 +89,8 @@ public sealed class GitWorktreeAgentWorkspaceManager : IAgentWorkspaceManager
                 workspaceRoot,
                 isIsolated: true,
                 description: "Temporary git worktree snapshot",
-                disposeAsync: () => ReleaseAsync(repoRoot, workspaceRoot, CancellationToken.None));
+                disposeAsync: () => ReleaseAsync(repoRoot, workspaceRoot, CancellationToken.None),
+                repositoryRoot: repoRoot);
         }
         catch (Exception ex)
         {
@@ -122,46 +123,6 @@ public sealed class GitWorktreeAgentWorkspaceManager : IAgentWorkspaceManager
         relativePath.StartsWith("..", StringComparison.Ordinal) ||
         Path.IsPathRooted(relativePath);
 
-    private static async Task<string?> TryResolveRepoRootAsync(
-        string workingDirectory,
-        CancellationToken cancellationToken)
-    {
-        var result = await RunGitAsync(
-            workingDirectory,
-            ["rev-parse", "--show-toplevel"],
-            cancellationToken);
-
-        if (result.ExitCode != 0)
-            return null;
-
-        var root = result.Stdout.Trim();
-        return string.IsNullOrWhiteSpace(root)
-            ? null
-            : Path.GetFullPath(root);
-    }
-
-    private static async Task<string?> TryResolveRepoRelativePathAsync(
-        string workingDirectory,
-        CancellationToken cancellationToken)
-    {
-        var result = await RunGitAsync(
-            workingDirectory,
-            ["rev-parse", "--show-prefix"],
-            cancellationToken);
-
-        if (result.ExitCode != 0)
-            return null;
-
-        var prefix = result.Stdout.Trim();
-        if (string.IsNullOrWhiteSpace(prefix))
-            return ".";
-
-        return prefix
-            .TrimEnd('/', '\\')
-            .Replace('/', Path.DirectorySeparatorChar)
-            .Replace('\\', Path.DirectorySeparatorChar);
-    }
-
     private static async ValueTask ReleaseAsync(
         string repoRoot,
         string workspaceRoot,
@@ -169,7 +130,7 @@ public sealed class GitWorktreeAgentWorkspaceManager : IAgentWorkspaceManager
     {
         try
         {
-            await RunGitAsync(
+            await GitWorkspaceUtilities.RunGitAsync(
                 repoRoot,
                 ["worktree", "remove", "--force", workspaceRoot],
                 cancellationToken);
@@ -258,38 +219,4 @@ public sealed class GitWorktreeAgentWorkspaceManager : IAgentWorkspaceManager
         }
     }
 
-    private static async Task<GitCommandResult> RunGitAsync(
-        string workingDirectory,
-        IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
-    {
-        using var process = new Process();
-        process.StartInfo = new ProcessStartInfo
-        {
-            FileName = "git",
-            WorkingDirectory = workingDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-
-        foreach (var argument in arguments)
-            process.StartInfo.ArgumentList.Add(argument);
-
-        process.Start();
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
-
-        return new GitCommandResult(
-            process.ExitCode,
-            await stdoutTask,
-            await stderrTask);
-    }
-
-    private sealed record GitCommandResult(
-        int ExitCode,
-        string Stdout,
-        string Stderr);
 }

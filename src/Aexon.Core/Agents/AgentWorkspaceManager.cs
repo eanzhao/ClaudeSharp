@@ -22,12 +22,16 @@ public sealed class AgentWorkspaceLease : IAsyncDisposable
         string rootDirectory,
         bool isIsolated,
         string? description = null,
-        Func<ValueTask>? disposeAsync = null)
+        Func<ValueTask>? disposeAsync = null,
+        string? repositoryRoot = null)
     {
         WorkingDirectory = workingDirectory;
         RootDirectory = rootDirectory;
         IsIsolated = isIsolated;
         Description = description;
+        RepositoryRoot = string.IsNullOrWhiteSpace(repositoryRoot)
+            ? rootDirectory
+            : repositoryRoot;
         _disposeAsync = disposeAsync;
     }
 
@@ -39,6 +43,8 @@ public sealed class AgentWorkspaceLease : IAsyncDisposable
 
     public string? Description { get; }
 
+    public string RepositoryRoot { get; }
+
     public static AgentWorkspaceLease Passthrough(
         string workingDirectory,
         string? description = null) =>
@@ -46,7 +52,8 @@ public sealed class AgentWorkspaceLease : IAsyncDisposable
             workingDirectory,
             workingDirectory,
             isIsolated: false,
-            description);
+            description,
+            repositoryRoot: workingDirectory);
 
     public async ValueTask DisposeAsync()
     {

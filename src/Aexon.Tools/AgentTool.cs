@@ -27,6 +27,9 @@ public sealed class AgentToolInput
     [JsonPropertyName("use_isolated_workspace")]
     public bool UseIsolatedWorkspace { get; set; } = true;
 
+    [JsonPropertyName("worktree_id")]
+    public string? WorktreeId { get; set; }
+
     [JsonPropertyName("teammate")]
     public AgentTeammateInput? Teammate { get; set; }
 }
@@ -54,6 +57,7 @@ public sealed class AgentTool : ITool
     private readonly IAgentTeamRuntime? _teamRuntime;
     private readonly IAgentMessageRuntime? _messageRuntime;
     private readonly IAgentMessageActivationRuntime? _messageActivationRuntime;
+    private readonly IAgentManagedWorktreeRuntime? _worktreeRuntime;
     private readonly IHookRuntime _hooks;
     private readonly BackgroundAgentRunScheduler _backgroundRunScheduler;
     private readonly AgentAutoResumeMode _autoResumeMode;
@@ -69,6 +73,7 @@ public sealed class AgentTool : ITool
         IHookRuntime? hooks = null,
         BackgroundAgentRunScheduler? backgroundRunScheduler = null,
         IAgentMessageActivationRuntime? messageActivationRuntime = null,
+        IAgentManagedWorktreeRuntime? worktreeRuntime = null,
         AgentAutoResumeMode autoResumeMode = AgentAutoResumeMode.Queue,
         AgentRuntimeOptions? runtimeOptions = null)
     {
@@ -78,6 +83,7 @@ public sealed class AgentTool : ITool
         _teamRuntime = teamRuntime;
         _messageRuntime = messageRuntime;
         _messageActivationRuntime = messageActivationRuntime;
+        _worktreeRuntime = worktreeRuntime;
         _hooks = hooks ?? HookRuntime.Empty;
         _backgroundRunScheduler = backgroundRunScheduler ?? new BackgroundAgentRunScheduler();
         _autoResumeMode = autoResumeMode;
@@ -111,6 +117,10 @@ public sealed class AgentTool : ITool
             "use_isolated_workspace": {
               "type": "boolean",
               "description": "When true, run the subagent in a temporary isolated workspace when possible"
+            },
+            "worktree_id": {
+              "type": "string",
+              "description": "Optional managed worktree id created by EnterWorktree; when set, the subagent starts from that worktree path"
             },
             "teammate": {
               "type": "object",
@@ -151,6 +161,7 @@ public sealed class AgentTool : ITool
             - The subagent can inspect files and use web discovery tools, but it does not edit files
             - Set run_in_background=true when the work can continue asynchronously
             - By default the subagent runs in a temporary isolated workspace when the repo supports it
+            - Use worktree_id when a task should start from a managed worktree created by EnterWorktree
             - Use it for separable investigation tasks, not for the final user-facing answer
             - Give it a concrete prompt with a clear scope and expected output
             """);
@@ -171,6 +182,13 @@ public sealed class AgentTool : ITool
 
         if (parsed.Teammate != null && _teamRuntime == null)
             return Task.FromResult(ValidationResult.Invalid("team runtime is not configured."));
+
+        if (!string.IsNullOrWhiteSpace(parsed.WorktreeId) &&
+            _worktreeRuntime?.Get(parsed.WorktreeId.Trim()) == null)
+        {
+            return Task.FromResult(ValidationResult.Invalid(
+                $"No managed worktree matched id '{parsed.WorktreeId.Trim()}'."));
+        }
 
         return Task.FromResult(ValidationResult.Valid());
     }
@@ -198,6 +216,16 @@ public sealed class AgentTool : ITool
             return ToolResult.Error(_assignmentErrorMessage ?? "Failed to resolve agent assignment.");
 
         var executionContext = AgentExecutionContextSnapshot.Create(context);
+        if (!string.IsNullOrWhiteSpace(parsed.WorktreeId))
+        {
+            if (_worktreeRuntime?.Get(parsed.WorktreeId.Trim()) is not { } worktree)
+                return ToolResult.Error($"No managed worktree matched id '{parsed.WorktreeId.Trim()}'.");
+
+            executionContext = executionContext with
+            {
+                WorkingDirectory = worktree.WorkingDirectory,
+            };
+        }
         var subagentId = _taskRuntime.AllocateSubagentId();
         var title = BuildTitle(parsed.Prompt);
         var workItem = _taskRuntime.CreateWorkItem(
@@ -600,6 +628,7 @@ public sealed class AgentTool : ITool
             SubagentType = input.SubagentType,
             RunInBackground = input.RunInBackground,
             UseIsolatedWorkspace = input.UseIsolatedWorkspace,
+            WorktreeId = input.WorktreeId,
             Teammate = input.Teammate == null
                 ? null
                 : new AgentTeammateInput
