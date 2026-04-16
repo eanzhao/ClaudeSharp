@@ -168,6 +168,8 @@ Unless `--settings` is provided, Aexon merges matching `settings.json` files fro
 
 The current MCP implementation supports stdio servers and registers their tools dynamically at startup.
 
+Built-in tools now also support deferred discovery. Aexon keeps the high-frequency tool set loaded by default, while lower-frequency tools such as web search, cron, mailbox, and team coordination stay deferred until the model calls `ToolSearch` and loads them with `select:ToolA,ToolB`.
+
 ## Project Memory Files
 
 Aexon loads project instructions from these files when present:

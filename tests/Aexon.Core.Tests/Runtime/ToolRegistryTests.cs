@@ -96,4 +96,60 @@ public class ToolRegistryTests
 
         Assert.Equal(["alpha"], enabled.Select(tool => tool.Name));
     }
+
+    [Fact]
+    public void RegisterDeferred_DoesNotExposeToolUntilLoaded()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new FakeTool { Name = "alpha", Enabled = true });
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "beta",
+            () => new FakeTool { Name = "beta", Enabled = true },
+            Aliases: ["second"],
+            Keywords: ["delayed", "search"]));
+
+        Assert.Null(registry.Get("beta"));
+        Assert.False(registry.IsLoaded("beta"));
+        Assert.Equal(["alpha"], registry.GetEnabledTools().Select(tool => tool.Name));
+
+        var loaded = registry.Load("second");
+
+        Assert.NotNull(loaded);
+        Assert.True(registry.IsLoaded("beta"));
+        Assert.Equal(["alpha", "beta"], registry.GetEnabledTools().Select(tool => tool.Name));
+        Assert.Same(loaded, registry.Get("beta"));
+    }
+
+    [Fact]
+    public async Task DescribeAsync_ReturnsDeferredDefinitionWithoutChangingLoadedState()
+    {
+        var registry = new ToolRegistry();
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "beta",
+            () => new FakeTool
+            {
+                Name = "beta",
+                Description = "beta desc",
+                InputSchema = TestSupport.Json(new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        value = new { type = "string" },
+                    },
+                }),
+            },
+            Keywords: ["delayed"]));
+
+        var definition = await registry.DescribeAsync("beta");
+        var entries = registry.GetRegisteredTools();
+
+        Assert.NotNull(definition);
+        Assert.Equal("beta", definition!.Name);
+        Assert.Equal("beta desc", definition.Description);
+        Assert.False(registry.IsLoaded("beta"));
+        var entry = Assert.Single(entries);
+        Assert.Equal(ToolRegistrationState.Deferred, entry.State);
+        Assert.Equal(["delayed"], entry.Keywords);
+    }
 }

@@ -392,6 +392,7 @@ internal static class Program
         var registry = new ToolRegistry();
         var backgroundRunScheduler = new BackgroundAgentRunScheduler(
             maxConcurrency: backgroundRunConcurrency);
+        registry.Register(new ToolSearchTool(registry));
         registry.Register(new BashTool());
         registry.Register(new FileReadTool());
         registry.Register(new FileWriteTool());
@@ -400,18 +401,7 @@ internal static class Program
         registry.Register(new GrepTool());
         registry.Register(new AskUserQuestionTool());
         registry.Register(new TodoWriteTool(todoRuntime));
-        registry.Register(new CronCreateTool(cronRuntime));
-        registry.Register(new CronDeleteTool(cronRuntime));
-        registry.Register(new CronListTool(cronRuntime));
-        registry.Register(new TeamCreateTool(agentTeamRuntime));
-        registry.Register(new TeamStatusTool(agentTeamRuntime));
-        registry.Register(new TeamDissolveTool(agentTeamRuntime));
-        registry.Register(new SendMessageTool(agentMessageRuntime, agentTeamRuntime, messageActivationRuntime, agentTaskRuntime, channelRouter: channelRouter));
-        registry.Register(new MailboxStatusTool(agentMessageRuntime));
-        registry.Register(new MailboxRespondTool(agentMessageRuntime, messageActivationRuntime, agentTaskRuntime));
         registry.Register(new WebFetchTool());
-        if (allowWebSearch)
-            registry.Register(new WebSearchTool(providerRouter, currentModelAccessor, currentProviderAccessor));
         registry.Register(new AgentTool(
             new QueryEngineAgentRunner(chatClient, hooks: hooks),
             providerRouter,
@@ -422,6 +412,57 @@ internal static class Program
             backgroundRunScheduler,
             messageActivationRuntime,
             runtimeOptions: agentRuntimeOptions));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "CronCreate",
+            () => new CronCreateTool(cronRuntime),
+            Aliases: ["CronCreateTool"],
+            Keywords: ["cron", "schedule", "scheduled", "job", "timer"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "CronDelete",
+            () => new CronDeleteTool(cronRuntime),
+            Aliases: ["CronDeleteTool"],
+            Keywords: ["cron", "schedule", "scheduled", "job", "remove"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "CronList",
+            () => new CronListTool(cronRuntime),
+            Aliases: ["CronListTool"],
+            Keywords: ["cron", "schedule", "scheduled", "job", "list"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "TeamCreate",
+            () => new TeamCreateTool(agentTeamRuntime),
+            Keywords: ["team", "teammate", "squad", "group", "parallel"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "TeamStatus",
+            () => new TeamStatusTool(agentTeamRuntime),
+            Keywords: ["team", "teammate", "status", "group", "parallel"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "TeamDissolve",
+            () => new TeamDissolveTool(agentTeamRuntime),
+            Keywords: ["team", "teammate", "dissolve", "group", "cleanup"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "SendMessage",
+            () => new SendMessageTool(
+                agentMessageRuntime,
+                agentTeamRuntime,
+                messageActivationRuntime,
+                agentTaskRuntime,
+                channelRouter: channelRouter),
+            Keywords: ["message", "mailbox", "send", "notify", "reply"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "MailboxStatus",
+            () => new MailboxStatusTool(agentMessageRuntime),
+            Keywords: ["mailbox", "message", "inbox", "outbox", "status"]));
+        registry.RegisterDeferred(new DeferredToolRegistration(
+            "MailboxRespond",
+            () => new MailboxRespondTool(agentMessageRuntime, messageActivationRuntime, agentTaskRuntime),
+            Keywords: ["mailbox", "message", "respond", "reply", "inbox"]));
+        if (allowWebSearch)
+        {
+            registry.RegisterDeferred(new DeferredToolRegistration(
+                "WebSearch",
+                () => new WebSearchTool(providerRouter, currentModelAccessor, currentProviderAccessor),
+                Keywords: ["web", "search", "internet", "google", "news"]));
+        }
         registry.Register(new AgentStatusTool(agentTaskRuntime));
         registry.Register(new AgentResumeTool(agentTaskRuntime, agentMessageRuntime, messageActivationRuntime));
         registry.Register(new AgentStopTool(agentTaskRuntime));
