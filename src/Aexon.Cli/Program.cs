@@ -36,6 +36,8 @@ internal static class Program
     {
         Console.OutputEncoding = Encoding.UTF8;
 
+        args = RewriteTopLevelSubcommands(args);
+
         var options = CliOptions.Parse(args);
         if (!string.IsNullOrWhiteSpace(options.ParseError))
         {
@@ -114,28 +116,22 @@ internal static class Program
         if (resumed?.Metadata.Mode is PermissionMode resumedMode)
             contextProvider.PermissionContext.Mode = resumedMode;
         await contextProvider.LoadMemoryAsync();
-        var rawAnthropicSettings = AnthropicClientSettingsLoader.Load(
-            workingDirectory,
-            appBaseDirectory: AppContext.BaseDirectory);
-
-        var configuredAnthropicModel =
-            resumed == null &&
-            string.IsNullOrWhiteSpace(options.Model) &&
-            !string.IsNullOrWhiteSpace(rawAnthropicSettings.Model)
-                ? rawAnthropicSettings.Model
-                : null;
+        var storedCredentials = nyxIdCredentialStore.Load();
+        var defaultProviderFromStore = string.IsNullOrWhiteSpace(storedCredentials?.DefaultProvider)
+            ? null
+            : storedCredentials!.DefaultProvider;
+        var defaultModelFromStore = resumed == null &&
+                                    string.IsNullOrWhiteSpace(options.Model) &&
+                                    !string.IsNullOrWhiteSpace(storedCredentials?.DefaultModel)
+            ? storedCredentials!.DefaultModel
+            : null;
         var sessionTarget = AiProviderSelection.ResolveSessionTarget(
-            options.Provider,
-            options.Model ?? configuredAnthropicModel,
+            options.Provider ?? defaultProviderFromStore,
+            options.Model ?? defaultModelFromStore,
             resumed?.SourceSession.Provider,
             resumed?.Model);
         var aiProvider = sessionTarget.Provider;
         var model = sessionTarget.Model;
-        if (options.UseNyxId && aiProvider == AiProvider.Ollama)
-        {
-            Console.Error.WriteLine("--nyxid 只支持 anthropic 和 openai provider。");
-            return 1;
-        }
 
         var config = new QueryEngineConfig
         {
@@ -144,31 +140,23 @@ internal static class Program
             UseStreamingApi = true,
             MaxTurns = options.MaxTurns ?? 50,
         };
-        if (aiProvider == AiProvider.Anthropic &&
-            rawAnthropicSettings.MaxTokens is { } configuredMaxTokens)
-        {
-            config.MaxTokens = configuredMaxTokens;
-        }
         var providerRouter = new DefaultProviderCapabilityRouter();
         var managedSettings = ManagedSettingsLoader.Load(
             workingDirectory,
             options.SettingsPath);
         var managedPolicy = ManagedRuntimePolicy.Resolve(
             managedSettings.Settings,
-            rawAnthropicSettings,
             providerRouter.Resolve(model));
-        var anthropicSettings = managedPolicy.AnthropicSettings;
-        var nyxIdRouting = options.UseNyxId
-            ? new NyxIdRoutingContext(
+        var nyxIdRouting = aiProvider == AiProvider.Ollama
+            ? null
+            : new NyxIdRoutingContext(
                 nyxIdSettings.ActiveBaseUrl,
                 nyxIdTokenProvider,
-                nyxIdSettings.HasStoredCredentials)
-            : null;
+                nyxIdSettings.HasStoredCredentials);
         using var chatClientRuntime = ChatClientRuntime.Create(
             aiProvider,
             model,
             config,
-            anthropicSettings,
             nyxIdRouting);
         var chatClient = chatClientRuntime.ChatClient;
         var agentSettings = AgentSettingsLoader.Load(
@@ -272,14 +260,15 @@ internal static class Program
             messageActivationRuntime,
             agentRuntimeOptions,
             agentSettings.Settings.BackgroundRunConcurrency);
+        var nyxIdLlmStatusClient = new NyxIdLlmStatusClient(nyxIdTokenProvider);
         var commandRegistry = BuildCommandRegistry(
             skillLoader.Load(workingDirectory),
             nyxIdAuthService,
             nyxIdCredentialStore,
+            nyxIdLlmStatusClient,
             nyxIdSettings.ActiveBaseUrl,
             transcriptStore,
             memoryLayout,
-            managedPolicy.AnthropicSettings,
             managedSettings,
             new NyxIdRuntimeConfig(
                 nyxIdSettings.DefaultBaseUrl,
@@ -718,10 +707,10 @@ internal static class Program
         IReadOnlyDictionary<string, Skill> skills,
         NyxIdAuthService nyxIdAuthService,
         NyxIdCredentialStore nyxIdCredentialStore,
+        NyxIdLlmStatusClient nyxIdLlmStatusClient,
         string nyxIdBaseUrl,
         ITranscriptStore transcriptStore,
         MemdirLayout memdirLayout,
-        AnthropicClientSettings anthropicSettings,
         ManagedSettingsLoadResult managedSettings,
         NyxIdRuntimeConfig nyxIdRuntimeConfig,
         Assembly productAssembly)
@@ -733,15 +722,16 @@ internal static class Program
         registry.Register(new ClearCommand());
         registry.Register(new CommitCommand());
         registry.Register(new CompactCommand());
-        registry.Register(new ConfigCommand(anthropicSettings, managedSettings, nyxIdRuntimeConfig));
+        registry.Register(new ConfigCommand(nyxIdCredentialStore, managedSettings, nyxIdRuntimeConfig));
         registry.Register(new CostCommand());
         registry.Register(new DiffCommand());
-        registry.Register(new DoctorCommand(anthropicSettings, nyxIdRuntimeConfig));
+        registry.Register(new DoctorCommand(nyxIdCredentialStore, nyxIdRuntimeConfig));
         registry.Register(new EffortCommand());
         registry.Register(new ExitCommand());
         registry.Register(new FastCommand());
         registry.Register(new HelpCommand());
         registry.Register(new InitCommand());
+        registry.Register(new LlmCommand(nyxIdCredentialStore, nyxIdLlmStatusClient));
         registry.Register(new LoginCommand(nyxIdAuthService, nyxIdCredentialStore, nyxIdBaseUrl));
         registry.Register(new LogoutCommand(nyxIdAuthService, nyxIdCredentialStore));
         registry.Register(new MailboxCommand());
@@ -780,14 +770,18 @@ internal static class Program
     {
         Console.WriteLine("""
 Usage:
-  aexon [--cwd <path>] [--model <model>] [--provider <name>] [--nyxid] [--resume <session>] [--continue] [--fork-session] [--settings <path>] [prompt]
+  aexon [--cwd <path>] [--model <model>] [--provider <name>] [--resume <session>] [--continue] [--fork-session] [--settings <path>] [prompt]
   aexon --print [-p] [--output-format <text|markdown|json>] [--approval-mode <allow|deny>] [--max-turns <n>] [prompt]
+  aexon login                  # browser OAuth against NyxID
+  aexon logout                 # revoke the refresh token and clear local creds
+  aexon llm                    # interactive picker for the default LLM provider
+  aexon llm list               # show every NyxID-brokered LLM provider
+  aexon llm use <p> [model]    # non-interactive: set default provider (anthropic|openai)
 
 Options:
   --cwd <path>       Working directory for this session
   --model <model>    Main model or alias (sonnet / opus / haiku / gpt-4o / o3 / ...)
-  --provider <name>  AI provider: anthropic (default), openai, or ollama
-  --nyxid            Route Anthropic/OpenAI requests through the NyxID proxy
+  --provider <name>  AI provider: anthropic, openai, or ollama (reads stored default when omitted)
   --resume <id>      Resume a specific session by id, directory, manifest, or transcript path
   --continue         Resume the most recently updated session
   --fork-session     Fork the resumed transcript into a brand new session
@@ -799,15 +793,46 @@ Options:
   --max-turns <n>    Maximum assistant/tool turns for this run
   --help             Show this help
 
+Anthropic and OpenAI traffic is always brokered through NyxID; configure provider
+credentials in the NyxID UI first, then run `aexon login` and `aexon llm`.
+
 Environment:
-  ANTHROPIC_API_KEY  API key for Anthropic Claude models
-  OPENAI_API_KEY     API key for OpenAI models
-  OPENAI_BASE_URL    Custom base URL for OpenAI-compatible endpoints
-  NYXID_BASE_URL     NyxID base URL for /login defaults and --nyxid routing
-  OLLAMA_HOST        Base URL for the Ollama server (default: http://127.0.0.1:11434)
+  NYXID_BASE_URL     NyxID base URL for `aexon login` (default: https://nyx-api.chrono-ai.fun)
+  OLLAMA_HOST        Base URL for the local Ollama server (default: http://127.0.0.1:11434)
   OLLAMA_BASE_URL    Alias for OLLAMA_HOST
   AEXON_CHAT_LOGGING Enable MEAI pipeline logging on the console (1/true)
 """);
+    }
+
+    private static readonly HashSet<string> TopLevelSubcommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "login",
+        "logout",
+        "llm",
+    };
+
+    /// <summary>
+    /// Lets users invoke slash commands without the leading slash as a top-level
+    /// subcommand (`aexon login`, `aexon llm use anthropic`). Only the first
+    /// positional token is rewritten, so prompts that happen to start with one
+    /// of these words are unaffected when they're wrapped in quotes.
+    /// </summary>
+    private static string[] RewriteTopLevelSubcommands(string[] args)
+    {
+        if (args.Length == 0)
+            return args;
+
+        var first = args[0];
+        if (first.StartsWith('-') || first.StartsWith('/'))
+            return args;
+
+        if (!TopLevelSubcommands.Contains(first))
+            return args;
+
+        var rewritten = new string[args.Length];
+        rewritten[0] = "/" + first.ToLowerInvariant();
+        Array.Copy(args, 1, rewritten, 1, args.Length - 1);
+        return rewritten;
     }
 
     private sealed class AexonShell

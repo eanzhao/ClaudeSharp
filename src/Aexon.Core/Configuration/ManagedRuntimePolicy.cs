@@ -6,7 +6,6 @@ namespace Aexon.Core.Configuration;
 /// Represents the effective runtime policy derived from managed settings.
 /// </summary>
 public sealed record ManagedRuntimePolicyDecision(
-    AnthropicClientSettings AnthropicSettings,
     AnthropicTokenSourceSnapshot? ActiveTokenSource,
     bool AllowWebSearch,
     bool AllowExternalMcpServers,
@@ -43,29 +42,11 @@ public static class ManagedRuntimePolicy
 {
     public static ManagedRuntimePolicyDecision Resolve(
         ManagedSettingsSnapshot managedSettings,
-        AnthropicClientSettings anthropicSettings,
         ProviderModelRoute route)
     {
         var diagnostics = new List<string>();
         var policy = managedSettings.OrganizationPolicy;
-        var activeTokenSource = ResolveActiveTokenSource(managedSettings, anthropicSettings);
-        var effectiveAnthropicSettings = anthropicSettings;
-
-        if (!policy.AllowUserProvidedTokenSources &&
-            activeTokenSource is { } blockedTokenSource &&
-            IsUserProvidedTokenSource(blockedTokenSource.Kind))
-        {
-            diagnostics.Add("Managed settings: blocked user-provided Anthropic credentials by organization policy.");
-            effectiveAnthropicSettings = anthropicSettings with
-            {
-                ApiKey = null,
-                ApiKeyFromEnvironment = false,
-                ApiKeyFromAppSettings = false,
-                Diagnostics = anthropicSettings.Diagnostics
-                    .Concat(["Managed settings: blocked user-provided Anthropic credentials by organization policy."])
-                    .ToArray(),
-            };
-        }
+        var activeTokenSource = ResolveActiveTokenSource(managedSettings);
 
         var providerAllowed = IsProviderAllowed(route.Provider, policy.AllowedProviderKinds);
         if (!providerAllowed)
@@ -74,26 +55,13 @@ public static class ManagedRuntimePolicy
                 $"Managed settings: provider '{FormatProviderKind(route.Provider)}' is not in the organization allowlist.");
         }
 
-        if (policy.RequiresManagedAccess)
+        if (policy.RequiresManagedAccess && activeTokenSource == null)
         {
-            if (activeTokenSource == null)
-            {
-                diagnostics.Add("Managed settings: organization policy requires managed access, but no token source is active.");
-            }
-            else if (IsUserProvidedTokenSource(activeTokenSource.Kind))
-            {
-                diagnostics.Add(
-                    "Managed settings: organization policy requires managed access, but the active Anthropic credential is still user-provided.");
-            }
-            else if (!effectiveAnthropicSettings.HasApiKey)
-            {
-                diagnostics.Add(
-                    $"Managed settings: token source '{activeTokenSource.Id}' is selected, but no usable Anthropic credential was resolved.");
-            }
+            diagnostics.Add(
+                "Managed settings: organization policy requires managed access, but no managed token source is active.");
         }
 
         return new ManagedRuntimePolicyDecision(
-            effectiveAnthropicSettings,
             activeTokenSource,
             policy.AllowWebSearch,
             policy.AllowExternalMcpServers,
@@ -103,50 +71,9 @@ public static class ManagedRuntimePolicy
     }
 
     internal static AnthropicTokenSourceSnapshot? ResolveActiveTokenSource(
-        ManagedSettingsSnapshot managedSettings,
-        AnthropicClientSettings anthropicSettings)
-    {
-        if (anthropicSettings.ApiKeyFromEnvironment)
-        {
-            return FindManagedTokenSource(managedSettings, AnthropicTokenSourceKind.EnvironmentVariable)
-                ?? new AnthropicTokenSourceSnapshot
-                {
-                    Id = "environment",
-                    Kind = AnthropicTokenSourceKind.EnvironmentVariable,
-                    DisplayName = "Environment variable",
-                    IsDefault = true,
-                    IsActive = true,
-                    Metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                    {
-                        ["name"] = "ANTHROPIC_API_KEY",
-                    },
-                };
-        }
-
-        if (anthropicSettings.ApiKeyFromAppSettings)
-        {
-            return FindManagedTokenSource(
-                       managedSettings,
-                       AnthropicTokenSourceKind.AppSettings,
-                       anthropicSettings.SourcePath)
-                   ?? new AnthropicTokenSourceSnapshot
-                   {
-                       Id = "appsettings",
-                       Kind = AnthropicTokenSourceKind.AppSettings,
-                       DisplayName = "App settings",
-                       SourcePath = anthropicSettings.SourcePath,
-                       IsActive = true,
-                   };
-        }
-
-        return managedSettings.TokenSources.FirstOrDefault(source => source.IsActive)
+        ManagedSettingsSnapshot managedSettings) =>
+        managedSettings.TokenSources.FirstOrDefault(source => source.IsActive)
             ?? managedSettings.TokenSources.FirstOrDefault(source => source.IsDefault);
-    }
-
-    internal static bool IsUserProvidedTokenSource(AnthropicTokenSourceKind kind) =>
-        kind is AnthropicTokenSourceKind.EnvironmentVariable or
-            AnthropicTokenSourceKind.AppSettings or
-            AnthropicTokenSourceKind.ApiKey;
 
     internal static bool IsProviderAllowed(
         ProviderKind provider,
@@ -159,26 +86,6 @@ public static class ManagedRuntimePolicy
         return allowedProviderKinds
             .Select(ParseProviderKind)
             .Any(candidate => candidate == normalizedProvider);
-    }
-
-    private static AnthropicTokenSourceSnapshot? FindManagedTokenSource(
-        ManagedSettingsSnapshot managedSettings,
-        AnthropicTokenSourceKind kind,
-        string? sourcePath = null)
-    {
-        var match = managedSettings.TokenSources.FirstOrDefault(
-            tokenSource =>
-                tokenSource.Kind == kind &&
-                (string.IsNullOrWhiteSpace(sourcePath) ||
-                 string.Equals(
-                     tokenSource.SourcePath,
-                     sourcePath,
-                     StringComparison.OrdinalIgnoreCase)));
-
-        if (match == null)
-            return null;
-
-        return match with { IsActive = true };
     }
 
     private static ProviderKind ParseProviderKind(string raw)

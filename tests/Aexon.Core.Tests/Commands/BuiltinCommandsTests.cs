@@ -1,6 +1,7 @@
 using System.Reflection;
 using Aexon.Commands;
 using Aexon.Core.Agents;
+using Aexon.Core.Auth;
 using Aexon.Core.Commands;
 using Aexon.Core.Configuration;
 using Aexon.Core.Context;
@@ -459,16 +460,19 @@ public sealed class BuiltinCommandsTests
         using var temp = new TempDirectory();
         using var bundle = CreateEngineBundle(temp.Root);
         var lines = new List<string>();
+        var credentialStore = new NyxIdCredentialStore(temp.FullPath("nyxid.json"));
+        credentialStore.Save(new NyxIdCredentials
+        {
+            BaseUrl = "https://nyx.active.test",
+            AccessToken = "access",
+            RefreshToken = "refresh",
+            ClientId = "client-123",
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(15),
+            DefaultProvider = "anthropic",
+            DefaultModel = "claude-sonnet-4-6",
+        });
         var command = new ConfigCommand(
-            new AnthropicClientSettings(
-                ApiKey: "secret",
-                BaseUrl: "https://api.anthropic.com",
-                Model: "claude-sonnet-4-6",
-                MaxTokens: 16000,
-                ApiKeyFromEnvironment: false,
-                ApiKeyFromAppSettings: true,
-                SourcePath: Path.Combine(temp.Root, "appsettings.secrets.json"),
-                Diagnostics: []),
+            credentialStore,
             new ManagedSettingsLoadResult(
                 new ManagedSettingsSnapshot
                 {
@@ -491,7 +495,8 @@ public sealed class BuiltinCommandsTests
         Assert.Contains("model: claude-sonnet-4-6", output, StringComparison.Ordinal);
         Assert.Contains("provider: Anthropic", output, StringComparison.Ordinal);
         Assert.Contains("permissionMode: Default", output, StringComparison.Ordinal);
-        Assert.Contains("anthropic.apiKeySource:", output, StringComparison.Ordinal);
+        Assert.Contains("llm.defaultProvider: anthropic", output, StringComparison.Ordinal);
+        Assert.Contains("llm.defaultModel: claude-sonnet-4-6", output, StringComparison.Ordinal);
         Assert.Contains("nyxid.activeBaseUrl: https://nyx.active.test", output, StringComparison.Ordinal);
     }
 
@@ -582,20 +587,23 @@ public sealed class BuiltinCommandsTests
         using var temp = new TempDirectory();
         using var bundle = CreateEngineBundle(temp.Root);
         var lines = new List<string>();
+        var credentialStore = new NyxIdCredentialStore(temp.FullPath("nyxid.json"));
+        credentialStore.Save(new NyxIdCredentials
+        {
+            BaseUrl = "https://nyx.active.test",
+            AccessToken = "access",
+            RefreshToken = "refresh",
+            ClientId = "client-123",
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(15),
+            DefaultProvider = "anthropic",
+            DefaultModel = "claude-sonnet-4-6",
+        });
         var command = new FakeDoctorCommand(
-            new AnthropicClientSettings(
-                ApiKey: "token",
-                BaseUrl: null,
-                Model: null,
-                MaxTokens: null,
-                ApiKeyFromEnvironment: true,
-                ApiKeyFromAppSettings: false,
-                SourcePath: null,
-                Diagnostics: []),
+            credentialStore,
             new NyxIdRuntimeConfig(
                 "https://nyx.default.test",
                 "https://nyx.active.test",
-                HasStoredCredentials: false,
+                HasStoredCredentials: true,
                 BaseUrlFromEnvironment: false));
 
         await command.ExecuteAsync("", CreateContext(bundle.Engine, bundle.PermissionContext, lines));
@@ -604,8 +612,8 @@ public sealed class BuiltinCommandsTests
         Assert.Contains("[OK] dotnet SDK:", output, StringComparison.Ordinal);
         Assert.Contains("[OK] git binary:", output, StringComparison.Ordinal);
         Assert.Contains("[OK] working directory is a git repo:", output, StringComparison.Ordinal);
-        Assert.Contains("[OK] Anthropic connectivity: HTTP 200", output, StringComparison.Ordinal);
-        Assert.Contains("[OK] NyxID connectivity: HTTP 204", output, StringComparison.Ordinal);
+        Assert.Contains("[OK] NyxID login: anthropic", output, StringComparison.Ordinal);
+        Assert.Contains("[OK] NyxID connectivity:", output, StringComparison.Ordinal);
         Assert.Contains("Summary: 5 passed, 0 failed.", output, StringComparison.Ordinal);
     }
 
@@ -823,6 +831,8 @@ public sealed class BuiltinCommandsTests
         var emptySkills = new Dictionary<string, Aexon.Core.Skills.Skill>();
         var credentialStore = new Aexon.Core.Auth.NyxIdCredentialStore(Path.Combine(Path.GetTempPath(), "aexon-test-nyxid-" + Guid.NewGuid().ToString("N") + ".json"));
         var authService = new Aexon.Core.Auth.NyxIdAuthService(credentialStore: credentialStore);
+        var tokenProvider = new Aexon.Core.Auth.NyxIdTokenProvider(credentialStore, authService);
+        var statusClient = new Aexon.Core.Auth.NyxIdLlmStatusClient(tokenProvider);
         var transcriptStore = new JsonlTranscriptStore(Path.Combine(Path.GetTempPath(), "aexon-transcripts-" + Guid.NewGuid().ToString("N")));
         var memdirLayout = new MemdirLayout
         {
@@ -836,18 +846,10 @@ public sealed class BuiltinCommandsTests
                     emptySkills,
                     authService,
                     credentialStore,
+                    statusClient,
                     "https://nyx.example.test",
                     transcriptStore,
                     memdirLayout,
-                    new AnthropicClientSettings(
-                        ApiKey: null,
-                        BaseUrl: null,
-                        Model: null,
-                        MaxTokens: null,
-                        ApiKeyFromEnvironment: false,
-                        ApiKeyFromAppSettings: false,
-                        SourcePath: null,
-                        Diagnostics: []),
                     new ManagedSettingsLoadResult(ManagedSettingsSnapshot.Empty, [], []),
                     new NyxIdRuntimeConfig(
                         "https://nyx.default.test",
@@ -867,8 +869,8 @@ public sealed class BuiltinCommandsTests
     }
 
     private sealed class FakeDoctorCommand(
-        AnthropicClientSettings anthropicSettings,
-        NyxIdRuntimeConfig nyxIdRuntimeConfig) : DoctorCommand(anthropicSettings, nyxIdRuntimeConfig)
+        NyxIdCredentialStore credentialStore,
+        NyxIdRuntimeConfig nyxIdRuntimeConfig) : DoctorCommand(credentialStore, nyxIdRuntimeConfig)
     {
         protected override Task<(int ExitCode, string StdOut, string StdErr)> RunProcessAsync(
             string fileName,

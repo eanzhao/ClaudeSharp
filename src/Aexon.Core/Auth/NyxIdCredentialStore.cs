@@ -74,6 +74,8 @@ public sealed class NyxIdCredentialStore
             AccessToken = credentials.AccessToken.Trim(),
             RefreshToken = credentials.RefreshToken?.Trim(),
             IdToken = credentials.IdToken?.Trim(),
+            DefaultProvider = credentials.DefaultProvider?.Trim().ToLowerInvariant(),
+            DefaultModel = credentials.DefaultModel?.Trim(),
         };
 
         var tempPath = $"{FilePath}.{Guid.NewGuid():N}.tmp";
