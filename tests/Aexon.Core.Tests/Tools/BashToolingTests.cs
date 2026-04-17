@@ -178,7 +178,7 @@ public sealed class BashToolingTests
         Assert.Equal(PermissionBehavior.Ask, writePermission.Behavior);
         Assert.Contains("modify files or git state", writePermission.Message, StringComparison.Ordinal);
         Assert.Equal(PermissionBehavior.Ask, destructivePermission.Behavior);
-        Assert.Contains("Potentially destructive command", destructivePermission.Message, StringComparison.Ordinal);
+        Assert.Contains("Dangerous command", destructivePermission.Message, StringComparison.Ordinal);
         Assert.True(tool.IsReadOnly(Json(new { command = "pwd" })));
         Assert.True(tool.IsConcurrencySafe(Json(new { command = "pwd" })));
         Assert.False(tool.IsReadOnly(Json(new { command = "mkdir output" })));
