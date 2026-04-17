@@ -158,24 +158,24 @@ internal sealed class LineEditor
             case ConsoleKey.End:
                 return buffer.MoveEnd() ? LineEditorOutcome.Render : LineEditorOutcome.None;
             case ConsoleKey.UpArrow:
-            {
-                var previous = _history.MovePrevious(buffer.Text);
-                if (previous == null)
-                    return LineEditorOutcome.None;
+                {
+                    var previous = _history.MovePrevious(buffer.Text);
+                    if (previous == null)
+                        return LineEditorOutcome.None;
 
-                buffer.SetText(previous);
-                return LineEditorOutcome.Render;
-            }
+                    buffer.SetText(previous);
+                    return LineEditorOutcome.Render;
+                }
 
             case ConsoleKey.DownArrow:
-            {
-                var next = _history.MoveNext(buffer.Text);
-                if (next == null)
-                    return LineEditorOutcome.None;
+                {
+                    var next = _history.MoveNext(buffer.Text);
+                    if (next == null)
+                        return LineEditorOutcome.None;
 
-                buffer.SetText(next);
-                return LineEditorOutcome.Render;
-            }
+                    buffer.SetText(next);
+                    return LineEditorOutcome.Render;
+                }
 
             case ConsoleKey.Enter:
                 if (key.Modifiers.HasFlag(ConsoleModifiers.Shift))

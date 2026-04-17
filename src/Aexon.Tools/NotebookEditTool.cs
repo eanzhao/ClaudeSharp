@@ -108,41 +108,41 @@ public class NotebookEditTool : ITool
             switch (normalizedAction)
             {
                 case "insert":
-                {
-                    if (!TryGetCellInput(input, out var cellType, out var content, out var error))
-                        return ToolResult.Error(error!);
+                    {
+                        if (!TryGetCellInput(input, out var cellType, out var content, out var error))
+                            return ToolResult.Error(error!);
 
-                    if (index > cells.Count)
-                        return ToolResult.Error(
-                            $"index {index} is out of range for insert. Valid range is 0-{cells.Count}.");
+                        if (index > cells.Count)
+                            return ToolResult.Error(
+                                $"index {index} is out of range for insert. Valid range is 0-{cells.Count}.");
 
-                    cells.Insert(index, CreateCell(cellType!, content!));
-                    break;
-                }
+                        cells.Insert(index, CreateCell(cellType!, content!));
+                        break;
+                    }
                 case "replace":
-                {
-                    if (!TryGetCellInput(input, out var cellType, out var content, out var error))
-                        return ToolResult.Error(error!);
+                    {
+                        if (!TryGetCellInput(input, out var cellType, out var content, out var error))
+                            return ToolResult.Error(error!);
 
-                    if (index >= cells.Count)
-                        return ToolResult.Error(
-                            $"index {index} is out of range for replace. Valid range is 0-{cells.Count - 1}.");
+                        if (index >= cells.Count)
+                            return ToolResult.Error(
+                                $"index {index} is out of range for replace. Valid range is 0-{cells.Count - 1}.");
 
-                    if (cells[index] is not JsonObject existingCell)
-                        return ToolResult.Error($"Cell at index {index} is not a JSON object.");
+                        if (cells[index] is not JsonObject existingCell)
+                            return ToolResult.Error($"Cell at index {index} is not a JSON object.");
 
-                    cells[index] = ReplaceCell(existingCell, cellType!, content!);
-                    break;
-                }
+                        cells[index] = ReplaceCell(existingCell, cellType!, content!);
+                        break;
+                    }
                 case "delete":
-                {
-                    if (index >= cells.Count)
-                        return ToolResult.Error(
-                            $"index {index} is out of range for delete. Valid range is 0-{cells.Count - 1}.");
+                    {
+                        if (index >= cells.Count)
+                            return ToolResult.Error(
+                                $"index {index} is out of range for delete. Valid range is 0-{cells.Count - 1}.");
 
-                    cells.RemoveAt(index);
-                    break;
-                }
+                        cells.RemoveAt(index);
+                        break;
+                    }
             }
 
             var updatedContent = root.ToJsonString(new JsonSerializerOptions
