@@ -346,6 +346,8 @@ internal static class Program
         var startupNote = startupParts.Count == 0
             ? null
             : string.Join(Environment.NewLine, startupParts);
+        var lineEditorHistoryPath = CreateHistoryPath();
+        var lineEditorHistory = LineEditorHistoryStore.Load(lineEditorHistoryPath);
 
         var shell = new AexonShell(
             workingDirectory,
@@ -360,6 +362,7 @@ internal static class Program
             agentMessageRuntime,
             messageActivationRuntime,
             agentRuntimeOptions,
+            lineEditorHistory,
             startupNote,
             PublishAppStateAsync);
 
@@ -382,11 +385,26 @@ internal static class Program
                 options.ApprovalMode);
         }
 
-        var exitCode = nonInteractiveOptions != null
-            ? await shell.RunNonInteractiveAsync(nonInteractiveOptions)
-            : await shell.RunAsync(options.InitialPrompt);
-        await PublishAppStateAsync();
-        return exitCode;
+        var exitCode = 0;
+        try
+        {
+            exitCode = nonInteractiveOptions != null
+                ? await shell.RunNonInteractiveAsync(nonInteractiveOptions)
+                : await shell.RunAsync(options.InitialPrompt);
+            await PublishAppStateAsync();
+            return exitCode;
+        }
+        finally
+        {
+            try
+            {
+                await LineEditorHistoryStore.SaveAsync(lineEditorHistoryPath, lineEditorHistory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Persisting interactive history is best effort and should not fail the CLI.
+            }
+        }
     }
 
     private static ToolRegistry BuildToolRegistry(
@@ -517,6 +535,12 @@ internal static class Program
     {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         return Path.Combine(home, ".aexon", "state", "current.json");
+    }
+
+    private static string CreateHistoryPath()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        return Path.Combine(home, ".aexon", "history.txt");
     }
 
     private static string ResolveMemoryTeamName(ManagedSettingsSnapshot settings)
@@ -676,6 +700,7 @@ Environment:
         private readonly IAgentTeamRuntime _agentTeamRuntime;
         private readonly IAgentMessageRuntime _agentMessageRuntime;
         private readonly IAgentMessageActivationRuntime _agentMessageActivationRuntime;
+        private readonly List<string> _inputHistory;
         private readonly AgentRuntimeOptions _agentRuntimeOptions;
         private readonly string? _startupNote;
         private readonly Func<Task>? _afterInputAsync;
@@ -698,6 +723,7 @@ Environment:
             IAgentMessageRuntime agentMessageRuntime,
             IAgentMessageActivationRuntime agentMessageActivationRuntime,
             AgentRuntimeOptions agentRuntimeOptions,
+            List<string> inputHistory,
             string? startupNote,
             Func<Task>? afterInputAsync = null)
         {
@@ -713,6 +739,7 @@ Environment:
             _agentMessageRuntime = agentMessageRuntime;
             _agentMessageActivationRuntime = agentMessageActivationRuntime;
             _agentRuntimeOptions = agentRuntimeOptions;
+            _inputHistory = inputHistory;
             _startupNote = startupNote;
             _afterInputAsync = afterInputAsync;
         }
@@ -720,6 +747,12 @@ Environment:
         public async Task<int> RunAsync(string? initialPrompt)
         {
             var interactive = !Console.IsInputRedirected && string.IsNullOrWhiteSpace(initialPrompt);
+            var lineEditor = interactive
+                ? new LineEditor(
+                    _commandRegistry,
+                    _inputHistory,
+                    _workingDirectory)
+                : null;
             if (interactive)
                 PrintBanner();
 
@@ -756,10 +789,17 @@ Environment:
 
             while (!_exitRequested)
             {
+                string? input;
                 if (interactive)
-                    Console.Write("\nclaudesharp> ");
+                {
+                    Console.WriteLine();
+                    input = await lineEditor!.ReadLineAsync();
+                }
+                else
+                {
+                    input = Console.ReadLine();
+                }
 
-                var input = Console.ReadLine();
                 if (input == null)
                     break;
 
