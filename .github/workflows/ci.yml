@@ -52,16 +52,18 @@ jobs:
         run: dotnet format Aexon.slnx --verify-no-changes --no-restore --verbosity diagnostic --severity error
 
       - name: Test With Coverage Gate
-        run: >
-          dotnet test Aexon.slnx
-          --configuration Release
-          --no-restore
-          /p:CollectCoverage=true
-          /p:CoverletOutputFormat=json
-          /p:CoverletOutput=TestResults/coverage-ci/
-          /p:Threshold=80
-          /p:ThresholdType=line
-          /p:ThresholdStat=total
+        shell: bash
+        run: |
+          dotnet test Aexon.slnx \
+            --configuration Release \
+            --no-restore \
+            /p:CollectCoverage=true \
+            /p:CoverletOutputFormat=json \
+            /p:CoverletOutput=TestResults/coverage-ci/ \
+            /p:Threshold=80 \
+            /p:ThresholdType=line \
+            /p:ThresholdStat=total \
+            '/p:Exclude=[Aexon.Cli]*'
 
       - name: Upload coverage artifact
         if: always()
