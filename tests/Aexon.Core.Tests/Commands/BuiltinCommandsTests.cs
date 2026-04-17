@@ -509,7 +509,10 @@ public sealed class BuiltinCommandsTests
         Assert.NotNull(buildMethod);
 
         var emptySkills = new Dictionary<string, Aexon.Core.Skills.Skill>();
-        return Assert.IsType<CommandRegistry>(buildMethod!.Invoke(null, [emptySkills]));
+        var credentialStore = new Aexon.Core.Auth.NyxIdCredentialStore(Path.Combine(Path.GetTempPath(), "aexon-test-nyxid-" + Guid.NewGuid().ToString("N") + ".json"));
+        var authService = new Aexon.Core.Auth.NyxIdAuthService(credentialStore: credentialStore);
+        return Assert.IsType<CommandRegistry>(
+            buildMethod!.Invoke(null, [emptySkills, authService, credentialStore, "https://nyx.example.test"]));
     }
 
     private sealed record EngineBundle(
