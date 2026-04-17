@@ -55,7 +55,7 @@ public sealed class AgentToolTests
         Assert.Equal("claude-sonnet-4-6", request.Model);
         Assert.True(request.UseIsolatedWorkspace);
         Assert.Equal(
-            ["Glob", "Grep", "Read", "WebFetch", "WebSearch"],
+            ["Glob", "Grep", "Read", "SkillTool", "WebFetch", "WebSearch"],
             request.Tools.GetAllTools().Select(tool => tool.Name).OrderBy(name => name, StringComparer.Ordinal));
         Assert.Contains("Subagent type hint: research", request.SystemPromptAppendix, StringComparison.Ordinal);
 

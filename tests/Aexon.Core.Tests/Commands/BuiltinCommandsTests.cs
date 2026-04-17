@@ -508,7 +508,8 @@ public sealed class BuiltinCommandsTests
         var buildMethod = programType.GetMethod("BuildCommandRegistry", BindingFlags.Static | BindingFlags.NonPublic);
         Assert.NotNull(buildMethod);
 
-        return Assert.IsType<CommandRegistry>(buildMethod!.Invoke(null, null));
+        var emptySkills = new Dictionary<string, Aexon.Core.Skills.Skill>();
+        return Assert.IsType<CommandRegistry>(buildMethod!.Invoke(null, [emptySkills]));
     }
 
     private sealed record EngineBundle(
