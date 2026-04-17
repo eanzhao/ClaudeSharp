@@ -99,8 +99,8 @@ public sealed class LineEditorCompletionTests
 
         try
         {
-            var matches = LineEditorCompletion.MatchPaths("src/Ae", tempDirectory);
             var separator = Path.DirectorySeparatorChar;
+            var matches = LineEditorCompletion.MatchPaths($"src{separator}Ae", tempDirectory);
 
             Assert.Equal(
             [
