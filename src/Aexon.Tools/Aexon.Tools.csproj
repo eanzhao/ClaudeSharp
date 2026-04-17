@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="Anthropic" Version="12.16.0" />
     <PackageReference Include="Microsoft.Extensions.FileSystemGlobbing" Version="10.0.0" />
     <ProjectReference Include="..\Aexon.Core\Aexon.Core.csproj" />
   </ItemGroup>
