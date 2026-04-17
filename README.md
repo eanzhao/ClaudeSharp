@@ -55,61 +55,53 @@ nuget install Aexon -Source https://api.nuget.org/v3/index.json -OutputDirectory
 ## Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download) (10.0.100+) for local builds and `dotnet` CLI workflows
-- One of:
-  - an Anthropic API key, provided through `ANTHROPIC_API_KEY` or an `appsettings*.json` file
-  - an OpenAI-compatible endpoint via `OPENAI_API_KEY` and optional `OPENAI_BASE_URL`
-  - a local Ollama server reachable at `OLLAMA_HOST` or the default `http://127.0.0.1:11434`
+- A [NyxID](https://github.com/chrono-ai/NyxID) account — Aexon brokers all Anthropic and OpenAI traffic through the NyxID LLM gateway instead of reading local API keys. The default NyxID instance is `https://nyx-api.chrono-ai.fun`; override with `NYXID_BASE_URL` if you run your own.
+- Optional: a local Ollama server reachable at `OLLAMA_HOST` or the default `http://127.0.0.1:11434` for offline inference.
 
 ## Configuration
 
-Aexon resolves Anthropic settings in this order:
+Aexon no longer reads `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `appsettings*.json`. All Anthropic and OpenAI requests flow through NyxID's LLM gateway, so provider credentials live in one place (NyxID) and Aexon just holds a NyxID session token.
 
-1. `ANTHROPIC_API_KEY`
-2. `<working directory>/appsettings.secrets.json`
-3. `<working directory>/appsettings.json`
-4. `<app base directory>/appsettings.secrets.json`
-5. `<app base directory>/appsettings.json`
+The one-time setup is three commands:
 
-`appsettings.secrets.json` is the recommended place for local secrets and is ignored by git in this repository.
+1. **Connect a provider credential in NyxID.** Open the NyxID web console (`/keys` → "Add Service") and add at least one provider — e.g. Anthropic or OpenAI. Or use the NyxID CLI:
 
-Both of the following JSON shapes are supported:
+   ```bash
+   nyxid service add llm-anthropic --credential-env ANTHROPIC_API_KEY
+   nyxid service add llm-openai --credential-env OPENAI_API_KEY
+   ```
 
-```json
-{
-  "Anthropic": {
-    "apiKey": "YOUR_ANTHROPIC_API_KEY",
-    "model": "claude-sonnet-4-20250514",
-    "maxTokens": 16384,
-    "baseUrl": "https://api.anthropic.com"
-  }
-}
-```
+2. **Sign in from Aexon.** This spins up a browser-based OAuth flow and persists tokens to `~/.aexon/nyxid.json`:
 
-OpenAI settings are read from environment variables:
+   ```bash
+   aexon login
+   ```
 
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL` for OpenAI-compatible endpoints
+3. **Pick a default provider.** `aexon llm` opens an interactive picker — it calls `GET /api/v1/llm/status`, shows every provider with its readiness, and asks you to choose:
 
-Ollama settings are read from:
+   ```bash
+   aexon llm
+   # Gateway: https://nyx-api.chrono-ai.fun/api/v1/llm/gateway/v1
+   # Providers on https://nyx-api.chrono-ai.fun:
+   #    1. anthropic      [ready]   Anthropic
+   #    2. openai         [ready]   OpenAI
+   #    3. google-ai      [not_connected]  Google AI
+   # Pick provider by number or slug: 1
+   # Default model (or press Enter for the Aexon default for anthropic):
+   # Default LLM set to anthropic. Restart the session to pick it up.
+   ```
+
+   Prefer a one-liner? `aexon llm use anthropic` (or `aexon llm use openai gpt-4o`) skips the picker and writes the default directly.
+
+After that, `aexon "some prompt"` routes through NyxID automatically — no flags required.
+
+Ollama stays fully local and is not brokered by NyxID. Its host is read from:
 
 1. `OLLAMA_HOST`
 2. `OLLAMA_BASE_URL`
 3. default `http://127.0.0.1:11434`
 
-```json
-{
-  "Aexon": {
-    "Anthropic": {
-      "apiKey": "YOUR_ANTHROPIC_API_KEY",
-      "model": "claude-sonnet-4-20250514",
-      "maxTokens": 16384,
-      "baseUrl": "https://api.anthropic.com"
-    }
-  }
-}
-```
-
-If `apiKey` is still the placeholder value, Aexon treats it as missing and will prompt you to either set `ANTHROPIC_API_KEY` or create `appsettings.secrets.json`.
+Invoke it explicitly with `--provider ollama --model <tag>` when you want to bypass NyxID.
 
 ## Getting Started
 
@@ -147,33 +139,40 @@ cat file.py | aexon --print --approval-mode deny "review this code"
 # Override working directory and model
 aexon --cwd /path/to/project --model opus "summarize this repo"
 
-# Use OpenAI
+# Switch provider for one run (NyxID must have the provider connected and `ready`)
 aexon --provider openai --model gpt-4o "summarize this repo"
 
-# Use Ollama
+# Use Ollama (local, does not go through NyxID)
 aexon --provider ollama --model qwen3:4b "summarize this repo"
 
 # Resume the latest session
 aexon --continue
 ```
 
-## Using NyxID
+## NyxID account management
 
-NyxID can broker downstream LLM credentials and proxy Anthropic/OpenAI traffic for Aexon. Before using `--nyxid`, add the downstream service in NyxID first:
-
-```bash
-nyxid service add llm-anthropic
-nyxid service add llm-openai
-```
-
-Then sign in from Aexon and route requests through the NyxID proxy:
+Three top-level subcommands cover everything; each one also works with a leading slash inside the REPL (`/login`, `/logout`, `/llm`):
 
 ```bash
-aexon /login
-aexon --provider anthropic --nyxid "explain this repo"
+aexon login                  # browser OAuth against NyxID; tokens land in ~/.aexon/nyxid.json
+aexon logout                 # revoke the refresh token on NyxID and clear local creds
+aexon llm                    # interactive picker (default)
+aexon llm list               # show every LLM provider NyxID exposes and whether it's `ready`
+aexon llm use <p> [model]    # non-interactive: set the default provider (anthropic|openai)
+aexon llm show               # print the currently selected default
+aexon llm clear              # forget the default provider without signing out
 ```
 
-Set `NYXID_BASE_URL` if you need to target a NyxID instance other than the default hosted endpoint `https://nyx-api.chrono-ai.fun`.
+Both the interactive `aexon llm` flow and the non-interactive `aexon llm use` form validate the choice against `GET /api/v1/llm/status`, so you'll get a clear error if the provider isn't connected on the NyxID side yet. The default is persisted under `~/.aexon/nyxid.json` and survives future `aexon login` refreshes.
+
+Point Aexon at a non-default NyxID instance with `NYXID_BASE_URL` before running `aexon login` (e.g. a self-hosted server).
+
+### How routing works
+
+- Anthropic requests go to `POST <NYXID>/api/v1/llm/anthropic/v1/messages`
+- OpenAI requests go to `POST <NYXID>/api/v1/llm/openai/v1/chat/completions`
+- Both requests carry `Authorization: Bearer <NyxID access token>`; NyxID injects your stored provider credential server-side and forwards to the upstream API
+- Tokens refresh automatically when within 60 seconds of expiry; a 401 triggers a single force-refresh retry before surfacing "Run /login again"
 
 ## Hooks And MCP Settings
 
@@ -240,7 +239,8 @@ src/
 | Option | Description |
 |--------|-------------|
 | `--cwd <path>` | Set the working directory for the session |
-| `--model <name>` | Model name or alias (`sonnet`, `opus`, `haiku`) |
+| `--model <name>` | Model name or alias (`sonnet`, `opus`, `haiku`) — falls back to the stored default |
+| `--provider <name>` | `anthropic`, `openai`, or `ollama` — falls back to the stored default |
 | `--resume <session>` | Resume a specific session by id, directory, manifest, or transcript path |
 | `--continue` | Resume the most recently updated session |
 | `--fork-session` | Fork the resumed transcript into a brand new session |
@@ -256,6 +256,7 @@ src/
 ## Slash Commands
 
 - `/help`, `/clear`, `/exit`, `/cost`, `/model`
+- `/login`, `/logout`, `/llm` (interactive picker; also accepts `list`, `use`, `show`, `clear`)
 - `/session`, `/mode`, `/effort`, `/fast`, `/title`, `/tag`
 - `/compact`, `/microcompact`, `/pcompact`, `/session-memory`
 - `/agents`, `/agents summary`, `/agents list`, `/agents wait`, `/agents tail`, `/agents prune`, `/agents stop`

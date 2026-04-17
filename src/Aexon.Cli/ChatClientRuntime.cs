@@ -1,4 +1,3 @@
-using Aexon.Core.Configuration;
 using Aexon.Core.Query;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,10 +31,9 @@ internal sealed class ChatClientRuntime : IDisposable
         AiProvider provider,
         string model,
         QueryEngineConfig config,
-        AnthropicClientSettings anthropicSettings,
         NyxIdRoutingContext? nyxIdRouting = null)
     {
-        var bootstrap = ChatClientFactory.Create(provider, model, anthropicSettings, nyxIdRouting);
+        var bootstrap = ChatClientFactory.Create(provider, model, nyxIdRouting);
         var pipelineSettings = ChatClientPipelineSettingsLoader.Load();
 
         var services = new ServiceCollection();

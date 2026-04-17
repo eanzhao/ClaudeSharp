@@ -41,7 +41,7 @@ public sealed class NyxIdChatClientTests
 
         var request = Assert.Single(handler.Requests);
         Assert.StartsWith(
-            "https://nyx.example/api/v1/proxy/s/llm-openai/",
+            "https://nyx.example/api/v1/llm/openai/v1/",
             request.RequestUri?.ToString(),
             StringComparison.Ordinal);
         Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
@@ -73,7 +73,7 @@ public sealed class NyxIdChatClientTests
 
         var request = Assert.Single(handler.Requests);
         Assert.StartsWith(
-            "https://nyx.example/api/v1/proxy/s/llm-anthropic/",
+            "https://nyx.example/api/v1/llm/anthropic/v1/",
             request.RequestUri?.ToString(),
             StringComparison.Ordinal);
         Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);

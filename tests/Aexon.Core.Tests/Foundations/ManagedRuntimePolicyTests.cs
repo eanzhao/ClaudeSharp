@@ -10,7 +10,7 @@ namespace Aexon.Core.Tests.Foundations;
 public sealed class ManagedRuntimePolicyTests
 {
     [Fact]
-    public void Resolve_BlocksUserProvidedEnvironmentCredentialsWhenPolicyDisallowsThem()
+    public void Resolve_ReturnsNoActiveTokenSourceWhenManagedSettingsAreEmpty()
     {
         var managedSettings = new ManagedSettingsSnapshot
         {
@@ -20,33 +20,17 @@ public sealed class ManagedRuntimePolicyTests
                 AllowUserProvidedTokenSources = false,
             },
         };
-        var anthropicSettings = new AnthropicClientSettings(
-            ApiKey: "secret",
-            BaseUrl: null,
-            Model: null,
-            MaxTokens: null,
-            ApiKeyFromEnvironment: true,
-            ApiKeyFromAppSettings: false,
-            SourcePath: null,
-            Diagnostics: []);
 
-        var decision = ManagedRuntimePolicy.Resolve(
-            managedSettings,
-            anthropicSettings,
-            CreateFirstPartyRoute());
+        var decision = ManagedRuntimePolicy.Resolve(managedSettings, CreateFirstPartyRoute());
 
-        Assert.False(decision.AnthropicSettings.HasApiKey);
-        Assert.Equal(AnthropicTokenSourceKind.EnvironmentVariable, decision.ActiveTokenSource?.Kind);
-        Assert.Contains(
-            decision.Diagnostics,
-            message => message.Contains("blocked user-provided", StringComparison.OrdinalIgnoreCase));
+        Assert.Null(decision.ActiveTokenSource);
         Assert.Contains(
             decision.Diagnostics,
             message => message.Contains("requires managed access", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
-    public void Resolve_UsesManagedActiveTokenSourceAndPolicyFlagsWhenNoLocalCredentialsExist()
+    public void Resolve_UsesManagedActiveTokenSourceAndPolicyFlags()
     {
         var managedSettings = new ManagedSettingsSnapshot
         {
@@ -69,29 +53,14 @@ public sealed class ManagedRuntimePolicyTests
                 },
             ],
         };
-        var anthropicSettings = new AnthropicClientSettings(
-            ApiKey: null,
-            BaseUrl: null,
-            Model: null,
-            MaxTokens: null,
-            ApiKeyFromEnvironment: false,
-            ApiKeyFromAppSettings: false,
-            SourcePath: null,
-            Diagnostics: []);
 
-        var decision = ManagedRuntimePolicy.Resolve(
-            managedSettings,
-            anthropicSettings,
-            CreateFirstPartyRoute());
+        var decision = ManagedRuntimePolicy.Resolve(managedSettings, CreateFirstPartyRoute());
 
         Assert.Equal("managed-login", decision.ActiveTokenSource?.Id);
         Assert.False(decision.AllowWebSearch);
         Assert.False(decision.AllowExternalMcpServers);
         Assert.False(decision.AllowPlugins);
         Assert.True(decision.IsProviderAllowed);
-        Assert.Contains(
-            decision.Diagnostics,
-            message => message.Contains("no usable Anthropic credential", StringComparison.OrdinalIgnoreCase));
         Assert.NotNull(decision.StartupSummary);
         Assert.Contains("web search disabled", decision.StartupSummary, StringComparison.OrdinalIgnoreCase);
     }
@@ -106,20 +75,8 @@ public sealed class ManagedRuntimePolicyTests
                 AllowedProviderKinds = ["bedrock"],
             },
         };
-        var anthropicSettings = new AnthropicClientSettings(
-            ApiKey: "secret",
-            BaseUrl: null,
-            Model: null,
-            MaxTokens: null,
-            ApiKeyFromEnvironment: true,
-            ApiKeyFromAppSettings: false,
-            SourcePath: null,
-            Diagnostics: []);
 
-        var decision = ManagedRuntimePolicy.Resolve(
-            managedSettings,
-            anthropicSettings,
-            CreateFirstPartyRoute());
+        var decision = ManagedRuntimePolicy.Resolve(managedSettings, CreateFirstPartyRoute());
 
         Assert.False(decision.IsProviderAllowed);
         Assert.Contains(

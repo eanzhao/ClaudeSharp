@@ -24,4 +24,10 @@ public sealed record NyxIdCredentials
 
     [JsonPropertyName("client_id")]
     public string ClientId { get; init; } = string.Empty;
+
+    [JsonPropertyName("default_provider")]
+    public string? DefaultProvider { get; init; }
+
+    [JsonPropertyName("default_model")]
+    public string? DefaultModel { get; init; }
 }

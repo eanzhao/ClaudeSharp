@@ -494,8 +494,18 @@ public sealed class LoginCommand(
 
         try
         {
+            var previous = credentialStore.Load();
             var credentials = await authService.LoginAsync(requestedBaseUrl, context.CancellationToken);
-            credentialStore.Save(credentials);
+            var preservedDefaults = previous != null &&
+                                    string.Equals(previous.BaseUrl, credentials.BaseUrl, StringComparison.OrdinalIgnoreCase);
+            var toSave = preservedDefaults
+                ? credentials with
+                {
+                    DefaultProvider = previous!.DefaultProvider,
+                    DefaultModel = previous.DefaultModel,
+                }
+                : credentials;
+            credentialStore.Save(toSave);
 
             if (NyxIdJwtPayloadReader.TryGetStringClaim(credentials.IdToken, "email", out var email))
             {
@@ -504,6 +514,18 @@ public sealed class LoginCommand(
             else
             {
                 context.WriteLine($"  Signed in to NyxID at {credentials.BaseUrl}.");
+            }
+
+            if (string.IsNullOrWhiteSpace(toSave.DefaultProvider))
+            {
+                context.WriteLine("  No default LLM provider set. Run `aexon llm` to pick one.");
+            }
+            else
+            {
+                var modelSuffix = string.IsNullOrWhiteSpace(toSave.DefaultModel)
+                    ? string.Empty
+                    : $" ({toSave.DefaultModel})";
+                context.WriteLine($"  Default LLM: {toSave.DefaultProvider}{modelSuffix}.");
             }
         }
         catch (Exception ex)
@@ -544,6 +566,344 @@ public sealed class LogoutCommand(
         {
             context.WriteLine($"  NyxID logout failed: {ex.Message}");
         }
+    }
+}
+
+/// <summary>
+/// Manages the default NyxID-brokered LLM provider for this machine. Running
+/// <c>/llm</c> with no subcommand walks the user through an interactive picker.
+/// </summary>
+public sealed class LlmCommand(
+    NyxIdCredentialStore credentialStore,
+    NyxIdLlmStatusClient statusClient) : ICommand
+{
+    private static readonly string[] SupportedProviderSlugs = ["anthropic", "openai"];
+
+    public string Name => "llm";
+    public string Description => "List or set the default NyxID-brokered LLM provider (interactive)";
+
+    public async Task ExecuteAsync(string args, CommandContext context)
+    {
+        var parts = string.IsNullOrWhiteSpace(args)
+            ? Array.Empty<string>()
+            : args.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var sub = parts.Length > 0 ? parts[0].ToLowerInvariant() : "use";
+
+        switch (sub)
+        {
+            case "show":
+                ShowCurrent(context);
+                return;
+            case "list":
+                await ListAsync(context);
+                return;
+            case "use":
+                if (parts.Length >= 2)
+                {
+                    await UseDirectAsync(parts[1], parts.Length >= 3 ? parts[2] : null, context);
+                }
+                else
+                {
+                    await UseInteractiveAsync(context);
+                }
+                return;
+            case "clear":
+                ClearDefault(context);
+                return;
+            default:
+                context.WriteLine("  Usage: /llm [show|list|use [<provider> [model]]|clear]");
+                return;
+        }
+    }
+
+    private void ShowCurrent(CommandContext context)
+    {
+        var credentials = credentialStore.Load();
+        if (credentials == null)
+        {
+            context.WriteLine("  Not signed in. Run /login first.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(credentials.DefaultProvider))
+        {
+            context.WriteLine("  No default LLM provider set. Run /llm to pick one.");
+            return;
+        }
+
+        var modelSuffix = string.IsNullOrWhiteSpace(credentials.DefaultModel)
+            ? string.Empty
+            : $" ({credentials.DefaultModel})";
+        context.WriteLine($"  Default LLM: {credentials.DefaultProvider}{modelSuffix}");
+        context.WriteLine($"  NyxID: {credentials.BaseUrl}");
+    }
+
+    private async Task ListAsync(CommandContext context)
+    {
+        var credentials = credentialStore.Load();
+        if (credentials == null)
+        {
+            context.WriteLine("  Not signed in. Run /login first.");
+            return;
+        }
+
+        var status = await TryFetchStatusAsync(credentials.BaseUrl, context);
+        if (status == null)
+            return;
+
+        PrintStatus(status, credentials, context);
+    }
+
+    private async Task UseInteractiveAsync(CommandContext context)
+    {
+        var credentials = credentialStore.Load();
+        if (credentials == null)
+        {
+            context.WriteLine("  Not signed in. Run /login first.");
+            return;
+        }
+
+        if (Console.IsInputRedirected)
+        {
+            context.WriteLine("  Interactive picker needs a TTY. Pass the provider explicitly:");
+            context.WriteLine("    /llm use <provider> [model]");
+            return;
+        }
+
+        var status = await TryFetchStatusAsync(credentials.BaseUrl, context);
+        if (status == null)
+            return;
+
+        var selectable = status.Providers
+            .Where(p => SupportedProviderSlugs.Contains(p.ProviderSlug, StringComparer.OrdinalIgnoreCase))
+            .ToList();
+
+        if (selectable.Count == 0)
+        {
+            context.WriteLine("  NyxID does not expose any Aexon-supported providers (anthropic, openai).");
+            context.WriteLine("  Connect a provider credential in the NyxID UI first.");
+            return;
+        }
+
+        PrintStatus(status, credentials, context);
+        context.WriteLine("");
+
+        var picked = PromptForProvider(selectable, credentials.DefaultProvider, context);
+        if (picked == null)
+            return;
+
+        if (!picked.IsReady)
+        {
+            context.WriteLine($"  Provider '{picked.ProviderSlug}' is '{picked.Status}' on NyxID.");
+            context.WriteLine("  Connect a credential in the NyxID UI before selecting it.");
+            return;
+        }
+
+        var model = PromptForModel(picked.ProviderSlug, credentials.DefaultModel, context);
+        SaveDefault(credentials, picked.ProviderSlug.ToLowerInvariant(), model, context);
+    }
+
+    private async Task UseDirectAsync(string providerInput, string? modelInput, CommandContext context)
+    {
+        var credentials = credentialStore.Load();
+        if (credentials == null)
+        {
+            context.WriteLine("  Not signed in. Run /login first.");
+            return;
+        }
+
+        var providerSlug = providerInput.Trim().ToLowerInvariant();
+        if (!SupportedProviderSlugs.Contains(providerSlug, StringComparer.OrdinalIgnoreCase))
+        {
+            context.WriteLine($"  Provider '{providerSlug}' is not supported by Aexon. Use 'anthropic' or 'openai'.");
+            return;
+        }
+
+        var status = await TryFetchStatusAsync(credentials.BaseUrl, context);
+        if (status == null)
+            return;
+
+        var match = status.Providers
+            .FirstOrDefault(p => string.Equals(p.ProviderSlug, providerSlug, StringComparison.OrdinalIgnoreCase));
+
+        if (match == null)
+        {
+            context.WriteLine($"  NyxID did not list provider '{providerSlug}'. Run /llm list to see what's available.");
+            return;
+        }
+
+        if (!match.IsReady)
+        {
+            context.WriteLine($"  Provider '{providerSlug}' is '{match.Status}' on NyxID. Connect a credential in the NyxID UI first.");
+            return;
+        }
+
+        var model = string.IsNullOrWhiteSpace(modelInput) ? null : modelInput.Trim();
+        SaveDefault(credentials, providerSlug, model, context);
+    }
+
+    private void ClearDefault(CommandContext context)
+    {
+        var credentials = credentialStore.Load();
+        if (credentials == null)
+        {
+            context.WriteLine("  Not signed in. Run /login first.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(credentials.DefaultProvider) &&
+            string.IsNullOrWhiteSpace(credentials.DefaultModel))
+        {
+            context.WriteLine("  No default LLM provider was set.");
+            return;
+        }
+
+        credentialStore.Save(credentials with
+        {
+            DefaultProvider = null,
+            DefaultModel = null,
+        });
+        context.WriteLine("  Cleared default LLM provider.");
+    }
+
+    private async Task<NyxIdLlmStatus?> TryFetchStatusAsync(string baseUrl, CommandContext context)
+    {
+        try
+        {
+            return await statusClient.GetStatusAsync(baseUrl, context.CancellationToken);
+        }
+        catch (NotLoggedInException ex)
+        {
+            context.WriteLine($"  {ex.Message}");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            context.WriteLine($"  Failed to query NyxID /api/v1/llm/status: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static void PrintStatus(
+        NyxIdLlmStatus status,
+        NyxIdCredentials credentials,
+        CommandContext context)
+    {
+        context.WriteLine($"  Gateway: {status.GatewayUrl}");
+        context.WriteLine($"  Providers on {credentials.BaseUrl}:");
+        var index = 1;
+        foreach (var provider in status.Providers)
+        {
+            var marker = string.Equals(
+                provider.ProviderSlug,
+                credentials.DefaultProvider,
+                StringComparison.OrdinalIgnoreCase)
+                ? " (default)"
+                : string.Empty;
+            context.WriteLine(
+                $"    {index,2}. {provider.ProviderSlug,-14} [{provider.Status}]{marker}  {provider.ProviderName}");
+            index++;
+        }
+
+        if (!status.Providers.Any(p => p.IsReady))
+        {
+            context.WriteLine("  No provider is 'ready'. Connect a credential in the NyxID UI first.");
+        }
+    }
+
+    private static NyxIdLlmProviderStatus? PromptForProvider(
+        IReadOnlyList<NyxIdLlmProviderStatus> selectable,
+        string? currentDefault,
+        CommandContext context)
+    {
+        while (true)
+        {
+            var defaultHint = string.IsNullOrWhiteSpace(currentDefault)
+                ? string.Empty
+                : $" [Enter to keep {currentDefault}]";
+            Console.Write($"  Pick provider by number or slug{defaultHint}: ");
+            var raw = Console.ReadLine();
+            if (raw == null)
+            {
+                context.WriteLine("  Input closed. Aborting.");
+                return null;
+            }
+
+            var trimmed = raw.Trim();
+            if (trimmed.Length == 0)
+            {
+                if (string.IsNullOrWhiteSpace(currentDefault))
+                {
+                    Console.WriteLine("  Please enter a number or slug.");
+                    continue;
+                }
+
+                var keep = selectable.FirstOrDefault(p =>
+                    string.Equals(p.ProviderSlug, currentDefault, StringComparison.OrdinalIgnoreCase));
+                if (keep != null)
+                    return keep;
+
+                Console.WriteLine($"  Stored default '{currentDefault}' is no longer listed. Pick again.");
+                continue;
+            }
+
+            if (int.TryParse(trimmed, out var index) &&
+                index >= 1 &&
+                index <= selectable.Count)
+            {
+                return selectable[index - 1];
+            }
+
+            var bySlug = selectable.FirstOrDefault(p =>
+                string.Equals(p.ProviderSlug, trimmed, StringComparison.OrdinalIgnoreCase));
+            if (bySlug != null)
+                return bySlug;
+
+            Console.WriteLine($"  '{trimmed}' is not in the list. Try again or Ctrl+C to cancel.");
+        }
+    }
+
+    private static string? PromptForModel(
+        string providerSlug,
+        string? currentDefault,
+        CommandContext context)
+    {
+        var hint = string.IsNullOrWhiteSpace(currentDefault)
+            ? $" (or press Enter for the Aexon default for {providerSlug})"
+            : $" [Enter to keep {currentDefault}]";
+        Console.Write($"  Default model{hint}: ");
+        var raw = Console.ReadLine();
+        if (raw == null)
+        {
+            context.WriteLine("  Input closed. Aborting.");
+            return null;
+        }
+
+        var trimmed = raw.Trim();
+        if (trimmed.Length == 0)
+            return string.IsNullOrWhiteSpace(currentDefault) ? null : currentDefault;
+
+        return trimmed;
+    }
+
+    private void SaveDefault(
+        NyxIdCredentials credentials,
+        string providerSlug,
+        string? model,
+        CommandContext context)
+    {
+        var updated = credentials with
+        {
+            DefaultProvider = providerSlug,
+            DefaultModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
+        };
+        credentialStore.Save(updated);
+
+        var suffix = string.IsNullOrWhiteSpace(updated.DefaultModel)
+            ? string.Empty
+            : $" with default model {updated.DefaultModel}";
+        context.WriteLine($"  Default LLM set to {providerSlug}{suffix}. Restart the session to pick it up.");
     }
 }
 
@@ -2568,7 +2928,7 @@ public sealed record NyxIdRuntimeConfig(
 /// Represents config command.
 /// </summary>
 public sealed class ConfigCommand(
-    AnthropicClientSettings anthropicSettings,
+    NyxIdCredentialStore credentialStore,
     ManagedSettingsLoadResult managedSettings,
     NyxIdRuntimeConfig nyxIdRuntimeConfig) : ICommand
 {
@@ -2607,16 +2967,12 @@ public sealed class ConfigCommand(
 
     private Dictionary<string, string> BuildEntries(CommandContext context)
     {
-        var apiKeySource = anthropicSettings.ApiKeyFromEnvironment
-            ? "env:ANTHROPIC_API_KEY"
-            : anthropicSettings.ApiKeyFromAppSettings
-                ? anthropicSettings.SourcePath ?? "appsettings.secrets.json"
-                : "(none)";
         var nyxIdSource = nyxIdRuntimeConfig.BaseUrlFromEnvironment
             ? "env:NYXID_BASE_URL"
             : nyxIdRuntimeConfig.HasStoredCredentials
                 ? "stored-credentials/default"
                 : "default";
+        var credentials = credentialStore.Load();
 
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -2625,11 +2981,6 @@ public sealed class ConfigCommand(
             ["effort"] = context.QueryEngine.CurrentEffort.ToString(),
             ["workingDirectory"] = context.PermissionContext.WorkingDirectory,
             ["permissionMode"] = context.PermissionContext.Mode.ToString(),
-            ["anthropic.apiKeySource"] = apiKeySource,
-            ["anthropic.sourcePath"] = anthropicSettings.SourcePath ?? "(none)",
-            ["anthropic.baseUrl"] = anthropicSettings.BaseUrl ?? "(default)",
-            ["anthropic.defaultModel"] = anthropicSettings.Model ?? "(none)",
-            ["anthropic.maxTokens"] = anthropicSettings.MaxTokens?.ToString(CultureInfo.InvariantCulture) ?? "(none)",
             ["managed.settingsSources"] = managedSettings.SourcePaths.Count == 0
                 ? "(none)"
                 : string.Join(", ", managedSettings.SourcePaths),
@@ -2638,6 +2989,8 @@ public sealed class ConfigCommand(
             ["nyxid.activeBaseUrl"] = nyxIdRuntimeConfig.ActiveBaseUrl,
             ["nyxid.baseUrlSource"] = nyxIdSource,
             ["nyxid.hasStoredCredentials"] = nyxIdRuntimeConfig.HasStoredCredentials ? "true" : "false",
+            ["llm.defaultProvider"] = credentials?.DefaultProvider ?? "(not set)",
+            ["llm.defaultModel"] = credentials?.DefaultModel ?? "(not set)",
         };
     }
 
@@ -2965,7 +3318,7 @@ public sealed class InitCommand : ICommand
 /// Represents doctor command.
 /// </summary>
 public class DoctorCommand(
-    AnthropicClientSettings anthropicSettings,
+    NyxIdCredentialStore credentialStore,
     NyxIdRuntimeConfig nyxIdRuntimeConfig) : ICommand
 {
     public string Name => "doctor";
@@ -2978,7 +3331,7 @@ public class DoctorCommand(
             await CheckDotnetAsync(context),
             await CheckGitBinaryAsync(context),
             await CheckGitRepositoryAsync(context),
-            await CheckAnthropicAsync(context),
+            CheckNyxIdLogin(),
             await CheckNyxIdAsync(context),
         };
 
@@ -3084,27 +3437,19 @@ public class DoctorCommand(
         }
     }
 
-    private async Task<(bool Success, string Message)> CheckAnthropicAsync(CommandContext context)
+    private (bool Success, string Message) CheckNyxIdLogin()
     {
-        if (string.IsNullOrWhiteSpace(anthropicSettings.ApiKey))
-            return (false, "Anthropic connectivity: no API key is configured.");
+        var credentials = credentialStore.Load();
+        if (credentials == null)
+            return (false, "NyxID login: not signed in. Run `aexon login`.");
 
-        try
-        {
-            var statusCode = await GetStatusCodeAsync(
-                new Uri("https://api.anthropic.com/v1/models"),
-                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["x-api-key"] = anthropicSettings.ApiKey,
-                    ["anthropic-version"] = "2023-06-01",
-                },
-                context.CancellationToken);
-            return (true, $"Anthropic connectivity: HTTP {(int)statusCode}");
-        }
-        catch (Exception ex)
-        {
-            return (false, $"Anthropic connectivity: {ex.Message}");
-        }
+        if (string.IsNullOrWhiteSpace(credentials.DefaultProvider))
+            return (false, "NyxID login: signed in, but no default LLM provider. Run `aexon llm`.");
+
+        var modelSuffix = string.IsNullOrWhiteSpace(credentials.DefaultModel)
+            ? string.Empty
+            : $" ({credentials.DefaultModel})";
+        return (true, $"NyxID login: {credentials.DefaultProvider}{modelSuffix}");
     }
 
     private async Task<(bool Success, string Message)> CheckNyxIdAsync(CommandContext context)
