@@ -48,6 +48,72 @@ public sealed class PlanModeToolsTests
         Assert.Equal("Plan mode is not active.", result.Data);
     }
 
+    [Fact]
+    public async Task EnterTool_RepeatedCalls_ReturnAlreadyActiveMessageAndAllowedToolList()
+    {
+        var controller = new FakePlanModeController(PermissionMode.Default);
+        var tool = new EnterPlanModeTool(controller);
+        var context = CreateContext(PermissionMode.Default);
+
+        var first = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context);
+        var second = await tool.ExecuteAsync(JsonSerializer.SerializeToElement(new { }), context);
+
+        Assert.False(first.IsError);
+        Assert.False(second.IsError);
+        Assert.Contains("Plan mode enabled.", first.Data, StringComparison.Ordinal);
+        Assert.Contains("already active", second.Data, StringComparison.Ordinal);
+        foreach (var allowedToolName in PlanModeToolPolicy.AllowedToolNamesInPlanMode)
+            Assert.Contains(allowedToolName, first.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PlanModeTools_MetadataPromptAndPermissions_AreStable()
+    {
+        var controller = new FakePlanModeController(PermissionMode.Default);
+        var enterTool = new EnterPlanModeTool(controller);
+        var exitTool = new ExitPlanModeTool(controller);
+        var context = CreateContext(PermissionMode.Default);
+        var promptContext = new ToolPromptContext
+        {
+            PermissionContext = new PermissionContext
+            {
+                Mode = PermissionMode.Default,
+            },
+            Tools = [],
+        };
+
+        var enterPermission = await enterTool.CheckPermissionsAsync(
+            JsonSerializer.SerializeToElement(new { }),
+            context);
+        var exitPermission = await exitTool.CheckPermissionsAsync(
+            JsonSerializer.SerializeToElement(new { }),
+            context);
+
+        Assert.False(enterTool.IsConcurrencySafe(JsonSerializer.SerializeToElement(new { })));
+        Assert.False(exitTool.IsConcurrencySafe(JsonSerializer.SerializeToElement(new { })));
+        Assert.Equal("Enter plan mode", enterTool.GetUserFacingName());
+        Assert.Equal("Entering plan mode", enterTool.GetActivityDescription(null));
+        Assert.Equal("Exit plan mode", exitTool.GetUserFacingName());
+        Assert.Equal("Exiting plan mode", exitTool.GetActivityDescription(null));
+        Assert.False(string.IsNullOrWhiteSpace(await enterTool.GetDescriptionAsync()));
+        Assert.False(string.IsNullOrWhiteSpace(await exitTool.GetDescriptionAsync()));
+        Assert.False(string.IsNullOrWhiteSpace(await enterTool.GetPromptAsync(promptContext)));
+        Assert.False(string.IsNullOrWhiteSpace(await exitTool.GetPromptAsync(promptContext)));
+        Assert.Equal(PermissionBehavior.Allow, enterPermission.Behavior);
+        Assert.Equal(PermissionBehavior.Allow, exitPermission.Behavior);
+    }
+
+    [Fact]
+    public void ExitTool_IsEnabled_WhenControllerStartsInPlanMode()
+    {
+        var controller = new FakePlanModeController(PermissionMode.Plan);
+        var enterTool = new EnterPlanModeTool(controller);
+        var exitTool = new ExitPlanModeTool(controller);
+
+        Assert.False(enterTool.IsEnabled());
+        Assert.True(exitTool.IsEnabled());
+    }
+
     private static ToolExecutionContext CreateContext(PermissionMode mode) =>
         new()
         {

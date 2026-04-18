@@ -51,6 +51,152 @@ public sealed class WorktreeToolsTests
         Assert.False(Directory.Exists(worktree.RootDirectory));
     }
 
+    [Fact]
+    public async Task EnterWorktreeTool_ListOnly_WhenEmpty_ReturnsNone()
+    {
+        using var temp = new TempDirectory();
+        var runtime = new InMemoryAgentManagedWorktreeRuntime(
+            new GitWorktreeAgentWorkspaceManager(temp.CreateDirectory("worktrees")));
+        var tool = new EnterWorktreeTool(runtime);
+
+        var result = await tool.ExecuteAsync(
+            Json(new { list_only = true }),
+            CreateContext(temp.CreateDirectory("repo")));
+
+        Assert.False(result.IsError);
+        Assert.Contains("Managed worktrees:", result.Data, StringComparison.Ordinal);
+        Assert.Contains("(none)", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EnterWorktreeTool_ReadOnlyAndConcurrencySafe_OnlyWhenListOnly()
+    {
+        var tool = new EnterWorktreeTool(new InMemoryAgentManagedWorktreeRuntime());
+
+        Assert.True(tool.IsReadOnly(Json(new { list_only = true })));
+        Assert.True(tool.IsConcurrencySafe(Json(new { list_only = true })));
+        Assert.False(tool.IsReadOnly(Json(new { list_only = false })));
+        Assert.False(tool.IsConcurrencySafe(Json(new { list_only = false })));
+        Assert.False(tool.IsReadOnly(Json(new { path = "." })));
+        Assert.False(tool.IsConcurrencySafe(Json(new { path = "." })));
+    }
+
+    [Fact]
+    public async Task ExitWorktreeTool_ValidateInputAsync_RejectsMissingOrBlankId()
+    {
+        var tool = new ExitWorktreeTool(new InMemoryAgentManagedWorktreeRuntime());
+        var context = CreateContext(Environment.CurrentDirectory);
+
+        var missing = await tool.ValidateInputAsync(Json(new { }), context);
+        var blank = await tool.ValidateInputAsync(Json(new { id = "   " }), context);
+
+        Assert.False(missing.IsValid);
+        Assert.Equal("id is required.", missing.Message);
+        Assert.False(blank.IsValid);
+        Assert.Equal("id is required.", blank.Message);
+    }
+
+    [Fact]
+    public async Task ExitWorktreeTool_UnknownId_ReturnsNotFoundMessage()
+    {
+        var tool = new ExitWorktreeTool(new InMemoryAgentManagedWorktreeRuntime());
+
+        var result = await tool.ExecuteAsync(
+            Json(new { id = "worktree-404" }),
+            CreateContext(Environment.CurrentDirectory));
+
+        Assert.True(result.IsError);
+        Assert.Contains("No managed worktree matched", result.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExitWorktreeTool_CleanWorktree_ExitsWithoutForce()
+    {
+        using var temp = new TempDirectory();
+        var repo = temp.CreateDirectory("repo");
+        var workspaceRoot = temp.CreateDirectory("worktrees");
+        await InitializeGitRepositoryAsync(repo);
+
+        var runtime = new InMemoryAgentManagedWorktreeRuntime(
+            new GitWorktreeAgentWorkspaceManager(workspaceRoot));
+        var enterTool = new EnterWorktreeTool(runtime);
+        var exitTool = new ExitWorktreeTool(runtime);
+        var context = CreateContext(repo);
+
+        var created = await enterTool.ExecuteAsync(
+            Json(new { path = ".", name = "clean-branch" }),
+            context);
+        var worktree = Assert.Single(runtime.List());
+        var exited = await exitTool.ExecuteAsync(
+            Json(new { id = worktree.Id }),
+            context);
+
+        Assert.False(created.IsError);
+        Assert.False(exited.IsError);
+        Assert.Contains($"'{worktree.Id}'", exited.Data, StringComparison.Ordinal);
+        Assert.Empty(runtime.List());
+        Assert.False(Directory.Exists(worktree.RootDirectory));
+    }
+
+    [Fact]
+    public async Task EnterWorktreeTool_CreateAndList_SurfaceNameInResultText()
+    {
+        using var temp = new TempDirectory();
+        var repo = temp.CreateDirectory("repo");
+        var workspaceRoot = temp.CreateDirectory("worktrees");
+        await InitializeGitRepositoryAsync(repo);
+
+        var runtime = new InMemoryAgentManagedWorktreeRuntime(
+            new GitWorktreeAgentWorkspaceManager(workspaceRoot));
+        var enterTool = new EnterWorktreeTool(runtime);
+        var context = CreateContext(repo);
+
+        var created = await enterTool.ExecuteAsync(
+            Json(new { path = ".", name = "feature-name" }),
+            context);
+        var worktree = Assert.Single(runtime.List());
+        var listed = await enterTool.ExecuteAsync(
+            Json(new { list_only = true }),
+            context);
+
+        Assert.False(created.IsError);
+        Assert.False(listed.IsError);
+        Assert.Contains("name: feature-name", created.Data, StringComparison.Ordinal);
+        Assert.Contains(worktree.Id, listed.Data, StringComparison.Ordinal);
+        Assert.Contains("(feature-name)", listed.Data, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task EnterWorktreeTool_CleanupUnchanged_PrunesPriorCleanWorktreeAndReportsAutoCleanedCount()
+    {
+        using var temp = new TempDirectory();
+        var repo = temp.CreateDirectory("repo");
+        var workspaceRoot = temp.CreateDirectory("worktrees");
+        await InitializeGitRepositoryAsync(repo);
+
+        var runtime = new InMemoryAgentManagedWorktreeRuntime(
+            new GitWorktreeAgentWorkspaceManager(workspaceRoot));
+        var tool = new EnterWorktreeTool(runtime);
+        var context = CreateContext(repo);
+
+        var first = await tool.ExecuteAsync(
+            Json(new { path = ".", name = "first-clean" }),
+            context);
+        var firstWorktree = Assert.Single(runtime.List());
+        var second = await tool.ExecuteAsync(
+            Json(new { path = ".", name = "second-clean", cleanup_unchanged = true }),
+            context);
+        var remaining = Assert.Single(runtime.List());
+
+        Assert.False(first.IsError);
+        Assert.False(second.IsError);
+        Assert.Contains("auto_cleaned: 1", second.Data, StringComparison.Ordinal);
+        Assert.Contains("name: second-clean", second.Data, StringComparison.Ordinal);
+        Assert.Equal("second-clean", remaining.Name);
+        Assert.NotEqual(firstWorktree.Id, remaining.Id);
+        Assert.False(Directory.Exists(firstWorktree.RootDirectory));
+    }
+
     private static ToolExecutionContext CreateContext(string workingDirectory) =>
         new()
         {
