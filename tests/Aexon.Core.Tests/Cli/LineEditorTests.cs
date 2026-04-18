@@ -1,4 +1,4 @@
-using Aexon.Cli;
+using Aexon.Core.Interactive;
 
 namespace Aexon.Core.Tests.Cli;
 
@@ -113,5 +113,50 @@ public sealed class LineEditorCompletionTests
         {
             Directory.Delete(tempDirectory, recursive: true);
         }
+    }
+}
+
+public sealed class TerminalWidthTests
+{
+    [Fact]
+    public void CharColumns_AsciiReturnsOne()
+    {
+        Assert.Equal(1, TerminalWidth.CharColumns('a'));
+        Assert.Equal(1, TerminalWidth.CharColumns(' '));
+    }
+
+    [Fact]
+    public void CharColumns_CjkReturnsTwo()
+    {
+        Assert.Equal(2, TerminalWidth.CharColumns('你'));
+        Assert.Equal(2, TerminalWidth.CharColumns('好'));
+        Assert.Equal(2, TerminalWidth.CharColumns('凤'));
+    }
+
+    [Fact]
+    public void CharColumns_ControlCharReturnsZero()
+    {
+        Assert.Equal(0, TerminalWidth.CharColumns('\0'));
+        Assert.Equal(0, TerminalWidth.CharColumns('\t'));
+    }
+
+    [Fact]
+    public void StringColumns_MixedAsciiAndCjk()
+    {
+        // "fdsaf反反复复凤飞飞" — 5 ASCII cols + 7 CJK chars × 2 cols = 19 cols.
+        Assert.Equal(19, TerminalWidth.StringColumns("fdsaf反反复复凤飞飞"));
+    }
+
+    [Fact]
+    public void StringColumns_EmojiCountsAsTwo()
+    {
+        Assert.Equal(2, TerminalWidth.StringColumns("😀"));
+    }
+
+    [Fact]
+    public void StringColumns_CombiningMarksCountZero()
+    {
+        // Base 'e' (1) + combining acute (0) = 1 column, not 2.
+        Assert.Equal(1, TerminalWidth.StringColumns("e\u0301"));
     }
 }

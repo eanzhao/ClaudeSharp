@@ -1,9 +1,18 @@
 using System.Text;
 using Aexon.Core.Commands;
 
-namespace Aexon.Cli;
+namespace Aexon.Core.Interactive;
 
-internal sealed class LineEditor
+/// <summary>
+/// A raw-mode line editor with history, inline completion, wrap-aware rendering,
+/// and emacs-style key bindings. Shared between the main aexon REPL and the
+/// aevatar subcommand's REPL. Every keystroke triggers a full re-render, which
+/// means wide characters (CJK glyphs) never leave residue on backspace.
+///
+/// For ANSI-colored prompts, pass the visible column count via
+/// <c>promptVisibleWidth</c> so wrap and cursor math ignore invisible escape bytes.
+/// </summary>
+public sealed class LineEditor
 {
     internal const int MaxHistoryEntries = 500;
 
@@ -11,6 +20,7 @@ internal sealed class LineEditor
     private readonly LineEditorHistory _history;
     private readonly string _placeholder;
     private readonly string _prompt;
+    private readonly int _promptVisibleWidth;
     private readonly Func<ConsoleKeyInfo> _readKey;
     private readonly string _workingDirectory;
 
@@ -20,10 +30,34 @@ internal sealed class LineEditor
         string workingDirectory,
         string prompt = "claudesharp> ",
         string placeholder = "Type a message or / for commands",
-        Func<ConsoleKeyInfo>? readKey = null)
+        Func<ConsoleKeyInfo>? readKey = null,
+        int? promptVisibleWidth = null)
+        : this(
+            commandNames: commandRegistry.GetAll().Select(command => $"/{command.Name}"),
+            history: history,
+            workingDirectory: workingDirectory,
+            prompt: prompt,
+            placeholder: placeholder,
+            readKey: readKey,
+            promptVisibleWidth: promptVisibleWidth)
     {
-        _commandNames = commandRegistry.GetAll()
-            .Select(command => $"/{command.Name}")
+    }
+
+    /// <summary>
+    /// Use when the REPL doesn't have slash-prefixed commands (e.g. aevatar uses
+    /// colon-prefixed commands). Pass an empty sequence to disable completion.
+    /// </summary>
+    public LineEditor(
+        IEnumerable<string> commandNames,
+        List<string> history,
+        string workingDirectory,
+        string prompt = "claudesharp> ",
+        string placeholder = "Type a message or / for commands",
+        Func<ConsoleKeyInfo>? readKey = null,
+        int? promptVisibleWidth = null)
+    {
+        _commandNames = commandNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -32,6 +66,7 @@ internal sealed class LineEditor
         _prompt = prompt;
         _placeholder = placeholder;
         _readKey = readKey ?? (() => Console.ReadKey(intercept: true));
+        _promptVisibleWidth = promptVisibleWidth ?? prompt.Length;
     }
 
     public Task<string?> ReadLineAsync(CancellationToken cancellationToken = default) =>
@@ -62,7 +97,7 @@ internal sealed class LineEditor
     private string? ReadInteractiveLine(CancellationToken cancellationToken)
     {
         var buffer = new LineEditorBuffer();
-        var renderer = new LineEditorRenderer(_prompt, _placeholder);
+        var renderer = new LineEditorRenderer(_prompt, _placeholder, _promptVisibleWidth);
         LineEditorCompletionSession? completionSession = null;
         _history.ResetNavigation();
 
@@ -648,7 +683,7 @@ internal readonly record struct LineEditorCompletionSet(
     int Length,
     IReadOnlyList<string> Matches);
 
-internal static class LineEditorHistoryStore
+public static class LineEditorHistoryStore
 {
     public static List<string> Load(string path)
     {
@@ -732,15 +767,17 @@ internal sealed class LineEditorRenderer
     private readonly int _anchorTop;
     private readonly string _placeholder;
     private readonly string _prompt;
+    private readonly int _promptVisibleWidth;
     private LineEditorLayout _lastLayout;
     private int _renderedLineCount;
 
-    public LineEditorRenderer(string prompt, string placeholder)
+    public LineEditorRenderer(string prompt, string placeholder, int? promptVisibleWidth = null)
     {
         _prompt = prompt;
         _placeholder = placeholder;
+        _promptVisibleWidth = promptVisibleWidth ?? prompt.Length;
         _anchorTop = Console.CursorTop;
-        _lastLayout = BuildLayout(string.Empty, 0, prompt, placeholder, GetConsoleWidth());
+        _lastLayout = BuildLayout(string.Empty, 0, prompt, placeholder, _promptVisibleWidth, GetConsoleWidth());
     }
 
     public void Finish()
@@ -762,7 +799,7 @@ internal sealed class LineEditorRenderer
     public void Render(string text, int cursor)
     {
         var width = GetConsoleWidth();
-        var layout = BuildLayout(text, cursor, _prompt, _placeholder, width);
+        var layout = BuildLayout(text, cursor, _prompt, _placeholder, _promptVisibleWidth, width);
         var originalColor = Console.ForegroundColor;
         var canToggleCursorVisibility = OperatingSystem.IsWindows();
         var originalCursorVisible = true;
@@ -819,11 +856,12 @@ internal sealed class LineEditorRenderer
         int cursor,
         string prompt,
         string placeholder,
+        int promptVisibleWidth,
         int width)
     {
         var visibleText = text.Length == 0 ? placeholder : text;
         var isPlaceholder = text.Length == 0;
-        var prefixLength = prompt.Length;
+        var prefixLength = promptVisibleWidth;
         var continuationPrefix = new string(' ', prefixLength);
         var contentWidth = Math.Max(1, width - prefixLength - 1);
         var lines = new List<LineEditorDisplayLine>();
@@ -875,11 +913,12 @@ internal sealed class LineEditorRenderer
                 continue;
             }
 
-            if (currentColumn == contentWidth)
+            var visualWidth = TerminalWidth.CharColumns(ch);
+            if (currentColumn + visualWidth > contentWidth)
                 StartNextLine();
 
             builder.Append(ch);
-            currentColumn++;
+            currentColumn += visualWidth;
 
             if (!isPlaceholder)
                 consumed++;
@@ -897,12 +936,13 @@ internal sealed class LineEditorRenderer
             lines.Add(new LineEditorDisplayLine(currentPrefix, builder.ToString(), isPlaceholder));
 
         var lastLine = lines[^1];
+        var endColumn = prefixLength + TerminalWidth.StringColumns(lastLine.Content);
         return new LineEditorLayout(
             lines,
             cursorLine,
             cursorColumn,
             lines.Count - 1,
-            lastLine.Prefix.Length + lastLine.Content.Length);
+            endColumn);
     }
 
     private static int GetConsoleWidth()

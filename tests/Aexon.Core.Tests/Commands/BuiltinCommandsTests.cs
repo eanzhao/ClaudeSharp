@@ -829,10 +829,14 @@ public sealed class BuiltinCommandsTests
         Assert.NotNull(buildMethod);
 
         var emptySkills = new Dictionary<string, Aexon.Core.Skills.Skill>();
-        var credentialStore = new Aexon.Core.Auth.NyxIdCredentialStore(Path.Combine(Path.GetTempPath(), "aexon-test-nyxid-" + Guid.NewGuid().ToString("N") + ".json"));
+        var nyxTempDir = Path.Combine(Path.GetTempPath(), "aexon-test-nyxid-" + Guid.NewGuid().ToString("N"));
+        var prefsPath = Path.Combine(Path.GetTempPath(), "aexon-test-prefs-" + Guid.NewGuid().ToString("N") + ".json");
+        var credentialStore = new Aexon.Core.Auth.NyxIdCredentialStore(nyxTempDir, prefsPath);
         var authService = new Aexon.Core.Auth.NyxIdAuthService(credentialStore: credentialStore);
         var tokenProvider = new Aexon.Core.Auth.NyxIdTokenProvider(credentialStore, authService);
         var statusClient = new Aexon.Core.Auth.NyxIdLlmStatusClient(tokenProvider);
+        var aevatarStore = new Aexon.Core.Aevatar.AevatarChatSettingsStore(
+            Path.Combine(Path.GetTempPath(), "aexon-test-aevatar-" + Guid.NewGuid().ToString("N") + ".json"));
         var transcriptStore = new JsonlTranscriptStore(Path.Combine(Path.GetTempPath(), "aexon-transcripts-" + Guid.NewGuid().ToString("N")));
         var memdirLayout = new MemdirLayout
         {
@@ -848,6 +852,8 @@ public sealed class BuiltinCommandsTests
                     credentialStore,
                     statusClient,
                     "https://nyx.example.test",
+                    tokenProvider,
+                    aevatarStore,
                     transcriptStore,
                     memdirLayout,
                     new ManagedSettingsLoadResult(ManagedSettingsSnapshot.Empty, [], []),
