@@ -11,6 +11,11 @@ public enum ModelCapability
     None = 0,
     WebFetch = 1 << 0,
     WebSearch = 1 << 1,
+    ImageInput = 1 << 2,
+    Streaming = 1 << 3,
+    ToolCalling = 1 << 4,
+    Reasoning = 1 << 5,
+    PromptCaching = 1 << 6,
 }
 
 /// <summary>
@@ -68,7 +73,7 @@ public sealed class DefaultProviderCapabilityRouter : IProviderCapabilityRouter
         var provider = ResolveProvider(descriptor, resolvedInput);
         var providerModelId = ResolveProviderModelId(descriptor, provider);
 
-        var capabilities = ModelCapability.WebFetch;
+        var capabilities = descriptor.Capabilities | ModelCapability.WebFetch;
         if (SupportsWebSearch(descriptor, provider))
             capabilities |= ModelCapability.WebSearch;
 

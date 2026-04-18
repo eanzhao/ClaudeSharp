@@ -1,3 +1,5 @@
+using Aexon.Core.Providers;
+
 namespace Aexon.Core.Query;
 
 /// <summary>
@@ -5,6 +7,21 @@ namespace Aexon.Core.Query;
 /// </summary>
 public static class ClaudeModelCatalog
 {
+    private const ModelCapability StandardCapabilities =
+        ModelCapability.Streaming
+        | ModelCapability.ToolCalling
+        | ModelCapability.PromptCaching
+        | ModelCapability.ImageInput;
+
+    private const ModelCapability ReasoningCapabilities =
+        StandardCapabilities | ModelCapability.Reasoning;
+
+    private static readonly ModelPricing Haiku35Pricing = new(0.8m, 4.0m, 0.08m, 1.0m);
+    private static readonly ModelPricing Haiku45Pricing = new(1.0m, 5.0m, 0.10m, 1.25m);
+    private static readonly ModelPricing SonnetPricing = new(3.0m, 15.0m, 0.3m, 3.75m);
+    private static readonly ModelPricing Opus40Pricing = new(15.0m, 75.0m, 1.5m, 18.75m);
+    private static readonly ModelPricing Opus45Pricing = new(5.0m, 25.0m, 0.5m, 6.25m);
+
     private static readonly IReadOnlyList<ClaudeModelDescriptor> Models =
     [
         new(
@@ -16,7 +33,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-3-5-haiku-20241022-v1:0",
                 Vertex: "claude-3-5-haiku@20241022",
                 Foundry: "claude-3-5-haiku"),
-            Aliases: ["claude-3-5-haiku"]),
+            Aliases: ["claude-3-5-haiku"],
+            Capabilities: StandardCapabilities,
+            Pricing: Haiku35Pricing),
         new(
             StableId: "claude-3-5-sonnet",
             SourceCanonicalId: "claude-3-5-sonnet-20241022",
@@ -26,7 +45,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "anthropic.claude-3-5-sonnet-20241022-v2:0",
                 Vertex: "claude-3-5-sonnet-v2@20241022",
                 Foundry: "claude-3-5-sonnet"),
-            Aliases: ["claude-3-5-sonnet"]),
+            Aliases: ["claude-3-5-sonnet"],
+            Capabilities: StandardCapabilities,
+            Pricing: SonnetPricing),
         new(
             StableId: "claude-3-7-sonnet",
             SourceCanonicalId: "claude-3-7-sonnet-20250219",
@@ -36,7 +57,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
                 Vertex: "claude-3-7-sonnet@20250219",
                 Foundry: "claude-3-7-sonnet"),
-            Aliases: ["claude-3-7-sonnet"]),
+            Aliases: ["claude-3-7-sonnet"],
+            Capabilities: ReasoningCapabilities,
+            Pricing: SonnetPricing),
         new(
             StableId: "claude-haiku-4-5",
             SourceCanonicalId: "claude-haiku-4-5-20251001",
@@ -46,7 +69,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
                 Vertex: "claude-haiku-4-5@20251001",
                 Foundry: "claude-haiku-4-5"),
-            Aliases: ["haiku", "claude-haiku", "haiku-4-5"]),
+            Aliases: ["haiku", "claude-haiku", "haiku-4-5"],
+            Capabilities: ReasoningCapabilities,
+            Pricing: Haiku45Pricing),
         new(
             StableId: "claude-sonnet-4",
             SourceCanonicalId: "claude-sonnet-4-20250514",
@@ -56,7 +81,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-sonnet-4-20250514-v1:0",
                 Vertex: "claude-sonnet-4@20250514",
                 Foundry: "claude-sonnet-4"),
-            Aliases: ["claude-sonnet-4", "sonnet-4"]),
+            Aliases: ["claude-sonnet-4", "sonnet-4"],
+            Capabilities: ReasoningCapabilities,
+            Pricing: SonnetPricing),
         new(
             StableId: "claude-sonnet-4-5",
             SourceCanonicalId: "claude-sonnet-4-5-20250929",
@@ -66,7 +93,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
                 Vertex: "claude-sonnet-4-5@20250929",
                 Foundry: "claude-sonnet-4-5"),
-            Aliases: ["claude-sonnet-4-5", "sonnet-4-5"]),
+            Aliases: ["claude-sonnet-4-5", "sonnet-4-5"],
+            Capabilities: ReasoningCapabilities,
+            Pricing: SonnetPricing),
         new(
             StableId: "claude-sonnet-4-6",
             SourceCanonicalId: "claude-sonnet-4-6",
@@ -76,7 +105,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-sonnet-4-6",
                 Vertex: "claude-sonnet-4-6",
                 Foundry: "claude-sonnet-4-6"),
-            Aliases: ["default", "sonnet", "claude-sonnet", "sonnet-4-6", "claude-sonnet-4-6"]),
+            Aliases: ["default", "sonnet", "claude-sonnet", "sonnet-4-6", "claude-sonnet-4-6"],
+            Capabilities: ReasoningCapabilities,
+            Pricing: SonnetPricing),
         new(
             StableId: "claude-opus-4",
             SourceCanonicalId: "claude-opus-4-20250514",
@@ -86,7 +117,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-opus-4-20250514-v1:0",
                 Vertex: "claude-opus-4@20250514",
                 Foundry: "claude-opus-4"),
-            Aliases: ["claude-opus-4", "opus-4"]),
+            Aliases: ["claude-opus-4", "opus-4"],
+            Capabilities: ReasoningCapabilities,
+            Pricing: Opus40Pricing),
         new(
             StableId: "claude-opus-4-1",
             SourceCanonicalId: "claude-opus-4-1-20250805",
@@ -96,7 +129,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-opus-4-1-20250805-v1:0",
                 Vertex: "claude-opus-4-1@20250805",
                 Foundry: "claude-opus-4-1"),
-            Aliases: ["claude-opus-4-1", "opus-4-1"]),
+            Aliases: ["claude-opus-4-1", "opus-4-1"],
+            Capabilities: ReasoningCapabilities,
+            Pricing: Opus40Pricing),
         new(
             StableId: "claude-opus-4-5",
             SourceCanonicalId: "claude-opus-4-5-20251101",
@@ -106,7 +141,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-opus-4-5-20251101-v1:0",
                 Vertex: "claude-opus-4-5@20251101",
                 Foundry: "claude-opus-4-5"),
-            Aliases: ["claude-opus-4-5", "opus-4-5"]),
+            Aliases: ["claude-opus-4-5", "opus-4-5"],
+            Capabilities: ReasoningCapabilities,
+            Pricing: Opus45Pricing),
         new(
             StableId: "claude-opus-4-6",
             SourceCanonicalId: "claude-opus-4-6",
@@ -116,7 +153,9 @@ public static class ClaudeModelCatalog
                 Bedrock: "us.anthropic.claude-opus-4-6-v1",
                 Vertex: "claude-opus-4-6",
                 Foundry: "claude-opus-4-6"),
-            Aliases: ["best", "opus", "claude-opus", "opus-4-6", "claude-opus-4-6"]),
+            Aliases: ["best", "opus", "claude-opus", "opus-4-6", "claude-opus-4-6"],
+            Capabilities: ReasoningCapabilities,
+            Pricing: Opus45Pricing),
     ];
 
     private static readonly IReadOnlyDictionary<string, ClaudeModelDescriptor> AliasMap =
@@ -208,8 +247,12 @@ public sealed record ClaudeModelDescriptor(
     string SourceCanonicalId,
     ClaudeModelFamily Family,
     ClaudeModelProviderIds ProviderIds,
-    IReadOnlyList<string> Aliases)
+    IReadOnlyList<string> Aliases,
+    ModelCapability Capabilities = ModelCapability.None,
+    ModelPricing? Pricing = null)
 {
+    public ModelPricing EffectivePricing => Pricing ?? ModelPricing.Unknown;
+
     public IEnumerable<(string MatchText, string StableId)> GetMatchers()
     {
         yield return (StableId, StableId);

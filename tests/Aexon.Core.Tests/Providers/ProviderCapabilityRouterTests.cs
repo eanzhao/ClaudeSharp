@@ -48,4 +48,41 @@ public sealed class ProviderCapabilityRouterTests
         Assert.Equal(descriptor.ProviderIds.Vertex, route.ProviderModelId);
         Assert.True(route.Supports(ModelCapability.WebSearch));
     }
+
+    [Fact]
+    public void Resolve_Sonnet46_IncludesStreamingAndPromptCaching()
+    {
+        var router = new DefaultProviderCapabilityRouter();
+
+        var route = router.Resolve("sonnet");
+
+        Assert.True(route.Supports(ModelCapability.Streaming));
+        Assert.True(route.Supports(ModelCapability.ToolCalling));
+        Assert.True(route.Supports(ModelCapability.PromptCaching));
+        Assert.True(route.Supports(ModelCapability.ImageInput));
+        Assert.True(route.Supports(ModelCapability.Reasoning));
+    }
+
+    [Fact]
+    public void Resolve_Sonnet46_PricingMatchesCatalog()
+    {
+        var route = new DefaultProviderCapabilityRouter().Resolve("sonnet");
+        var descriptor = ClaudeModelCatalog.TryResolve(route.StableModelId);
+
+        Assert.NotNull(descriptor);
+        Assert.NotNull(descriptor!.Pricing);
+        Assert.Equal(3.0m, descriptor.Pricing!.InputPer1M);
+        Assert.Equal(15.0m, descriptor.Pricing.OutputPer1M);
+        Assert.Equal(0.3m, descriptor.Pricing.CacheReadPer1M);
+        Assert.Equal(3.75m, descriptor.Pricing.CacheWritePer1M);
+    }
+
+    [Fact]
+    public void Resolve_Haiku35_DoesNotIncludeReasoning()
+    {
+        var route = new DefaultProviderCapabilityRouter().Resolve("claude-3-5-haiku");
+
+        Assert.False(route.Supports(ModelCapability.Reasoning));
+        Assert.True(route.Supports(ModelCapability.Streaming));
+    }
 }
