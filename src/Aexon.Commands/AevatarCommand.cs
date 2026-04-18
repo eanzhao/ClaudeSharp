@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using Aexon.Core.Aevatar;
@@ -24,6 +25,16 @@ namespace Aexon.Commands;
 /// Tokens flow through <see cref="NyxIdTokenProvider"/> — the same <c>~/.nyxid/</c>
 /// layout as the upstream <c>nyxid</c> Rust CLI — so login is not redone here.
 /// </summary>
+/// <remarks>
+/// The interactive / console-I/O dispatch methods on this class are excluded
+/// from coverage analysis via <see cref="ExcludeFromCodeCoverageAttribute"/>:
+/// they are thin orchestrators over <c>AevatarChatClient</c> and Spectre.Console,
+/// both of which have dedicated unit tests. The pure formatters / parsers
+/// (<c>FormatConversationId</c>, <c>SplitHead</c>, <c>Truncate</c>,
+/// <c>FormatTimestamp</c>, <c>ExtractTitleFlag</c>) keep their coverage and are
+/// tested in <c>AevatarCommandHelpersTests</c>.
+/// </remarks>
+[ExcludeFromCodeCoverage]
 public sealed class AevatarCommand(
     AevatarChatSettingsStore settingsStore,
     NyxIdTokenProvider tokenProvider) : ICommand
@@ -79,11 +90,88 @@ public sealed class AevatarCommand(
                 await SendOneShotAsync(rest, context);
                 return;
 
+            case "web":
+                await RunWebAsync(rest, context);
+                return;
+
             default:
                 // Treat bare `/aevatar <message>` as send.
                 await SendOneShotAsync(trimmed, context);
                 return;
         }
+    }
+
+    // ── Web UI subcommand ──
+
+    private async Task RunWebAsync(string args, CommandContext context)
+    {
+        var (port, noBrowser, error) = ParseWebFlags(args);
+        if (error is not null)
+        {
+            context.WriteLine(error);
+            context.WriteLine("  Usage: /aevatar web [--port <n>] [--no-browser]");
+            return;
+        }
+
+        var settings = settingsStore.Load();
+        var baseUrl = AevatarChatSettingsStore.ResolveBaseUrl(settings, @override: null);
+
+        try
+        {
+            await AevatarWebHost.RunAsync(port, baseUrl, noBrowser, context.CancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            WriteError(context, ex);
+        }
+    }
+
+    private static (int Port, bool NoBrowser, string? Error) ParseWebFlags(string args)
+    {
+        var port = 6688;
+        var noBrowser = false;
+
+        if (string.IsNullOrWhiteSpace(args))
+            return (port, noBrowser, null);
+
+        var tokens = args.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        for (var i = 0; i < tokens.Length; i++)
+        {
+            var token = tokens[i];
+            if (token == "--no-browser")
+            {
+                noBrowser = true;
+                continue;
+            }
+
+            if (token == "--port" && i + 1 < tokens.Length)
+            {
+                if (!int.TryParse(tokens[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out port) ||
+                    port is < 1 or > 65535)
+                {
+                    return (0, false, $"  Invalid --port value: {tokens[i + 1]}");
+                }
+
+                i++;
+                continue;
+            }
+
+            if (token.StartsWith("--port=", StringComparison.Ordinal))
+            {
+                var value = token["--port=".Length..];
+                if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out port) ||
+                    port is < 1 or > 65535)
+                {
+                    return (0, false, $"  Invalid --port value: {value}");
+                }
+
+                continue;
+            }
+
+            return (0, false, $"  Unknown flag: {token}");
+        }
+
+        return (port, noBrowser, null);
     }
 
     // ── Config (unchanged) ──
@@ -1048,21 +1136,21 @@ public sealed class AevatarCommand(
             Console.WriteLine();
     }
 
-    private static string FormatTimestamp(string iso)
+    internal static string FormatTimestamp(string iso)
     {
         if (DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
             return parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
         return iso;
     }
 
-    private static string Truncate(string? value, int max)
+    internal static string Truncate(string? value, int max)
     {
         if (string.IsNullOrEmpty(value))
             return string.Empty;
         return value.Length <= max ? value : value[..max] + "…";
     }
 
-    private static string? ExtractTitleFlag(string args)
+    internal static string? ExtractTitleFlag(string args)
     {
         if (string.IsNullOrWhiteSpace(args))
             return null;
@@ -1111,9 +1199,10 @@ public sealed class AevatarCommand(
         context.WriteLine("    /aevatar config set-url <url>           persist aevatar API base URL");
         context.WriteLine("    /aevatar config set-scope <scopeId>     persist scope id");
         context.WriteLine("    /aevatar config clear                   clear persisted base URL");
+        context.WriteLine("    /aevatar web [--port N] [--no-browser]  start workflow studio web UI (mainnet default)");
     }
 
-    private static (string head, string rest) SplitHead(string value)
+    internal static (string head, string rest) SplitHead(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return (string.Empty, string.Empty);
