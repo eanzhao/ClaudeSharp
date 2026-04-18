@@ -134,6 +134,13 @@ public class QueryEngineConfig
     /// Gets the exponential backoff multiplier applied on each retry.
     /// </summary>
     public double ApiRetryBackoffMultiplier { get; set; } = 2.0;
+
+    /// <summary>
+    /// Gets the tool-batch execution mode used by the default
+    /// <see cref="Tools.StreamingToolExecutor"/>.
+    /// </summary>
+    public Tools.ToolBatchExecutionMode ToolExecutionMode { get; set; } =
+        Tools.ToolBatchExecutionMode.Auto;
 }
 
 /// <summary>

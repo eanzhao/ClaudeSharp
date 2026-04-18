@@ -53,6 +53,8 @@ public sealed class ContextProviderBranchTests
         var provider = new ContextProvider
         {
             WorkingDirectory = temp.Root,
+            UserClaudeDirectory = temp.FullPath("user-home", ".claude"),
+            SystemClaudeDirectory = temp.FullPath("system-root"),
         };
 
         await provider.LoadMemoryAsync();
@@ -69,6 +71,8 @@ public sealed class ContextProviderBranchTests
         var provider = new ContextProvider
         {
             WorkingDirectory = temp.Root,
+            UserClaudeDirectory = temp.FullPath("user-home", ".claude"),
+            SystemClaudeDirectory = temp.FullPath("system-root"),
         };
 
         await provider.LoadMemoryAsync();

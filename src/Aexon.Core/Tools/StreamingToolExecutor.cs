@@ -13,15 +13,18 @@ public sealed class StreamingToolExecutor : IToolRuntime
     private readonly ToolRegistry _registry;
     private readonly IPermissionChecker _permissions;
     private readonly IHookRuntime _hooks;
+    private readonly ToolBatchExecutionMode _mode;
 
     public StreamingToolExecutor(
         ToolRegistry registry,
         IPermissionChecker permissions,
-        IHookRuntime? hooks = null)
+        IHookRuntime? hooks = null,
+        ToolBatchExecutionMode mode = ToolBatchExecutionMode.Auto)
     {
         _registry = registry;
         _permissions = permissions;
         _hooks = hooks ?? HookRuntime.Empty;
+        _mode = mode;
     }
 
     public async IAsyncEnumerable<ToolRunUpdate> RunBatchAsync(
@@ -64,7 +67,13 @@ public sealed class StreamingToolExecutor : IToolRuntime
             }
 
             var candidate = new ToolExecutionCandidate(invocation, tool);
-            if (tool.IsConcurrencySafe(invocation.Input))
+            var useConcurrent = _mode switch
+            {
+                ToolBatchExecutionMode.Sequential => false,
+                ToolBatchExecutionMode.Parallel => true,
+                _ => tool.IsConcurrencySafe(invocation.Input),
+            };
+            if (useConcurrent)
                 concurrentCandidates.Add(candidate);
             else
                 sequentialCandidates.Add(candidate);

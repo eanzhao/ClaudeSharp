@@ -20,6 +20,8 @@ public sealed class ContextProviderDeepTests
         {
             WorkingDirectory = temp.Root,
             MemoryContent = "stale",
+            UserClaudeDirectory = temp.FullPath("user-home", ".claude"),
+            SystemClaudeDirectory = temp.FullPath("system-root"),
         };
 
         await provider.LoadMemoryAsync();
