@@ -120,6 +120,65 @@ internal static class Program
             contextProvider.PermissionContext.Mode = resumedMode;
         await contextProvider.LoadMemoryAsync();
         var storedCredentials = nyxIdCredentialStore.Load();
+
+        // First-run onboarding: unless the user is about to run a setup-fixing
+        // subcommand (login/logout/llm/aevatar/storage), explicitly overrode
+        // the provider/model, picked Ollama, or is resuming an existing
+        // session, refuse to boot without a usable NyxID default. If we have
+        // a TTY we walk the picker inline; otherwise we print guidance and
+        // exit non-zero so CI doesn't hang on a prompt.
+        var invocationBypassesOnboarding =
+            IsSetupFixingSubcommand(options.InitialPrompt) ||
+            !string.IsNullOrWhiteSpace(options.Provider) ||
+            !string.IsNullOrWhiteSpace(options.Model) ||
+            resumed != null;
+
+        if (!invocationBypassesOnboarding)
+        {
+            if (storedCredentials == null)
+            {
+                Console.Error.WriteLine(
+                    "  尚未登录 NyxID。请先运行 `aexon login`（或 `/login`），完成后再执行本次命令。");
+                return 1;
+            }
+
+            if (string.IsNullOrWhiteSpace(storedCredentials.DefaultProvider) &&
+                string.IsNullOrWhiteSpace(storedCredentials.DefaultProxySlug))
+            {
+                var canPromptInteractively = !options.PrintMode && !Console.IsInputRedirected;
+                if (!canPromptInteractively)
+                {
+                    Console.Error.WriteLine(
+                        "  尚未为 aexon 选择默认 LLM provider。请先运行 `aexon llm`（交互式挑选）\n" +
+                        "  或 `aexon llm use <provider> [model]`（非交互），再重跑本次命令。");
+                    return 1;
+                }
+
+                using var onboardingStatusClient = new NyxIdLlmStatusClient(nyxIdTokenProvider);
+                using var onboardingKeysClient = new NyxIdKeysClient(nyxIdTokenProvider);
+                Console.WriteLine("  尚未选择默认 LLM provider，进入首次配置流程：");
+                var updated = await NyxIdProviderPicker.RunAsync(
+                    nyxIdCredentialStore,
+                    onboardingStatusClient,
+                    onboardingKeysClient,
+                    storedCredentials,
+                    Console.WriteLine,
+                    new SpectreProviderPickerUi(),
+                    CancellationToken.None);
+
+                if (updated == null ||
+                    (string.IsNullOrWhiteSpace(updated.DefaultProvider) &&
+                     string.IsNullOrWhiteSpace(updated.DefaultProxySlug)))
+                {
+                    Console.Error.WriteLine(
+                        "  未能完成 provider 选择。之后可以随时运行 `aexon llm` 重试。");
+                    return 1;
+                }
+
+                storedCredentials = updated;
+            }
+        }
+
         var defaultProviderFromStore = string.IsNullOrWhiteSpace(storedCredentials?.DefaultProvider)
             ? null
             : storedCredentials!.DefaultProvider;
@@ -128,11 +187,35 @@ internal static class Program
                                     !string.IsNullOrWhiteSpace(storedCredentials?.DefaultModel)
             ? storedCredentials!.DefaultModel
             : null;
-        var sessionTarget = AiProviderSelection.ResolveSessionTarget(
-            options.Provider ?? defaultProviderFromStore,
-            options.Model ?? defaultModelFromStore,
-            resumed?.SourceSession.Provider,
-            resumed?.Model);
+
+        // An explicit --provider / --model flag always beats a stored proxy
+        // default: the user asked for something specific, so don't silently
+        // reroute them through an AI Service. Absent overrides, the proxy
+        // slug forces OpenAI-compat routing via /api/v1/proxy/s/{slug}/v1/.
+        var activeProxySlug = string.IsNullOrWhiteSpace(options.Provider) &&
+                              !string.IsNullOrWhiteSpace(storedCredentials?.DefaultProxySlug)
+            ? storedCredentials!.DefaultProxySlug
+            : null;
+        var activeProxyLabel = activeProxySlug != null
+            ? storedCredentials?.DefaultProxyLabel
+            : null;
+
+        AiSessionTarget sessionTarget;
+        if (activeProxySlug != null)
+        {
+            sessionTarget = AiProviderSelection.ResolveSessionTargetForProxyService(
+                options.Model,
+                defaultModelFromStore,
+                resumed?.Model);
+        }
+        else
+        {
+            sessionTarget = AiProviderSelection.ResolveSessionTarget(
+                options.Provider ?? defaultProviderFromStore,
+                options.Model ?? defaultModelFromStore,
+                resumed?.SourceSession.Provider,
+                resumed?.Model);
+        }
         var aiProvider = sessionTarget.Provider;
         var model = sessionTarget.Model;
 
@@ -155,7 +238,9 @@ internal static class Program
             : new NyxIdRoutingContext(
                 nyxIdSettings.ActiveBaseUrl,
                 nyxIdTokenProvider,
-                nyxIdSettings.HasStoredCredentials);
+                nyxIdSettings.HasStoredCredentials,
+                ProxyServiceSlug: activeProxySlug,
+                ProxyServiceLabel: activeProxyLabel);
         using var chatClientRuntime = ChatClientRuntime.Create(
             aiProvider,
             model,
@@ -264,12 +349,14 @@ internal static class Program
             agentRuntimeOptions,
             agentSettings.Settings.BackgroundRunConcurrency);
         var nyxIdLlmStatusClient = new NyxIdLlmStatusClient(nyxIdTokenProvider);
+        var nyxIdKeysClient = new NyxIdKeysClient(nyxIdTokenProvider);
         var aevatarSettingsStore = new AevatarChatSettingsStore();
         var commandRegistry = BuildCommandRegistry(
             skillLoader.Load(workingDirectory),
             nyxIdAuthService,
             nyxIdCredentialStore,
             nyxIdLlmStatusClient,
+            nyxIdKeysClient,
             nyxIdSettings.ActiveBaseUrl,
             nyxIdTokenProvider,
             aevatarSettingsStore,
@@ -740,6 +827,7 @@ internal static class Program
         NyxIdAuthService nyxIdAuthService,
         NyxIdCredentialStore nyxIdCredentialStore,
         NyxIdLlmStatusClient nyxIdLlmStatusClient,
+        NyxIdKeysClient nyxIdKeysClient,
         string nyxIdBaseUrl,
         NyxIdTokenProvider nyxIdTokenProvider,
         AevatarChatSettingsStore aevatarSettingsStore,
@@ -767,7 +855,7 @@ internal static class Program
         registry.Register(new FastCommand());
         registry.Register(new HelpCommand());
         registry.Register(new InitCommand());
-        registry.Register(new LlmCommand(nyxIdCredentialStore, nyxIdLlmStatusClient));
+        registry.Register(new LlmCommand(nyxIdCredentialStore, nyxIdLlmStatusClient, nyxIdKeysClient));
         registry.Register(new LoginCommand(nyxIdAuthService, nyxIdCredentialStore, nyxIdBaseUrl));
         registry.Register(new LogoutCommand(nyxIdAuthService, nyxIdCredentialStore));
         registry.Register(new MailboxCommand());
@@ -848,6 +936,31 @@ Environment:
         "aevatar",
         "storage",
     };
+
+    /// <summary>
+    /// Returns true when <paramref name="initialPrompt"/> dispatches one of
+    /// the setup-fixing subcommands (<c>/login</c>, <c>/logout</c>,
+    /// <c>/llm</c>, <c>/aevatar</c>, <c>/storage</c>). The onboarding gate
+    /// bails out in that case — we must let users reach those commands even
+    /// if they haven't signed in yet, otherwise they'd have no way to fix
+    /// their setup.
+    /// </summary>
+    private static bool IsSetupFixingSubcommand(string? initialPrompt)
+    {
+        if (string.IsNullOrWhiteSpace(initialPrompt))
+            return false;
+
+        var trimmed = initialPrompt.TrimStart();
+        if (trimmed.Length == 0 || trimmed[0] != '/')
+            return false;
+
+        var end = 1;
+        while (end < trimmed.Length && trimmed[end] != ' ' && trimmed[end] != '\t')
+            end++;
+
+        var head = trimmed[1..end];
+        return TopLevelSubcommands.Contains(head);
+    }
 
     /// <summary>
     /// Lets users invoke slash commands without the leading slash as a top-level

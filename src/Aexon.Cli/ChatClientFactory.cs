@@ -21,6 +21,17 @@ internal static class ChatClientFactory
         string model,
         NyxIdRoutingContext? nyxIdRouting = null)
     {
+        // When the user selected a NyxID AI Service (proxy slug) as their
+        // default, we treat it as an OpenAI-compatible provider and point
+        // the OpenAI SDK at `/api/v1/proxy/s/{slug}/v1/` instead of the
+        // gateway-native `/api/v1/llm/openai/v1/` path.
+        if (nyxIdRouting?.ProxyServiceSlug is { Length: > 0 })
+        {
+            return CreateOpenAICompatibleProxyService(
+                model,
+                nyxIdRouting!);
+        }
+
         return provider switch
         {
             AiProvider.Ollama => CreateOllama(model),
@@ -51,6 +62,28 @@ internal static class ChatClientFactory
         NyxIdRoutingContext routing)
     {
         var proxyBaseUrl = NyxIdProxyEndpoints.Resolve(routing.BaseUrl, AiProvider.OpenAI);
+        return CreateOpenAICompatible(model, routing, proxyBaseUrl, "OpenAI");
+    }
+
+    private static ChatClientBootstrap CreateOpenAICompatibleProxyService(
+        string model,
+        NyxIdRoutingContext routing)
+    {
+        var proxyBaseUrl = NyxIdProxyEndpoints.ResolveProxyServiceEndpoint(
+            routing.BaseUrl,
+            routing.ProxyServiceSlug!);
+        var displayName = string.IsNullOrWhiteSpace(routing.ProxyServiceLabel)
+            ? $"NyxID proxy '{routing.ProxyServiceSlug}'"
+            : $"{routing.ProxyServiceLabel} (proxy '{routing.ProxyServiceSlug}')";
+        return CreateOpenAICompatible(model, routing, proxyBaseUrl, displayName);
+    }
+
+    private static ChatClientBootstrap CreateOpenAICompatible(
+        string model,
+        NyxIdRoutingContext routing,
+        Uri proxyBaseUrl,
+        string displayName)
+    {
         var httpClient = new HttpClient(
             new NyxIdProxyAuthenticationHandler(routing.TokenProvider)
             {
@@ -68,7 +101,7 @@ internal static class ChatClientFactory
         return new ChatClientBootstrap(
             new OwnedChatClient(client.GetChatClient(model).AsIChatClient(), httpClient),
             routing.HasStoredCredentials,
-            BuildNyxIdStartupSummary("OpenAI", proxyBaseUrl, routing.HasStoredCredentials));
+            BuildNyxIdStartupSummary(displayName, proxyBaseUrl, routing.HasStoredCredentials));
     }
 
     private static ChatClientBootstrap CreateOllama(string model)
@@ -147,4 +180,6 @@ internal static class ChatClientFactory
 internal sealed record NyxIdRoutingContext(
     string BaseUrl,
     NyxIdTokenProvider TokenProvider,
-    bool HasStoredCredentials);
+    bool HasStoredCredentials,
+    string? ProxyServiceSlug = null,
+    string? ProxyServiceLabel = null);

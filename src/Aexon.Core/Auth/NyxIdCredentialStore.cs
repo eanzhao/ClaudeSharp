@@ -68,6 +68,8 @@ public sealed class NyxIdCredentialStore
             ClientId = NyxIdAuthService.SyntheticClientId,
             DefaultProvider = prefs.DefaultProvider,
             DefaultModel = prefs.DefaultModel,
+            DefaultProxySlug = prefs.DefaultProxySlug,
+            DefaultProxyLabel = prefs.DefaultProxyLabel,
         };
     }
 
@@ -90,7 +92,9 @@ public sealed class NyxIdCredentialStore
 
         SavePreferences(new Preferences(
             credentials.DefaultProvider?.Trim().ToLowerInvariant(),
-            credentials.DefaultModel?.Trim()));
+            credentials.DefaultModel?.Trim(),
+            credentials.DefaultProxySlug?.Trim().ToLowerInvariant(),
+            credentials.DefaultProxyLabel?.Trim()));
     }
 
     /// <summary>
@@ -213,11 +217,15 @@ public sealed class NyxIdCredentialStore
 
     internal sealed record Preferences(
         [property: JsonPropertyName("default_provider")] string? DefaultProvider,
-        [property: JsonPropertyName("default_model")] string? DefaultModel)
+        [property: JsonPropertyName("default_model")] string? DefaultModel,
+        [property: JsonPropertyName("default_proxy_slug")] string? DefaultProxySlug = null,
+        [property: JsonPropertyName("default_proxy_label")] string? DefaultProxyLabel = null)
     {
-        public static Preferences Empty { get; } = new(null, null);
+        public static Preferences Empty { get; } = new(null, null, null, null);
 
         public bool IsEmpty =>
-            string.IsNullOrWhiteSpace(DefaultProvider) && string.IsNullOrWhiteSpace(DefaultModel);
+            string.IsNullOrWhiteSpace(DefaultProvider) &&
+            string.IsNullOrWhiteSpace(DefaultModel) &&
+            string.IsNullOrWhiteSpace(DefaultProxySlug);
     }
 }

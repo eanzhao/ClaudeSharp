@@ -22,6 +22,30 @@ public sealed record AiSessionTarget(
 /// </summary>
 public static class AiProviderSelection
 {
+    /// <summary>
+    /// Indicates the caller has configured a NyxID AI Service (e.g. Chrono
+    /// LLM) as their default — the session must be routed through
+    /// <c>/api/v1/proxy/s/{slug}/v1/</c> as an OpenAI-compatible provider
+    /// regardless of any legacy <c>DefaultProvider</c> string, and any
+    /// model hint shorter than a slash-separated name is treated as a
+    /// user-selected model id from the probe list.
+    /// </summary>
+    public static AiSessionTarget ResolveSessionTargetForProxyService(
+        string? modelOverride,
+        string? defaultProxyModel,
+        string? resumedModel)
+    {
+        var modelInput = !string.IsNullOrWhiteSpace(modelOverride)
+            ? modelOverride.Trim()
+            : !string.IsNullOrWhiteSpace(resumedModel)
+                ? resumedModel
+                : defaultProxyModel;
+
+        return new AiSessionTarget(
+            AiProvider.OpenAI,
+            string.IsNullOrWhiteSpace(modelInput) ? "gpt-4o" : modelInput.Trim());
+    }
+
     public static AiSessionTarget ResolveSessionTarget(
         string? providerFlag,
         string? modelOverride,
