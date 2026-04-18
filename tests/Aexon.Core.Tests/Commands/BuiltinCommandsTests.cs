@@ -835,6 +835,7 @@ public sealed class BuiltinCommandsTests
         var authService = new Aexon.Core.Auth.NyxIdAuthService(credentialStore: credentialStore);
         var tokenProvider = new Aexon.Core.Auth.NyxIdTokenProvider(credentialStore, authService);
         var statusClient = new Aexon.Core.Auth.NyxIdLlmStatusClient(tokenProvider);
+        var keysClient = new Aexon.Core.Auth.NyxIdKeysClient(tokenProvider);
         var aevatarStore = new Aexon.Core.Aevatar.AevatarChatSettingsStore(
             Path.Combine(Path.GetTempPath(), "aexon-test-aevatar-" + Guid.NewGuid().ToString("N") + ".json"));
         var transcriptStore = new JsonlTranscriptStore(Path.Combine(Path.GetTempPath(), "aexon-transcripts-" + Guid.NewGuid().ToString("N")));
@@ -851,6 +852,7 @@ public sealed class BuiltinCommandsTests
                     authService,
                     credentialStore,
                     statusClient,
+                    keysClient,
                     "https://nyx.example.test",
                     tokenProvider,
                     aevatarStore,

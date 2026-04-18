@@ -1,5 +1,7 @@
 # Aexon 文档总览
 
+> Aexon 现在有两条主线：**本地 coding agent**（继承自 Claude Code）和 **NyxID / Aevatar / Chrono-Storage 三件套 CLI**。这套 `docs/` 主要沉淀前一条线 —— 跟上游 Claude Code 的对照、核心链路的移植。三件套集成这条线直接看仓库根的 [README.md](../README.md)。
+
 这套文档主要回答三件事：
 
 1. `claude-code/` 里那份 TypeScript 快照，整体是怎么跑起来的。

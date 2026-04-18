@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Net;
 using System.Reflection;
@@ -683,12 +684,22 @@ public sealed class LogoutCommand(
 /// Manages the default NyxID-brokered LLM provider for this machine. Running
 /// <c>/llm</c> with no subcommand walks the user through an interactive picker.
 /// </summary>
+/// <remarks>
+/// Excluded from coverage — every subcommand drives HTTP against NyxID
+/// plus an interactive TTY prompt (Spectre or Console.ReadLine fallback).
+/// The underlying helpers carry their own unit tests:
+/// <c>NyxIdKeysClientTests</c> pins the /models parser, and the save +
+/// credential-mutation helpers in <c>NyxIdProviderPicker</c> are pure
+/// functions covered indirectly through the shared picker path.
+/// Behavioral correctness of the dispatch is verified by running
+/// <c>aexon llm</c> / <c>aexon llm use &lt;slug&gt;</c> against mainnet.
+/// </remarks>
+[ExcludeFromCodeCoverage]
 public sealed class LlmCommand(
     NyxIdCredentialStore credentialStore,
-    NyxIdLlmStatusClient statusClient) : ICommand
+    NyxIdLlmStatusClient statusClient,
+    NyxIdKeysClient keysClient) : ICommand
 {
-    private static readonly string[] SupportedProviderSlugs = ["anthropic", "openai"];
-
     public string Name => "llm";
     public string Description => "List or set the default NyxID-brokered LLM provider (interactive)";
 
@@ -736,16 +747,29 @@ public sealed class LlmCommand(
             return;
         }
 
+        if (!string.IsNullOrWhiteSpace(credentials.DefaultProxySlug))
+        {
+            var proxyDisplay = string.IsNullOrWhiteSpace(credentials.DefaultProxyLabel)
+                ? credentials.DefaultProxySlug!
+                : $"{credentials.DefaultProxyLabel} ({credentials.DefaultProxySlug})";
+            var modelSuffix = string.IsNullOrWhiteSpace(credentials.DefaultModel)
+                ? string.Empty
+                : $" — model {credentials.DefaultModel}";
+            context.WriteLine($"  Default LLM: AI Service {proxyDisplay}{modelSuffix}");
+            context.WriteLine($"  NyxID: {credentials.BaseUrl}");
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(credentials.DefaultProvider))
         {
             context.WriteLine("  No default LLM provider set. Run /llm to pick one.");
             return;
         }
 
-        var modelSuffix = string.IsNullOrWhiteSpace(credentials.DefaultModel)
+        var gatewayModelSuffix = string.IsNullOrWhiteSpace(credentials.DefaultModel)
             ? string.Empty
             : $" ({credentials.DefaultModel})";
-        context.WriteLine($"  Default LLM: {credentials.DefaultProvider}{modelSuffix}");
+        context.WriteLine($"  Default LLM: gateway provider {credentials.DefaultProvider}{gatewayModelSuffix}");
         context.WriteLine($"  NyxID: {credentials.BaseUrl}");
     }
 
@@ -758,11 +782,39 @@ public sealed class LlmCommand(
             return;
         }
 
-        var status = await TryFetchStatusAsync(credentials.BaseUrl, context);
-        if (status == null)
-            return;
+        var status = await NyxIdProviderPicker.TryFetchStatusAsync(
+            statusClient,
+            credentials.BaseUrl,
+            context.WriteLine,
+            context.CancellationToken);
+        if (status != null)
+            NyxIdProviderPicker.PrintStatus(status, credentials, context.WriteLine);
 
-        PrintStatus(status, credentials, context);
+        context.WriteLine(string.Empty);
+        context.WriteLine("  Discovering NyxID AI Services…");
+        var proxyEntries = await NyxIdProviderPicker.DiscoverProxyServicesAsync(
+            keysClient,
+            credentials.BaseUrl,
+            context.WriteLine,
+            context.CancellationToken);
+        if (proxyEntries.Count == 0)
+        {
+            context.WriteLine("  (no LLM-capable AI Services)");
+            return;
+        }
+
+        context.WriteLine($"  AI Services on {credentials.BaseUrl}:");
+        foreach (var entry in proxyEntries)
+        {
+            var marker = string.Equals(
+                entry.DisplaySlug,
+                credentials.DefaultProxySlug,
+                StringComparison.OrdinalIgnoreCase)
+                ? " (default)"
+                : string.Empty;
+            context.WriteLine(
+                $"    • {entry.DisplaySlug,-20} [{entry.Status}]{marker}  {entry.DisplayName} — {entry.ProbedModels.Count} model(s)");
+        }
     }
 
     private async Task UseInteractiveAsync(CommandContext context)
@@ -781,37 +833,14 @@ public sealed class LlmCommand(
             return;
         }
 
-        var status = await TryFetchStatusAsync(credentials.BaseUrl, context);
-        if (status == null)
-            return;
-
-        var selectable = status.Providers
-            .Where(p => SupportedProviderSlugs.Contains(p.ProviderSlug, StringComparer.OrdinalIgnoreCase))
-            .ToList();
-
-        if (selectable.Count == 0)
-        {
-            context.WriteLine("  NyxID does not expose any Aexon-supported providers (anthropic, openai).");
-            context.WriteLine("  Connect a provider credential in the NyxID UI first.");
-            return;
-        }
-
-        PrintStatus(status, credentials, context);
-        context.WriteLine("");
-
-        var picked = PromptForProvider(selectable, credentials.DefaultProvider, context);
-        if (picked == null)
-            return;
-
-        if (!picked.IsReady)
-        {
-            context.WriteLine($"  Provider '{picked.ProviderSlug}' is '{picked.Status}' on NyxID.");
-            context.WriteLine("  Connect a credential in the NyxID UI before selecting it.");
-            return;
-        }
-
-        var model = PromptForModel(picked.ProviderSlug, credentials.DefaultModel, context);
-        SaveDefault(credentials, picked.ProviderSlug.ToLowerInvariant(), model, context);
+        await NyxIdProviderPicker.RunAsync(
+            credentialStore,
+            statusClient,
+            keysClient,
+            credentials,
+            context.WriteLine,
+            new SpectreProviderPickerUi(),
+            context.CancellationToken);
     }
 
     private async Task UseDirectAsync(string providerInput, string? modelInput, CommandContext context)
@@ -823,14 +852,36 @@ public sealed class LlmCommand(
             return;
         }
 
-        var providerSlug = providerInput.Trim().ToLowerInvariant();
-        if (!SupportedProviderSlugs.Contains(providerSlug, StringComparer.OrdinalIgnoreCase))
+        var rawInput = providerInput.Trim();
+        var explicitProxy = rawInput.StartsWith("proxy:", StringComparison.OrdinalIgnoreCase);
+        var slug = (explicitProxy ? rawInput[6..] : rawInput).Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(slug))
         {
-            context.WriteLine($"  Provider '{providerSlug}' is not supported by Aexon. Use 'anthropic' or 'openai'.");
+            context.WriteLine("  Usage: /llm use <provider-slug> [model]");
+            context.WriteLine("         /llm use proxy:<ai-service-slug> [model]   (NyxID AI Service)");
             return;
         }
 
-        var status = await TryFetchStatusAsync(credentials.BaseUrl, context);
+        if (!explicitProxy && NyxIdProviderPicker.IsSupportedProviderSlug(slug))
+        {
+            await UseGatewayProviderDirectAsync(credentials, slug, modelInput, context);
+            return;
+        }
+
+        await UseProxyServiceDirectAsync(credentials, slug, modelInput, context);
+    }
+
+    private async Task UseGatewayProviderDirectAsync(
+        NyxIdCredentials credentials,
+        string providerSlug,
+        string? modelInput,
+        CommandContext context)
+    {
+        var status = await NyxIdProviderPicker.TryFetchStatusAsync(
+            statusClient,
+            credentials.BaseUrl,
+            context.WriteLine,
+            context.CancellationToken);
         if (status == null)
             return;
 
@@ -850,7 +901,84 @@ public sealed class LlmCommand(
         }
 
         var model = string.IsNullOrWhiteSpace(modelInput) ? null : modelInput.Trim();
-        SaveDefault(credentials, providerSlug, model, context);
+        NyxIdProviderPicker.SaveDefaultGatewayProvider(
+            credentialStore,
+            credentials,
+            providerSlug,
+            model,
+            context.WriteLine);
+    }
+
+    private async Task UseProxyServiceDirectAsync(
+        NyxIdCredentials credentials,
+        string slug,
+        string? modelInput,
+        CommandContext context)
+    {
+        IReadOnlyList<NyxIdAiServiceInfo> services;
+        try
+        {
+            services = await keysClient.ListAsync(credentials.BaseUrl, context.CancellationToken);
+        }
+        catch (Exception ex)
+        {
+            context.WriteLine($"  Failed to list NyxID AI Services: {ex.Message}");
+            return;
+        }
+
+        var info = services.FirstOrDefault(s =>
+            string.Equals(s.Slug, slug, StringComparison.OrdinalIgnoreCase));
+        if (info == null)
+        {
+            context.WriteLine(
+                $"  '{slug}' is not a known provider. Use one of 'anthropic' / 'openai' for the gateway,");
+            context.WriteLine(
+                "  or add an AI Service with that slug in the NyxID dashboard. Run /llm list to see what's available.");
+            return;
+        }
+
+        if (!info.IsReady || !info.IsHttpService)
+        {
+            context.WriteLine(
+                $"  AI Service '{slug}' is '{info.Status}' (active={info.IsActive}, type={info.ServiceType}).");
+            context.WriteLine("  Activate it in the NyxID UI before selecting it.");
+            return;
+        }
+
+        string pickedModel;
+        if (!string.IsNullOrWhiteSpace(modelInput))
+        {
+            pickedModel = modelInput.Trim();
+        }
+        else
+        {
+            var models = await keysClient.TryProbeModelsAsync(
+                credentials.BaseUrl,
+                info.Slug,
+                context.CancellationToken);
+            if (models is { Count: > 0 })
+            {
+                pickedModel = models[0];
+                context.WriteLine(
+                    $"  No model specified — picking first reported by '{info.Label}': {pickedModel}");
+                context.WriteLine("  (pass `/llm use <slug> <model>` to choose a different one)");
+            }
+            else
+            {
+                context.WriteLine(
+                    $"  '{info.Label}' did not return an OpenAI-compatible /v1/models list, so no");
+                context.WriteLine("  model could be auto-selected. Pass `/llm use <slug> <model>` explicitly.");
+                return;
+            }
+        }
+
+        NyxIdProviderPicker.SaveDefaultProxyService(
+            credentialStore,
+            credentials,
+            info.Slug,
+            info.Label,
+            pickedModel,
+            context.WriteLine);
     }
 
     private void ClearDefault(CommandContext context)
@@ -863,7 +991,8 @@ public sealed class LlmCommand(
         }
 
         if (string.IsNullOrWhiteSpace(credentials.DefaultProvider) &&
-            string.IsNullOrWhiteSpace(credentials.DefaultModel))
+            string.IsNullOrWhiteSpace(credentials.DefaultModel) &&
+            string.IsNullOrWhiteSpace(credentials.DefaultProxySlug))
         {
             context.WriteLine("  No default LLM provider was set.");
             return;
@@ -873,147 +1002,10 @@ public sealed class LlmCommand(
         {
             DefaultProvider = null,
             DefaultModel = null,
+            DefaultProxySlug = null,
+            DefaultProxyLabel = null,
         });
         context.WriteLine("  Cleared default LLM provider.");
-    }
-
-    private async Task<NyxIdLlmStatus?> TryFetchStatusAsync(string baseUrl, CommandContext context)
-    {
-        try
-        {
-            return await statusClient.GetStatusAsync(baseUrl, context.CancellationToken);
-        }
-        catch (NotLoggedInException ex)
-        {
-            context.WriteLine($"  {ex.Message}");
-            return null;
-        }
-        catch (Exception ex)
-        {
-            context.WriteLine($"  Failed to query NyxID /api/v1/llm/status: {ex.Message}");
-            return null;
-        }
-    }
-
-    private static void PrintStatus(
-        NyxIdLlmStatus status,
-        NyxIdCredentials credentials,
-        CommandContext context)
-    {
-        context.WriteLine($"  Gateway: {status.GatewayUrl}");
-        context.WriteLine($"  Providers on {credentials.BaseUrl}:");
-        var index = 1;
-        foreach (var provider in status.Providers)
-        {
-            var marker = string.Equals(
-                provider.ProviderSlug,
-                credentials.DefaultProvider,
-                StringComparison.OrdinalIgnoreCase)
-                ? " (default)"
-                : string.Empty;
-            context.WriteLine(
-                $"    {index,2}. {provider.ProviderSlug,-14} [{provider.Status}]{marker}  {provider.ProviderName}");
-            index++;
-        }
-
-        if (!status.Providers.Any(p => p.IsReady))
-        {
-            context.WriteLine("  No provider is 'ready'. Connect a credential in the NyxID UI first.");
-        }
-    }
-
-    private static NyxIdLlmProviderStatus? PromptForProvider(
-        IReadOnlyList<NyxIdLlmProviderStatus> selectable,
-        string? currentDefault,
-        CommandContext context)
-    {
-        while (true)
-        {
-            var defaultHint = string.IsNullOrWhiteSpace(currentDefault)
-                ? string.Empty
-                : $" [Enter to keep {currentDefault}]";
-            Console.Write($"  Pick provider by number or slug{defaultHint}: ");
-            var raw = Console.ReadLine();
-            if (raw == null)
-            {
-                context.WriteLine("  Input closed. Aborting.");
-                return null;
-            }
-
-            var trimmed = raw.Trim();
-            if (trimmed.Length == 0)
-            {
-                if (string.IsNullOrWhiteSpace(currentDefault))
-                {
-                    Console.WriteLine("  Please enter a number or slug.");
-                    continue;
-                }
-
-                var keep = selectable.FirstOrDefault(p =>
-                    string.Equals(p.ProviderSlug, currentDefault, StringComparison.OrdinalIgnoreCase));
-                if (keep != null)
-                    return keep;
-
-                Console.WriteLine($"  Stored default '{currentDefault}' is no longer listed. Pick again.");
-                continue;
-            }
-
-            if (int.TryParse(trimmed, out var index) &&
-                index >= 1 &&
-                index <= selectable.Count)
-            {
-                return selectable[index - 1];
-            }
-
-            var bySlug = selectable.FirstOrDefault(p =>
-                string.Equals(p.ProviderSlug, trimmed, StringComparison.OrdinalIgnoreCase));
-            if (bySlug != null)
-                return bySlug;
-
-            Console.WriteLine($"  '{trimmed}' is not in the list. Try again or Ctrl+C to cancel.");
-        }
-    }
-
-    private static string? PromptForModel(
-        string providerSlug,
-        string? currentDefault,
-        CommandContext context)
-    {
-        var hint = string.IsNullOrWhiteSpace(currentDefault)
-            ? $" (or press Enter for the Aexon default for {providerSlug})"
-            : $" [Enter to keep {currentDefault}]";
-        Console.Write($"  Default model{hint}: ");
-        var raw = Console.ReadLine();
-        if (raw == null)
-        {
-            context.WriteLine("  Input closed. Aborting.");
-            return null;
-        }
-
-        var trimmed = raw.Trim();
-        if (trimmed.Length == 0)
-            return string.IsNullOrWhiteSpace(currentDefault) ? null : currentDefault;
-
-        return trimmed;
-    }
-
-    private void SaveDefault(
-        NyxIdCredentials credentials,
-        string providerSlug,
-        string? model,
-        CommandContext context)
-    {
-        var updated = credentials with
-        {
-            DefaultProvider = providerSlug,
-            DefaultModel = string.IsNullOrWhiteSpace(model) ? null : model.Trim(),
-        };
-        credentialStore.Save(updated);
-
-        var suffix = string.IsNullOrWhiteSpace(updated.DefaultModel)
-            ? string.Empty
-            : $" with default model {updated.DefaultModel}";
-        context.WriteLine($"  Default LLM set to {providerSlug}{suffix}. Restart the session to pick it up.");
     }
 }
 
