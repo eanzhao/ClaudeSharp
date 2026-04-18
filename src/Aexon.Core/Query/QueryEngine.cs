@@ -88,7 +88,7 @@ public class QueryEngine : IAsyncDisposable, IPlanModeController, IAwayModeContr
         _chatClient = chatClient;
         _tools = tools;
         var effectiveHooks = hooks ?? HookRuntime.Empty;
-        _toolRuntime = toolRuntime ?? new StreamingToolExecutor(tools, permissions, effectiveHooks);
+        _toolRuntime = toolRuntime ?? new StreamingToolExecutor(tools, permissions, effectiveHooks, config.ToolExecutionMode);
         _compactor = compactor ?? new HeuristicConversationCompactor();
         _microCompactor = microCompactor ?? new TimeBasedMicroCompactor();
         _sessionMemoryCompactor = sessionMemoryCompactor ?? new SessionMemoryCompactor();
