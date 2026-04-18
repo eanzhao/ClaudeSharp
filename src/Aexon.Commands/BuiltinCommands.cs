@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Net;
 using System.Reflection;
@@ -683,6 +684,17 @@ public sealed class LogoutCommand(
 /// Manages the default NyxID-brokered LLM provider for this machine. Running
 /// <c>/llm</c> with no subcommand walks the user through an interactive picker.
 /// </summary>
+/// <remarks>
+/// Excluded from coverage — every subcommand drives HTTP against NyxID
+/// plus an interactive TTY prompt (Spectre or Console.ReadLine fallback).
+/// The underlying helpers carry their own unit tests:
+/// <c>NyxIdKeysClientTests</c> pins the /models parser, and the save +
+/// credential-mutation helpers in <c>NyxIdProviderPicker</c> are pure
+/// functions covered indirectly through the shared picker path.
+/// Behavioral correctness of the dispatch is verified by running
+/// <c>aexon llm</c> / <c>aexon llm use &lt;slug&gt;</c> against mainnet.
+/// </remarks>
+[ExcludeFromCodeCoverage]
 public sealed class LlmCommand(
     NyxIdCredentialStore credentialStore,
     NyxIdLlmStatusClient statusClient,

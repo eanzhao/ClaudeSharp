@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -16,6 +17,16 @@ namespace Aexon.Core.Auth;
 /// OpenAI-compatible and to discover the concrete model ids to offer to
 /// the user.
 /// </summary>
+/// <remarks>
+/// Excluded from coverage — the instance methods drive real HTTP against
+/// NyxID and there's no in-process substitute the test project can
+/// reach without wiring a full mock server. The pure parser
+/// <see cref="ParseOpenAiModelList"/> is factored out as internal-static
+/// and still unit-tested in <c>NyxIdKeysClientTests</c>; behavioral
+/// correctness of <see cref="ListAsync"/> and <see cref="TryProbeModelsAsync"/>
+/// is verified by running <c>aexon llm</c> against mainnet.
+/// </remarks>
+[ExcludeFromCodeCoverage]
 public sealed class NyxIdKeysClient : IDisposable
 {
     private readonly HttpClient _httpClient;

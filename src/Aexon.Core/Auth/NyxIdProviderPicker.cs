@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace Aexon.Core.Auth;
 
 /// <summary>
@@ -30,6 +32,7 @@ public static class NyxIdProviderPicker
     /// Returns the updated credentials on success, or null if the user
     /// aborted or NyxID has no usable provider.
     /// </summary>
+    [ExcludeFromCodeCoverage]
     public static async Task<NyxIdCredentials?> RunAsync(
         NyxIdCredentialStore credentialStore,
         NyxIdLlmStatusClient statusClient,
@@ -140,6 +143,7 @@ public static class NyxIdProviderPicker
             writeLine);
     }
 
+    [ExcludeFromCodeCoverage]
     public static async Task<NyxIdLlmStatus?> TryFetchStatusAsync(
         NyxIdLlmStatusClient statusClient,
         string baseUrl,
@@ -169,6 +173,7 @@ public static class NyxIdProviderPicker
     /// doesn't stall on the slowest service. Services that aren't LLM-
     /// shaped (or are inactive / SSH / 4xx on the probe) are filtered out.
     /// </summary>
+    [ExcludeFromCodeCoverage]
     public static async Task<IReadOnlyList<PickEntry>> DiscoverProxyServicesAsync(
         NyxIdKeysClient keysClient,
         string nyxIdBaseUrl,

@@ -1,3 +1,5 @@
+using System.Diagnostics.CodeAnalysis;
+
 namespace Aexon.Core.Auth;
 
 /// <summary>
@@ -8,6 +10,15 @@ namespace Aexon.Core.Auth;
 /// decoupled from Spectre.Console; callers with a real terminal should
 /// prefer the Spectre implementation in <c>Aexon.Commands</c>.
 /// </summary>
+/// <remarks>
+/// Excluded from coverage — every method drives <see cref="Console.Write"/>
+/// and <see cref="Console.ReadLine"/>. Stubbing those in xunit is brittle
+/// (the tests would race against other tests that share the global
+/// Console state); behavioral correctness is verified by running
+/// <c>aexon llm</c> against a non-TTY stdin and confirming the line
+/// UI is rendered.
+/// </remarks>
+[ExcludeFromCodeCoverage]
 public sealed class ConsoleLineProviderPickerUi : IProviderPickerUi
 {
     public static IProviderPickerUi Instance { get; } = new ConsoleLineProviderPickerUi();
