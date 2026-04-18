@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -46,6 +47,36 @@ internal static class AevatarWebHost
             return;
         }
 
+        try
+        {
+            await StartOnceAsync(port, noBrowser, webRootPath, cancellationToken);
+            return;
+        }
+        catch (Exception ex) when (IsAddressInUse(ex))
+        {
+            Console.WriteLine($"  Port {port} is already in use — attempting to free it.");
+            var freed = await TryFreePortAsync(port, cancellationToken);
+            if (!freed)
+            {
+                Console.Error.WriteLine(
+                    $"  Could not free port {port}. Pick a different port with --port <n>.");
+                throw;
+            }
+
+            Console.WriteLine($"  Freed port {port}, restarting…");
+        }
+
+        // Second and final attempt — if it still fails, let the exception propagate so
+        // the caller can surface it to the user.
+        await StartOnceAsync(port, noBrowser, webRootPath, cancellationToken);
+    }
+
+    private static async Task StartOnceAsync(
+        int port,
+        bool noBrowser,
+        string webRootPath,
+        CancellationToken cancellationToken)
+    {
         var baseDir = AppContext.BaseDirectory;
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -123,6 +154,164 @@ internal static class AevatarWebHost
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
+    }
+
+    private static bool IsAddressInUse(Exception ex)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            if (current is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse })
+                return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Finds the process(es) listening on <paramref name="port"/>, kills them,
+    /// and waits up to 2s per process for the OS to release the socket. Best-effort —
+    /// returns true only when we were able to identify and kill at least one holder.
+    /// </summary>
+    private static async Task<bool> TryFreePortAsync(int port, CancellationToken cancellationToken)
+    {
+        var pids = await FindPidsOnPortAsync(port, cancellationToken);
+        if (pids.Count == 0)
+            return false;
+
+        var killedAny = false;
+        foreach (var pid in pids)
+        {
+            if (pid == Environment.ProcessId)
+                continue; // refuse to kill ourselves
+
+            try
+            {
+                using var proc = Process.GetProcessById(pid);
+                var name = SafeProcessName(proc);
+                Console.WriteLine($"  → killing pid {pid} ({name})");
+                proc.Kill(entireProcessTree: false);
+                try
+                {
+                    await proc.WaitForExitAsync(cancellationToken)
+                        .WaitAsync(TimeSpan.FromSeconds(2), cancellationToken);
+                }
+                catch (TimeoutException)
+                {
+                    // Process didn't exit fast enough; next StartOnceAsync attempt will
+                    // fail and the caller will get the error. Still report as killedAny
+                    // so the caller retries once.
+                }
+                killedAny = true;
+            }
+            catch (ArgumentException)
+            {
+                // Already exited between find and kill — treat as success.
+                killedAny = true;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException
+                                       or System.ComponentModel.Win32Exception
+                                       or NotSupportedException)
+            {
+                Console.Error.WriteLine($"  (could not kill pid {pid}: {ex.Message})");
+            }
+        }
+
+        return killedAny;
+    }
+
+    private static string SafeProcessName(Process proc)
+    {
+        try { return proc.ProcessName; }
+        catch { return "?"; }
+    }
+
+    /// <summary>
+    /// Lists PIDs holding a TCP listen socket on <paramref name="port"/>.
+    /// Uses <c>lsof</c> on macOS/Linux and <c>netstat -ano</c> on Windows.
+    /// Returns an empty list when the probe can't be run (tool missing, etc.).
+    /// </summary>
+    private static async Task<IReadOnlyList<int>> FindPidsOnPortAsync(
+        int port,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (OperatingSystem.IsMacOS() || OperatingSystem.IsLinux())
+                return await ProbeUnixAsync(port, cancellationToken);
+            if (OperatingSystem.IsWindows())
+                return await ProbeWindowsAsync(port, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Console.Error.WriteLine($"  (port probe failed: {ex.Message})");
+        }
+
+        return Array.Empty<int>();
+    }
+
+    private static async Task<IReadOnlyList<int>> ProbeUnixAsync(int port, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("lsof", $"-ti :{port} -sTCP:LISTEN")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        using var proc = Process.Start(psi);
+        if (proc is null)
+            return Array.Empty<int>();
+
+        var output = await proc.StandardOutput.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+        return ParsePidLines(output);
+    }
+
+    private static async Task<IReadOnlyList<int>> ProbeWindowsAsync(int port, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo("netstat", "-ano -p tcp")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        using var proc = Process.Start(psi);
+        if (proc is null)
+            return Array.Empty<int>();
+
+        var output = await proc.StandardOutput.ReadToEndAsync(ct);
+        await proc.WaitForExitAsync(ct);
+
+        var needle = $":{port}";
+        var pids = new HashSet<int>();
+        foreach (var line in output.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (!trimmed.Contains(needle, StringComparison.Ordinal) ||
+                !trimmed.Contains("LISTENING", StringComparison.Ordinal))
+                continue;
+
+            var parts = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Length > 0 && int.TryParse(parts[^1], out var pid) && pid > 0)
+                pids.Add(pid);
+        }
+
+        return pids.ToArray();
+    }
+
+    private static IReadOnlyList<int> ParsePidLines(string output)
+    {
+        var pids = new HashSet<int>();
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (int.TryParse(line, out var pid) && pid > 0)
+                pids.Add(pid);
+        }
+
+        return pids.ToArray();
     }
 
     private static async Task ProxyToBackend(HttpContext ctx, IHttpClientFactory factory)
