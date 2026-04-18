@@ -1,8 +1,9 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -16,6 +17,13 @@ namespace Aexon.Commands;
 /// upstream <c>aevatar app</c> command, trimmed down for aexon's simpler
 /// "single remote backend" use case (no local-vs-remote routing split).
 /// </summary>
+/// <remarks>
+/// Excluded from coverage — the entire class boots Kestrel, opens browsers,
+/// and proxies HTTP traffic. Unit-testing it in isolation is not productive;
+/// behavioral correctness is verified by running <c>aexon aevatar web</c>
+/// against mainnet.
+/// </remarks>
+[ExcludeFromCodeCoverage]
 internal static class AevatarWebHost
 {
     private static volatile string _currentApiBaseUrl = "https://aevatar-console-backend-api.aevatar.ai";
