@@ -724,6 +724,7 @@ internal static class Program
     {
         var registry = new CommandRegistry();
         registry.Register(new AevatarCommand(aevatarSettingsStore, nyxIdTokenProvider));
+        registry.Register(new StorageCommand(aevatarSettingsStore, nyxIdTokenProvider));
         registry.Register(new AgentsCommand());
         registry.Register(new AwayCommand());
         registry.Register(new BranchCommand());
@@ -818,6 +819,7 @@ Environment:
         "logout",
         "llm",
         "aevatar",
+        "storage",
     };
 
     /// <summary>
