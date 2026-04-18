@@ -16,11 +16,6 @@
     <PackageReference Include="Spectre.Console" Version="0.54.0" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Update="appsettings.secrets.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <PackAsTool>true</PackAsTool>

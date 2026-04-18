@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Aexon.Core.Auth;
 using Aexon.Core.Tests.Runtime;
 
@@ -13,30 +14,24 @@ public sealed class NyxIdTokenProviderTests
     public async Task GetValidAccessTokenAsync_RefreshesWhenTokenIsNearExpiry()
     {
         using var temp = new TempDirectory();
-        var store = new NyxIdCredentialStore(temp.FullPath("nyxid.json"));
+        var store = new NyxIdCredentialStore(temp.FullPath(".nyxid"), temp.FullPath("preferences.json"));
+        var oldJwt = BuildJwt($$"""{"exp":{{FixedNow.AddSeconds(30).ToUnixTimeSeconds()}}}""");
         store.Save(new NyxIdCredentials
         {
             BaseUrl = "https://nyx.example",
-            AccessToken = "old-access",
+            AccessToken = oldJwt,
             RefreshToken = "old-refresh",
-            IdToken = "old-id",
             ExpiresAt = FixedNow.AddSeconds(30),
-            ClientId = "client-123",
+            ClientId = NyxIdAuthService.SyntheticClientId,
         });
 
+        var newExp = FixedNow.AddSeconds(900).ToUnixTimeSeconds();
+        var newJwt = BuildJwt($$"""{"exp":{{newExp}}}""");
         var handler = new RoutedHandler(
-            discoveryResponse: """
+            refreshResponse: $$"""
                 {
-                  "authorization_endpoint": "https://nyx.example/oauth/authorize",
-                  "token_endpoint": "https://nyx.example/oauth/token"
-                }
-                """,
-            tokenResponse: """
-                {
-                  "access_token": "new-access",
-                  "refresh_token": "new-refresh",
-                  "id_token": "new-id",
-                  "expires_in": 900
+                  "access_token": "{{newJwt}}",
+                  "refresh_token": "new-refresh"
                 }
                 """);
         var authService = new NyxIdAuthService(new HttpClient(handler), store, () => FixedNow);
@@ -44,35 +39,35 @@ public sealed class NyxIdTokenProviderTests
 
         var accessToken = await provider.GetValidAccessTokenAsync();
 
-        Assert.Equal("new-access", accessToken);
-        Assert.Equal(2, handler.Requests.Count);
+        Assert.Equal(newJwt, accessToken);
+        var refreshRequest = Assert.Single(handler.Requests);
+        Assert.Equal(
+            "https://nyx.example/api/v1/auth/refresh",
+            refreshRequest.RequestUri?.ToString());
 
-        var refreshRequest = handler.Requests[1];
         var body = await refreshRequest.Content!.ReadAsStringAsync();
-        Assert.Contains("grant_type=refresh_token", body, StringComparison.Ordinal);
-        Assert.Contains("refresh_token=old-refresh", body, StringComparison.Ordinal);
-        Assert.Contains("client_id=client-123", body, StringComparison.Ordinal);
+        using var doc = JsonDocument.Parse(body);
+        Assert.Equal("old-refresh", doc.RootElement.GetProperty("refresh_token").GetString());
 
         var persisted = store.Load()!;
-        Assert.Equal("new-access", persisted.AccessToken);
+        Assert.Equal(newJwt, persisted.AccessToken);
         Assert.Equal("new-refresh", persisted.RefreshToken);
-        Assert.Equal("new-id", persisted.IdToken);
-        Assert.Equal(FixedNow.AddSeconds(900), persisted.ExpiresAt);
+        Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(newExp), persisted.ExpiresAt);
     }
 
     [Fact]
     public async Task GetValidAccessTokenAsync_DoesNotRefreshWhenTokenIsStillFresh()
     {
         using var temp = new TempDirectory();
-        var store = new NyxIdCredentialStore(temp.FullPath("nyxid.json"));
+        var store = new NyxIdCredentialStore(temp.FullPath(".nyxid"), temp.FullPath("preferences.json"));
+        var freshJwt = BuildJwt($$"""{"exp":{{FixedNow.AddMinutes(5).ToUnixTimeSeconds()}}}""");
         store.Save(new NyxIdCredentials
         {
             BaseUrl = "https://nyx.example",
-            AccessToken = "fresh-access",
+            AccessToken = freshJwt,
             RefreshToken = "fresh-refresh",
-            IdToken = "fresh-id",
             ExpiresAt = FixedNow.AddMinutes(5),
-            ClientId = "client-123",
+            ClientId = NyxIdAuthService.SyntheticClientId,
         });
 
         var handler = new CountingHandler();
@@ -81,11 +76,24 @@ public sealed class NyxIdTokenProviderTests
 
         var accessToken = await provider.GetValidAccessTokenAsync();
 
-        Assert.Equal("fresh-access", accessToken);
+        Assert.Equal(freshJwt, accessToken);
         Assert.Equal(0, handler.CallCount);
     }
 
-    private sealed class RoutedHandler(string discoveryResponse, string tokenResponse) : HttpMessageHandler
+    private static string BuildJwt(string payloadJson)
+    {
+        var header = Base64UrlEncode(Encoding.UTF8.GetBytes("""{"alg":"none"}"""));
+        var payload = Base64UrlEncode(Encoding.UTF8.GetBytes(payloadJson));
+        return $"{header}.{payload}.";
+    }
+
+    private static string Base64UrlEncode(byte[] bytes) =>
+        Convert.ToBase64String(bytes)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
+    private sealed class RoutedHandler(string refreshResponse) : HttpMessageHandler
     {
         public List<HttpRequestMessage> Requests { get; } = [];
 
@@ -94,16 +102,13 @@ public sealed class NyxIdTokenProviderTests
             CancellationToken cancellationToken)
         {
             Requests.Add(request);
-            var content = request.RequestUri?.AbsolutePath switch
-            {
-                "/.well-known/openid-configuration" => discoveryResponse,
-                "/oauth/token" => tokenResponse,
-                _ => throw new InvalidOperationException($"Unexpected request: {request.RequestUri}"),
-            };
+            var path = request.RequestUri?.AbsolutePath;
+            if (path != "/api/v1/auth/refresh")
+                throw new InvalidOperationException($"Unexpected request: {request.RequestUri}");
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(content, Encoding.UTF8, "application/json"),
+                Content = new StringContent(refreshResponse, Encoding.UTF8, "application/json"),
             });
         }
     }

@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Aexon.Commands;
+using Aexon.Core.Aevatar;
 using Aexon.Core.Agents;
 using Aexon.Core.AppState;
 using Aexon.Core.Auth;
@@ -11,6 +12,7 @@ using Aexon.Core.Configuration;
 using Aexon.Core.Context;
 using Aexon.Core.Cron;
 using Aexon.Core.Hooks;
+using Aexon.Core.Interactive;
 using Aexon.Core.Markdown;
 using Aexon.Core.Mcp;
 using Aexon.Core.Memory;
@@ -261,12 +263,15 @@ internal static class Program
             agentRuntimeOptions,
             agentSettings.Settings.BackgroundRunConcurrency);
         var nyxIdLlmStatusClient = new NyxIdLlmStatusClient(nyxIdTokenProvider);
+        var aevatarSettingsStore = new AevatarChatSettingsStore();
         var commandRegistry = BuildCommandRegistry(
             skillLoader.Load(workingDirectory),
             nyxIdAuthService,
             nyxIdCredentialStore,
             nyxIdLlmStatusClient,
             nyxIdSettings.ActiveBaseUrl,
+            nyxIdTokenProvider,
+            aevatarSettingsStore,
             transcriptStore,
             memoryLayout,
             managedSettings,
@@ -709,6 +714,8 @@ internal static class Program
         NyxIdCredentialStore nyxIdCredentialStore,
         NyxIdLlmStatusClient nyxIdLlmStatusClient,
         string nyxIdBaseUrl,
+        NyxIdTokenProvider nyxIdTokenProvider,
+        AevatarChatSettingsStore aevatarSettingsStore,
         ITranscriptStore transcriptStore,
         MemdirLayout memdirLayout,
         ManagedSettingsLoadResult managedSettings,
@@ -716,6 +723,7 @@ internal static class Program
         Assembly productAssembly)
     {
         var registry = new CommandRegistry();
+        registry.Register(new AevatarCommand(aevatarSettingsStore, nyxIdTokenProvider));
         registry.Register(new AgentsCommand());
         registry.Register(new AwayCommand());
         registry.Register(new BranchCommand());
@@ -809,6 +817,7 @@ Environment:
         "login",
         "logout",
         "llm",
+        "aevatar",
     };
 
     /// <summary>

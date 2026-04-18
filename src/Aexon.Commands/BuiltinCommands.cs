@@ -476,7 +476,10 @@ public class ExitCommand : ICommand
 }
 
 /// <summary>
-/// Represents NyxID login command.
+/// NyxID login command. Mirrors the upstream `nyxid login` flags:
+///   /login                        — browser flow (default base URL or last saved)
+///   /login &lt;base-url&gt;           — browser flow against the given server
+///   /login --password [--email X] — email/password flow
 /// </summary>
 public sealed class LoginCommand(
     NyxIdAuthService authService,
@@ -488,14 +491,25 @@ public sealed class LoginCommand(
 
     public async Task ExecuteAsync(string args, CommandContext context)
     {
-        var requestedBaseUrl = string.IsNullOrWhiteSpace(args)
+        var parsed = LoginArgs.Parse(args);
+
+        var requestedBaseUrl = string.IsNullOrWhiteSpace(parsed.BaseUrlOverride)
             ? credentialStore.Load()?.BaseUrl ?? defaultBaseUrl
-            : args.Trim();
+            : parsed.BaseUrlOverride!;
 
         try
         {
             var previous = credentialStore.Load();
-            var credentials = await authService.LoginAsync(requestedBaseUrl, context.CancellationToken);
+            NyxIdCredentials credentials;
+            if (parsed.UsePassword)
+            {
+                credentials = await RunPasswordLoginAsync(parsed, requestedBaseUrl, context);
+            }
+            else
+            {
+                credentials = await authService.LoginAsync(requestedBaseUrl, context.CancellationToken);
+            }
+
             var preservedDefaults = previous != null &&
                                     string.Equals(previous.BaseUrl, credentials.BaseUrl, StringComparison.OrdinalIgnoreCase);
             var toSave = preservedDefaults
@@ -507,7 +521,8 @@ public sealed class LoginCommand(
                 : credentials;
             credentialStore.Save(toSave);
 
-            if (NyxIdJwtPayloadReader.TryGetStringClaim(credentials.IdToken, "email", out var email))
+            var email = ReadEmailClaim(credentials.IdToken) ?? ReadEmailClaim(credentials.AccessToken);
+            if (!string.IsNullOrWhiteSpace(email))
             {
                 context.WriteLine($"  Signed in to NyxID as {email}.");
             }
@@ -531,6 +546,101 @@ public sealed class LoginCommand(
         catch (Exception ex)
         {
             context.WriteLine($"  NyxID login failed: {ex.Message}");
+        }
+    }
+
+    private async Task<NyxIdCredentials> RunPasswordLoginAsync(
+        LoginArgs parsed,
+        string baseUrl,
+        CommandContext context)
+    {
+        var email = parsed.Email;
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            Console.Write("Email: ");
+            email = context.ReadInputLine?.Invoke() ?? Console.ReadLine();
+        }
+
+        if (string.IsNullOrWhiteSpace(email))
+            throw new InvalidOperationException("Email is required for password login.");
+
+        var password = ReadPasswordSilently("Password: ")
+                       ?? throw new InvalidOperationException("Password is required.");
+
+        return await authService.LoginWithPasswordAsync(
+            baseUrl,
+            email.Trim(),
+            password,
+            context.CancellationToken);
+    }
+
+    private static string? ReadPasswordSilently(string prompt)
+    {
+        Console.Write(prompt);
+        if (Console.IsInputRedirected)
+            return Console.ReadLine();
+
+        var password = new StringBuilder();
+        while (true)
+        {
+            var key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Enter)
+            {
+                Console.WriteLine();
+                break;
+            }
+
+            if (key.Key == ConsoleKey.Backspace)
+            {
+                if (password.Length > 0)
+                    password.Length--;
+                continue;
+            }
+
+            if (!char.IsControl(key.KeyChar))
+                password.Append(key.KeyChar);
+        }
+
+        return password.Length == 0 ? null : password.ToString();
+    }
+
+    private static string? ReadEmailClaim(string? jwt) =>
+        NyxIdJwtPayloadReader.TryGetStringClaim(jwt, "email", out var email) ? email : null;
+
+    private sealed record LoginArgs(string? BaseUrlOverride, bool UsePassword, string? Email)
+    {
+        public static LoginArgs Parse(string raw)
+        {
+            string? baseUrl = null;
+            string? email = null;
+            var usePassword = false;
+
+            if (string.IsNullOrWhiteSpace(raw))
+                return new LoginArgs(null, false, null);
+
+            var tokens = raw.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            for (var i = 0; i < tokens.Length; i++)
+            {
+                var token = tokens[i];
+                switch (token)
+                {
+                    case "--password":
+                        usePassword = true;
+                        break;
+
+                    case "--email":
+                        if (i + 1 < tokens.Length)
+                            email = tokens[++i];
+                        break;
+
+                    default:
+                        if (!token.StartsWith('-') && baseUrl is null)
+                            baseUrl = token;
+                        break;
+                }
+            }
+
+            return new LoginArgs(baseUrl, usePassword, email);
         }
     }
 }
@@ -558,7 +668,7 @@ public sealed class LogoutCommand(
         {
             await authService.LogoutAsync(
                 credentials.BaseUrl,
-                credentials.RefreshToken ?? string.Empty,
+                credentials.AccessToken ?? string.Empty,
                 context.CancellationToken);
             context.WriteLine("  Signed out from NyxID.");
         }
