@@ -11,6 +11,7 @@ using Aexon.Core.Commands;
 using Aexon.Core.Configuration;
 using Aexon.Core.Context;
 using Aexon.Core.Cron;
+using Aexon.Core.Extensions;
 using Aexon.Core.Hooks;
 using Aexon.Core.Interactive;
 using Aexon.Core.Markdown;
@@ -298,6 +299,25 @@ internal static class Program
             Aliases: ["ReadMcpResourceTool"],
             Keywords: ["mcp", "resource", "read", "uri", "server", "contents"]));
 
+        var extensionRegistry = BuildExtensionRegistry();
+        if (extensionRegistry.Registered.Count > 0)
+        {
+            var sessionBuilder = new SessionBuilder(
+                workingDirectory,
+                model,
+                toolRegistry,
+                commandRegistry,
+                hooks);
+            await extensionRegistry.RunAsync(sessionBuilder, CancellationToken.None);
+            if (sessionBuilder.PromptFragments.Count > 0)
+            {
+                var joined = string.Join("\n\n", sessionBuilder.PromptFragments);
+                config.AppendSystemPrompt = string.IsNullOrWhiteSpace(config.AppendSystemPrompt)
+                    ? joined
+                    : $"{config.AppendSystemPrompt}\n\n{joined}";
+            }
+        }
+
         await using var queryEngine = new QueryEngine(
             chatClient,
             toolRegistry,
@@ -445,6 +465,13 @@ internal static class Program
                 // Persisting interactive history is best effort and should not fail the CLI.
             }
         }
+    }
+
+    private static ExtensionRegistry BuildExtensionRegistry()
+    {
+        // No built-in extensions today. Third parties that want to compile a
+        // custom Aexon host can add them here before the registry is returned.
+        return new ExtensionRegistry();
     }
 
     private static ToolRegistry BuildToolRegistry(
