@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using Aexon.Core.Aevatar;
@@ -24,6 +25,16 @@ namespace Aexon.Commands;
 /// Tokens flow through <see cref="NyxIdTokenProvider"/> — the same <c>~/.nyxid/</c>
 /// layout as the upstream <c>nyxid</c> Rust CLI — so login is not redone here.
 /// </summary>
+/// <remarks>
+/// The interactive / console-I/O dispatch methods on this class are excluded
+/// from coverage analysis via <see cref="ExcludeFromCodeCoverageAttribute"/>:
+/// they are thin orchestrators over <c>AevatarChatClient</c> and Spectre.Console,
+/// both of which have dedicated unit tests. The pure formatters / parsers
+/// (<c>FormatConversationId</c>, <c>SplitHead</c>, <c>Truncate</c>,
+/// <c>FormatTimestamp</c>, <c>ExtractTitleFlag</c>) keep their coverage and are
+/// tested in <c>AevatarCommandHelpersTests</c>.
+/// </remarks>
+[ExcludeFromCodeCoverage]
 public sealed class AevatarCommand(
     AevatarChatSettingsStore settingsStore,
     NyxIdTokenProvider tokenProvider) : ICommand
@@ -1048,21 +1059,21 @@ public sealed class AevatarCommand(
             Console.WriteLine();
     }
 
-    private static string FormatTimestamp(string iso)
+    internal static string FormatTimestamp(string iso)
     {
         if (DateTimeOffset.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed))
             return parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
         return iso;
     }
 
-    private static string Truncate(string? value, int max)
+    internal static string Truncate(string? value, int max)
     {
         if (string.IsNullOrEmpty(value))
             return string.Empty;
         return value.Length <= max ? value : value[..max] + "…";
     }
 
-    private static string? ExtractTitleFlag(string args)
+    internal static string? ExtractTitleFlag(string args)
     {
         if (string.IsNullOrWhiteSpace(args))
             return null;
@@ -1113,7 +1124,7 @@ public sealed class AevatarCommand(
         context.WriteLine("    /aevatar config clear                   clear persisted base URL");
     }
 
-    private static (string head, string rest) SplitHead(string value)
+    internal static (string head, string rest) SplitHead(string value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return (string.Empty, string.Empty);
