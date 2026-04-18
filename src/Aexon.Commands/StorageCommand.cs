@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using Aexon.Core.Aevatar;
@@ -22,6 +23,13 @@ namespace Aexon.Commands;
 /// <c>/aevatar config set-url</c> also points <c>/storage</c> at the same
 /// backend) and <see cref="NyxIdTokenProvider"/> for authentication.
 /// </summary>
+/// <remarks>
+/// Excluded from coverage analysis — every method either drives Spectre.Console
+/// output, iterates over <see cref="AevatarStorageClient"/> results, or reads
+/// stdin. The underlying HTTP contract is covered by
+/// <c>AevatarStorageClientTests</c>.
+/// </remarks>
+[ExcludeFromCodeCoverage]
 public sealed class StorageCommand(
     AevatarChatSettingsStore settingsStore,
     NyxIdTokenProvider tokenProvider) : ICommand
