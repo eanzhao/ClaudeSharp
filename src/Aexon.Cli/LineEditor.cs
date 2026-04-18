@@ -81,8 +81,22 @@ internal sealed class LineEditor
                 if (key.Key == ConsoleKey.Tab)
                 {
                     if (TryApplyCompletion(buffer, ref completionSession))
-                        renderer.Render(buffer.Text, buffer.Cursor);
+                        renderer.Render(buffer.Text, buffer.Cursor, BuildHintText(completionSession));
 
+                    continue;
+                }
+
+                if (key.Modifiers.HasFlag(ConsoleModifiers.Control) && key.Key == ConsoleKey.R)
+                {
+                    completionSession = null;
+                    var searchResult = PerformReverseSearch(renderer, cancellationToken);
+                    if (searchResult != null)
+                    {
+                        buffer.SetText(searchResult);
+                        _history.ResetNavigation();
+                    }
+
+                    renderer.Render(buffer.Text, buffer.Cursor);
                     continue;
                 }
 
@@ -120,8 +134,13 @@ internal sealed class LineEditor
         }
     }
 
+    internal LineEditorOutcome InvokeHandleKeyForTest(ConsoleKeyInfo key, LineEditorBuffer buffer) =>
+        HandleKey(key, buffer);
+
     private LineEditorOutcome HandleKey(ConsoleKeyInfo key, LineEditorBuffer buffer)
     {
+        var isAlt = key.Modifiers.HasFlag(ConsoleModifiers.Alt);
+
         if (key.Modifiers.HasFlag(ConsoleModifiers.Control))
         {
             switch (key.Key)
@@ -136,6 +155,8 @@ internal sealed class LineEditor
                     return buffer.Length == 0 ? LineEditorOutcome.Exit : LineEditorOutcome.None;
                 case ConsoleKey.E:
                     return buffer.MoveEnd() ? LineEditorOutcome.Render : LineEditorOutcome.None;
+                case ConsoleKey.K:
+                    return buffer.DeleteToEnd() ? LineEditorOutcome.Render : LineEditorOutcome.None;
                 case ConsoleKey.U:
                     return buffer.DeleteToStart() ? LineEditorOutcome.Render : LineEditorOutcome.None;
                 case ConsoleKey.W:
@@ -146,13 +167,19 @@ internal sealed class LineEditor
         switch (key.Key)
         {
             case ConsoleKey.Backspace:
-                return buffer.Backspace() ? LineEditorOutcome.Render : LineEditorOutcome.None;
+                return isAlt
+                    ? (buffer.DeleteWordBack() ? LineEditorOutcome.Render : LineEditorOutcome.None)
+                    : (buffer.Backspace() ? LineEditorOutcome.Render : LineEditorOutcome.None);
             case ConsoleKey.Delete:
                 return buffer.DeleteForward() ? LineEditorOutcome.Render : LineEditorOutcome.None;
             case ConsoleKey.LeftArrow:
-                return buffer.MoveLeft() ? LineEditorOutcome.Render : LineEditorOutcome.None;
+                return isAlt
+                    ? (buffer.MoveWordLeft() ? LineEditorOutcome.Render : LineEditorOutcome.None)
+                    : (buffer.MoveLeft() ? LineEditorOutcome.Render : LineEditorOutcome.None);
             case ConsoleKey.RightArrow:
-                return buffer.MoveRight() ? LineEditorOutcome.Render : LineEditorOutcome.None;
+                return isAlt
+                    ? (buffer.MoveWordRight() ? LineEditorOutcome.Render : LineEditorOutcome.None)
+                    : (buffer.MoveRight() ? LineEditorOutcome.Render : LineEditorOutcome.None);
             case ConsoleKey.Home:
                 return buffer.MoveHome() ? LineEditorOutcome.Render : LineEditorOutcome.None;
             case ConsoleKey.End:
@@ -193,6 +220,93 @@ internal sealed class LineEditor
                 }
 
                 return LineEditorOutcome.None;
+        }
+    }
+
+    private string? PerformReverseSearch(LineEditorRenderer renderer, CancellationToken cancellationToken)
+    {
+        var query = new StringBuilder();
+        var occurrence = 0;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var matchIndex = LineEditorHistorySearch.FindMatchIndex(
+                _history.Entries,
+                query.ToString(),
+                occurrence);
+            var matchText = matchIndex >= 0 ? _history.Entries[matchIndex] : string.Empty;
+            var searchPrompt = $"(reverse-i-search)'{query}': ";
+
+            renderer.Render(
+                matchText,
+                matchText.Length,
+                hint: string.Empty,
+                promptOverride: searchPrompt,
+                placeholderOverride: string.Empty);
+
+            var key = _readKey();
+
+            if (key.Modifiers.HasFlag(ConsoleModifiers.Control))
+            {
+                switch (key.Key)
+                {
+                    case ConsoleKey.R:
+                        occurrence++;
+                        continue;
+                    case ConsoleKey.G:
+                    case ConsoleKey.C:
+                        return null;
+                }
+            }
+
+            switch (key.Key)
+            {
+                case ConsoleKey.Escape:
+                    return null;
+                case ConsoleKey.Enter:
+                    return matchIndex >= 0 ? matchText : null;
+                case ConsoleKey.Backspace:
+                    if (query.Length > 0)
+                    {
+                        query.Length--;
+                        occurrence = 0;
+                    }
+
+                    continue;
+            }
+
+            if (!char.IsControl(key.KeyChar))
+            {
+                query.Append(key.KeyChar);
+                occurrence = 0;
+            }
+        }
+    }
+
+    private static string BuildHintText(LineEditorCompletionSession? session)
+    {
+        if (session == null)
+            return string.Empty;
+
+        var width = Math.Max(20, SafeBufferWidth());
+        return LineEditorHintFormatter.Format(
+            session.Matches,
+            session.CurrentIndex,
+            Math.Max(1, width - 1));
+    }
+
+    private static int SafeBufferWidth()
+    {
+        try
+        {
+            return Console.BufferWidth;
+        }
+        catch (Exception ex) when (
+            ex is IOException or InvalidOperationException or NotSupportedException)
+        {
+            return 80;
         }
     }
 
@@ -278,6 +392,15 @@ internal sealed class LineEditorBuffer
         return true;
     }
 
+    public bool DeleteToEnd()
+    {
+        if (Cursor >= _text.Length)
+            return false;
+
+        _text.Remove(Cursor, _text.Length - Cursor);
+        return true;
+    }
+
     public bool DeleteToStart()
     {
         if (Cursor == 0)
@@ -347,6 +470,38 @@ internal sealed class LineEditorBuffer
             return false;
 
         Cursor++;
+        return true;
+    }
+
+    public bool MoveWordLeft()
+    {
+        if (Cursor == 0)
+            return false;
+
+        var index = Cursor;
+        while (index > 0 && char.IsWhiteSpace(_text[index - 1]))
+            index--;
+
+        while (index > 0 && !char.IsWhiteSpace(_text[index - 1]))
+            index--;
+
+        Cursor = index;
+        return true;
+    }
+
+    public bool MoveWordRight()
+    {
+        if (Cursor >= _text.Length)
+            return false;
+
+        var index = Cursor;
+        while (index < _text.Length && char.IsWhiteSpace(_text[index]))
+            index++;
+
+        while (index < _text.Length && !char.IsWhiteSpace(_text[index]))
+            index++;
+
+        Cursor = index;
         return true;
     }
 
@@ -615,6 +770,10 @@ internal sealed class LineEditorCompletionSession
         _set = set;
     }
 
+    public int CurrentIndex => _index;
+
+    public IReadOnlyList<string> Matches => _set.Matches;
+
     public bool ApplyNext(LineEditorBuffer buffer)
     {
         if (_set.Matches.Count == 0)
@@ -647,6 +806,66 @@ internal readonly record struct LineEditorCompletionSet(
     int Start,
     int Length,
     IReadOnlyList<string> Matches);
+
+internal static class LineEditorHistorySearch
+{
+    public static int FindMatchIndex(IReadOnlyList<string> entries, string query, int occurrence)
+    {
+        if (string.IsNullOrEmpty(query) || occurrence < 0)
+            return -1;
+
+        var seen = 0;
+        for (var index = entries.Count - 1; index >= 0; index--)
+        {
+            if (entries[index].Contains(query, StringComparison.OrdinalIgnoreCase))
+            {
+                if (seen == occurrence)
+                    return index;
+
+                seen++;
+            }
+        }
+
+        return -1;
+    }
+}
+
+internal static class LineEditorHintFormatter
+{
+    private const string Ellipsis = "…";
+    private const string Separator = "  ";
+
+    public static string Format(IReadOnlyList<string> matches, int selectedIndex, int maxWidth)
+    {
+        if (matches.Count < 2 || maxWidth <= Ellipsis.Length)
+            return string.Empty;
+
+        var builder = new StringBuilder();
+        var truncated = false;
+
+        for (var index = 0; index < matches.Count; index++)
+        {
+            var token = index == selectedIndex ? $"[{matches[index]}]" : matches[index];
+            var addition = builder.Length == 0 ? token : Separator + token;
+            var isLast = index == matches.Count - 1;
+            var projected = builder.Length + addition.Length;
+            var budget = isLast ? maxWidth : maxWidth - Ellipsis.Length;
+
+            if (projected > budget)
+            {
+                truncated = true;
+                break;
+            }
+
+            builder.Append(addition);
+        }
+
+        if (truncated)
+            builder.Append(Ellipsis);
+
+        return builder.ToString();
+    }
+}
 
 internal static class LineEditorHistoryStore
 {
@@ -740,7 +959,7 @@ internal sealed class LineEditorRenderer
         _prompt = prompt;
         _placeholder = placeholder;
         _anchorTop = Console.CursorTop;
-        _lastLayout = BuildLayout(string.Empty, 0, prompt, placeholder, GetConsoleWidth());
+        _lastLayout = BuildLayout(string.Empty, 0, prompt, placeholder, GetConsoleWidth(), hint: string.Empty);
     }
 
     public void Finish()
@@ -759,10 +978,17 @@ internal sealed class LineEditorRenderer
         Console.WriteLine();
     }
 
-    public void Render(string text, int cursor)
+    public void Render(
+        string text,
+        int cursor,
+        string hint = "",
+        string? promptOverride = null,
+        string? placeholderOverride = null)
     {
         var width = GetConsoleWidth();
-        var layout = BuildLayout(text, cursor, _prompt, _placeholder, width);
+        var prompt = promptOverride ?? _prompt;
+        var placeholder = placeholderOverride ?? _placeholder;
+        var layout = BuildLayout(text, cursor, prompt, placeholder, width, hint);
         var originalColor = Console.ForegroundColor;
         var canToggleCursorVisibility = OperatingSystem.IsWindows();
         var originalCursorVisible = true;
@@ -819,7 +1045,8 @@ internal sealed class LineEditorRenderer
         int cursor,
         string prompt,
         string placeholder,
-        int width)
+        int width,
+        string hint)
     {
         var visibleText = text.Length == 0 ? placeholder : text;
         var isPlaceholder = text.Length == 0;
@@ -896,13 +1123,18 @@ internal sealed class LineEditorRenderer
         else
             lines.Add(new LineEditorDisplayLine(currentPrefix, builder.ToString(), isPlaceholder));
 
-        var lastLine = lines[^1];
+        var inputEndLine = lines.Count - 1;
+        var inputEndColumn = lines[^1].Prefix.Length + lines[^1].Content.Length;
+
+        if (!string.IsNullOrEmpty(hint))
+            lines.Add(new LineEditorDisplayLine(continuationPrefix, hint, IsDim: true));
+
         return new LineEditorLayout(
             lines,
             cursorLine,
             cursorColumn,
-            lines.Count - 1,
-            lastLine.Prefix.Length + lastLine.Content.Length);
+            inputEndLine,
+            inputEndColumn);
     }
 
     private static int GetConsoleWidth()
