@@ -1,11 +1,11 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
 
 declare const process: {
   env: Record<string, string | undefined>;
 };
 
-const isElectronBuild = process.env.ELECTRON_BUILD === '1';
 const apiProxyTarget = process.env.AEVATAR_API_URL || '';
 
 if (apiProxyTarget) {
@@ -14,7 +14,7 @@ if (apiProxyTarget) {
 
 export default defineConfig({
   plugins: [react()],
-  base: isElectronBuild ? './' : '/',
+  base: '/',
   server: {
     ...(apiProxyTarget
       ? {
@@ -24,12 +24,12 @@ export default defineConfig({
               changeOrigin: true,
               secure: false,
               cookieDomainRewrite: { '*': '' },
-              configure: (proxy) => {
-                proxy.on('proxyReq', (proxyReq) => {
+              configure: (proxy: any) => {
+                proxy.on('proxyReq', (proxyReq: any) => {
                   proxyReq.removeHeader('origin');
                   proxyReq.removeHeader('referer');
                 });
-                proxy.on('proxyRes', (proxyRes) => {
+                proxy.on('proxyRes', (proxyRes: any) => {
                   const setCookie = proxyRes.headers['set-cookie'];
                   if (setCookie) {
                     proxyRes.headers['set-cookie'] = setCookie.map((cookie: string) =>
@@ -46,21 +46,20 @@ export default defineConfig({
       : {}),
   },
   build: {
-    outDir: isElectronBuild ? 'dist' : '../wwwroot',
+    outDir: '../wwwroot',
     emptyOutDir: true,
-    assetsDir: isElectronBuild ? 'assets' : '',
     cssCodeSplit: false,
     rollupOptions: {
+      input: {
+        chat: resolve(__dirname, 'index.html'),
+        workbench: resolve(__dirname, 'workbench.html'),
+      },
       output: {
-        inlineDynamicImports: true,
-        entryFileNames: isElectronBuild ? 'assets/app.js' : 'app.js',
-        assetFileNames: assetInfo => {
-          const assetName = assetInfo.name || '';
-          if (isElectronBuild) {
-            return assetName.slice(-4) === '.css' ? 'assets/app.css' : 'assets/[name][extname]';
-          }
-          return assetName.slice(-4) === '.css' ? 'app.css' : '[name][extname]';
-        },
+        // JS lands per-entry; assets dump into staging and are relocated
+        // by scripts/relocate-html.js.
+        entryFileNames: 'aevatar-[name]/app.js',
+        chunkFileNames: 'aevatar-[name]/[name]-[hash].js',
+        assetFileNames: 'staging/[name][extname]',
       },
     },
   },
