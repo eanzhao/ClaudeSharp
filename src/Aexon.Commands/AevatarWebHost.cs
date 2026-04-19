@@ -32,16 +32,17 @@ internal static class AevatarWebHost
     public static async Task RunAsync(
         int port,
         string apiBaseUrl,
+        string webRootSubdir,
         bool noBrowser,
         CancellationToken cancellationToken)
     {
         _currentApiBaseUrl = apiBaseUrl.TrimEnd('/');
 
-        var webRootPath = ResolveWebRootPath();
+        var webRootPath = ResolveWebRootPath(webRootSubdir);
         if (!File.Exists(Path.Combine(webRootPath, "index.html")))
         {
             Console.Error.WriteLine(
-                $"  aevatar web: could not find frontend assets. Looked at: {webRootPath}");
+                $"  aevatar web: could not find frontend assets for '{webRootSubdir}'. Looked at: {webRootPath}");
             Console.Error.WriteLine(
                 "  This tool must be installed as a packaged dotnet tool for the web UI to work.");
             return;
@@ -395,14 +396,14 @@ internal static class AevatarWebHost
         }
     }
 
-    private static string ResolveWebRootPath()
+    private static string ResolveWebRootPath(string subdir)
     {
         var baseDir = AppContext.BaseDirectory;
         var candidates = new[]
         {
-            Path.Combine(baseDir, "wwwroot", "aevatar"),
-            // dev-time fallback when running from the source checkout (bin/Debug/net10.0):
-            Path.GetFullPath(Path.Combine(baseDir, "../../../../Aexon.Commands/wwwroot/aevatar")),
+            Path.Combine(baseDir, "wwwroot", subdir),
+            // dev-time fallback when running from the source checkout:
+            Path.GetFullPath(Path.Combine(baseDir, $"../../../../Aexon.Commands/wwwroot/{subdir}")),
         };
 
         return candidates.FirstOrDefault(p => File.Exists(Path.Combine(p, "index.html")))
