@@ -65,7 +65,10 @@ if (fs.existsSync(staging)) {
 
 // Copy any remaining top-level subdirs (e.g. aevatar-client/ produced by
 // Rollup's shared-chunk naming when chunkFileNames uses [name]) into both
-// target subdirs, rewrite the HTML hrefs, then delete the stray dir.
+// target subdirs, PRESERVING the directory structure. Don't rewrite paths:
+// the chunk loader code baked into app.js references chunks via absolute
+// URLs like '/aevatar-client/client-XXXX.js', so we mirror that path under
+// each per-subcommand webroot. Copy + delete the stray top-level dir.
 const topEntries = fs.readdirSync(wwwroot);
 const otherDirs = topEntries.filter(
   (entry) =>
@@ -74,10 +77,11 @@ const otherDirs = topEntries.filter(
 );
 if (otherDirs.length > 0) {
   console.warn(
-    `relocate: WARNING — found ${otherDirs.length} unknown chunk dir(s): ` +
+    `relocate: WARNING — found ${otherDirs.length} stray top-level chunk dir(s): ` +
     `${otherDirs.join(', ')}. ` +
-    `Copying contents to BOTH entry subdirs as a safe default. ` +
-    `If these are per-entry chunks (not shared), refine vite.config.ts ` +
+    `Mirroring path-preserving copy into BOTH entry subdirs so that the chunk ` +
+    `loader's absolute URLs in app.js still resolve under each per-subcommand ` +
+    `webroot. If these are per-entry chunks (not shared), refine vite.config.ts ` +
     `chunkFileNames to land them in the owning entry subdir.`
   );
 }
@@ -86,24 +90,17 @@ for (const entry of topEntries) {
   const entryPath = path.join(wwwroot, entry);
   if (!fs.statSync(entryPath).isDirectory()) continue;
 
-  // Unexpected chunk dir — copy files into both target subdirs,
-  // rewrite HTML references, then delete.
+  // Mirror entryPath/* into <subdir>/<entry>/* for each target subdir,
+  // preserving the directory name so app.js's '/<entry>/<file>' URLs work.
   for (const f of fs.readdirSync(entryPath)) {
     const src = path.join(entryPath, f);
     for (const dest of targetSubdirs) {
-      fs.copyFileSync(src, path.join(wwwroot, dest, f));
+      const destDir = path.join(wwwroot, dest, entry);
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(src, path.join(destDir, f));
     }
     fs.unlinkSync(src);
   }
   fs.rmdirSync(entryPath);
-
-  // Rewrite /${entry}/<file> -> /<file> in both HTML files
-  for (const dest of targetSubdirs) {
-    const htmlPath = path.join(wwwroot, dest, 'index.html');
-    if (!fs.existsSync(htmlPath)) continue;
-    let html = fs.readFileSync(htmlPath, 'utf8');
-    html = html.replaceAll(`/${entry}/`, '/');
-    fs.writeFileSync(htmlPath, html);
-  }
-  console.log(`relocate: ${entry}/ flushed into subdirs`);
+  console.log(`relocate: ${entry}/ mirrored into subdirs (path preserved)`);
 }
