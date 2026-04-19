@@ -34,3 +34,9 @@ packages/
 
 ## Original TypeScript source (reference only)
 claude-code/
+
+# Aexon.Commands frontend
+src/Aexon.Commands/Frontend/node_modules/
+src/Aexon.Commands/Frontend/dist/
+src/Aexon.Commands/Frontend/.vite/
+src/Aexon.Commands/Frontend/*.tsbuildinfo
