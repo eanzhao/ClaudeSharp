@@ -13,16 +13,19 @@ using Microsoft.Extensions.Logging;
 namespace Aexon.Commands;
 
 /// <summary>
-/// In-process web host that serves the aevatar workflow studio frontend and
-/// reverse-proxies <c>/api/*</c> to a remote aevatar backend. Ported from the
-/// upstream <c>aevatar app</c> command, trimmed down for aexon's simpler
-/// "single remote backend" use case (no local-vs-remote routing split).
+/// In-process web host that serves one of aexon's aevatar frontends
+/// (chat console at <c>wwwroot/aevatar-chat/</c> or Service Workbench at
+/// <c>wwwroot/aevatar-workbench/</c>, picked by the <c>webRootSubdir</c>
+/// argument) and reverse-proxies <c>/api/*</c> to a remote aevatar backend.
+/// Ported from the upstream <c>aevatar app</c> command, trimmed down for
+/// aexon's simpler "single remote backend" use case (no local-vs-remote
+/// routing split).
 /// </summary>
 /// <remarks>
 /// Excluded from coverage — the entire class boots Kestrel, opens browsers,
 /// and proxies HTTP traffic. Unit-testing it in isolation is not productive;
-/// behavioral correctness is verified by running <c>aexon aevatar web</c>
-/// against mainnet.
+/// behavioral correctness is verified by running <c>aexon aevatar chat</c>
+/// or <c>aexon aevatar web</c> against mainnet.
 /// </remarks>
 [ExcludeFromCodeCoverage]
 internal static class AevatarWebHost
@@ -32,16 +35,17 @@ internal static class AevatarWebHost
     public static async Task RunAsync(
         int port,
         string apiBaseUrl,
+        string webRootSubdir,
         bool noBrowser,
         CancellationToken cancellationToken)
     {
         _currentApiBaseUrl = apiBaseUrl.TrimEnd('/');
 
-        var webRootPath = ResolveWebRootPath();
+        var webRootPath = ResolveWebRootPath(webRootSubdir);
         if (!File.Exists(Path.Combine(webRootPath, "index.html")))
         {
             Console.Error.WriteLine(
-                $"  aevatar web: could not find frontend assets. Looked at: {webRootPath}");
+                $"  aevatar web: could not find frontend assets for '{webRootSubdir}'. Looked at: {webRootPath}");
             Console.Error.WriteLine(
                 "  This tool must be installed as a packaged dotnet tool for the web UI to work.");
             return;
@@ -49,7 +53,7 @@ internal static class AevatarWebHost
 
         try
         {
-            await StartOnceAsync(port, noBrowser, webRootPath, cancellationToken);
+            await StartOnceAsync(port, noBrowser, webRootPath, webRootSubdir, cancellationToken);
             return;
         }
         catch (Exception ex) when (IsAddressInUse(ex))
@@ -68,13 +72,14 @@ internal static class AevatarWebHost
 
         // Second and final attempt — if it still fails, let the exception propagate so
         // the caller can surface it to the user.
-        await StartOnceAsync(port, noBrowser, webRootPath, cancellationToken);
+        await StartOnceAsync(port, noBrowser, webRootPath, webRootSubdir, cancellationToken);
     }
 
     private static async Task StartOnceAsync(
         int port,
         bool noBrowser,
         string webRootPath,
+        string webRootSubdir,
         CancellationToken cancellationToken)
     {
         var baseDir = AppContext.BaseDirectory;
@@ -93,7 +98,7 @@ internal static class AevatarWebHost
         var app = builder.Build();
         var localUrl = $"http://localhost:{port}";
 
-        PrintBanner(localUrl, _currentApiBaseUrl, webRootPath);
+        PrintBanner(localUrl, _currentApiBaseUrl, webRootPath, webRootSubdir);
 
         app.Lifetime.ApplicationStarted.Register(() =>
         {
@@ -395,24 +400,32 @@ internal static class AevatarWebHost
         }
     }
 
-    private static string ResolveWebRootPath()
+    private static string ResolveWebRootPath(string subdir)
     {
         var baseDir = AppContext.BaseDirectory;
         var candidates = new[]
         {
-            Path.Combine(baseDir, "wwwroot", "aevatar"),
-            // dev-time fallback when running from the source checkout (bin/Debug/net10.0):
-            Path.GetFullPath(Path.Combine(baseDir, "../../../../Aexon.Commands/wwwroot/aevatar")),
+            Path.Combine(baseDir, "wwwroot", subdir),
+            // dev-time fallback when running from the source checkout:
+            Path.GetFullPath(Path.Combine(baseDir, $"../../../../Aexon.Commands/wwwroot/{subdir}")),
         };
 
         return candidates.FirstOrDefault(p => File.Exists(Path.Combine(p, "index.html")))
                ?? candidates[0];
     }
 
-    private static void PrintBanner(string url, string apiBaseUrl, string webRootPath)
+    private static void PrintBanner(string url, string apiBaseUrl, string webRootPath, string webRootSubdir)
     {
+        // Map the wwwroot subdir back to the user-visible subcommand name.
+        var subcommand = webRootSubdir switch
+        {
+            "aevatar-chat" => "chat",
+            "aevatar-workbench" => "web",
+            _ => "web",
+        };
+
         Console.WriteLine();
-        Console.WriteLine("  aexon aevatar web");
+        Console.WriteLine($"  aexon aevatar {subcommand}");
         Console.WriteLine($"  Web UI:   {url}");
         Console.WriteLine($"  API:      {apiBaseUrl}");
         Console.WriteLine($"  WebRoot:  {webRootPath}");
