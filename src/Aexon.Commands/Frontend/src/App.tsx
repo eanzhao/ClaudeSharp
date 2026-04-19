@@ -18,19 +18,8 @@ import ScopePage from './runtime/ScopePage';
 import './index.css';
 
 type WorkspacePage = 'console' | 'settings';
-type NonSettingsWorkspacePage = Exclude<WorkspacePage, 'settings'>;
 type SettingsSection = 'runtime' | 'cloud-config' | 'skills' | 'appearance';
-type AppHostMode = 'embedded' | 'proxy';
-
 const WORKSPACE_PAGE_VALUES: WorkspacePage[] = ['console', 'settings'];
-const NON_SETTINGS_WORKSPACE_PAGE_VALUES: NonSettingsWorkspacePage[] = ['console'];
-
-type AppContextState = {
-  hostMode: AppHostMode;
-  scopeId: string | null;
-  scopeResolved: boolean;
-  scopeSource: string;
-};
 
 type AuthSessionState = {
   loading: boolean;
@@ -131,12 +120,10 @@ const APPEARANCE_OPTIONS: AppearanceOption[] = [
 
 const DEFAULT_REMOTE_RUNTIME_URL = 'https://aevatar-console-backend-api.aevatar.ai';
 const DEFAULT_LOCAL_RUNTIME_URL = 'http://127.0.0.1:5080';
-const DEFAULT_RUNTIME_BASE_URL = DEFAULT_LOCAL_RUNTIME_URL;
 const USER_LLM_ROUTE_GATEWAY = '';
 const USER_CONFIG_PROVIDER_SOURCE_GATEWAY = 'gateway_provider';
 const USER_CONFIG_PROVIDER_SOURCE_SERVICE = 'user_service';
 const WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.workspace-page';
-const PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY = 'aevatar.app.previous-workspace-page';
 const APPEARANCE_THEME_STORAGE_KEY = 'aevatar.app.appearance-theme';
 const COLOR_MODE_STORAGE_KEY = 'aevatar.app.color-mode';
 
@@ -203,25 +190,6 @@ function getActiveRuntimeUrl(runtime: Pick<StudioSettingsState, 'runtimeMode' | 
     : normalizeRuntimeUrl(runtime.localRuntimeUrl, DEFAULT_LOCAL_RUNTIME_URL);
 }
 
-function createEmptyAppContext(): AppContextState {
-  return {
-    hostMode: 'embedded',
-    scopeId: null,
-    scopeResolved: false,
-    scopeSource: '',
-  };
-}
-
-function resolveAppContextState(context: any): AppContextState {
-  const resolvedScopeId = context?.scopeResolved && context?.scopeId ? context.scopeId : null;
-  return {
-    hostMode: context?.mode === 'proxy' ? 'proxy' : 'embedded',
-    scopeId: resolvedScopeId,
-    scopeResolved: Boolean(resolvedScopeId),
-    scopeSource: context?.scopeSource || '',
-  };
-}
-
 function isAuthResponseInvalid(error: any) {
   return Boolean(
     error?.status === 401 ||
@@ -260,10 +228,6 @@ function isWorkspacePage(value: string | null): value is WorkspacePage {
   return Boolean(value && WORKSPACE_PAGE_VALUES.includes(value as WorkspacePage));
 }
 
-function isNonSettingsWorkspacePage(value: string | null): value is NonSettingsWorkspacePage {
-  return Boolean(value && NON_SETTINGS_WORKSPACE_PAGE_VALUES.includes(value as NonSettingsWorkspacePage));
-}
-
 function readStoredWorkspacePage(): WorkspacePage {
   if (typeof window === 'undefined') {
     return 'console';
@@ -272,19 +236,6 @@ function readStoredWorkspacePage(): WorkspacePage {
   try {
     const raw = window.localStorage.getItem(WORKSPACE_PAGE_STORAGE_KEY);
     return isWorkspacePage(raw) ? raw : 'console';
-  } catch {
-    return 'console';
-  }
-}
-
-function readStoredPreviousWorkspacePage(): NonSettingsWorkspacePage {
-  if (typeof window === 'undefined') {
-    return 'console';
-  }
-
-  try {
-    const raw = window.localStorage.getItem(PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY);
-    return isNonSettingsWorkspacePage(raw) ? raw : 'console';
   } catch {
     return 'console';
   }
@@ -411,10 +362,8 @@ function toProviderDraft(item: any, providerTypes: ProviderTypeOption[]): Provid
 }
 
 function App() {
-  const [, setAppContext] = useState<AppContextState>(createEmptyAppContext());
   const [authSession, setAuthSession] = useState<AuthSessionState>(createEmptyAuthSession());
   const [workspacePage, setWorkspacePage] = useState<WorkspacePage>(() => readStoredWorkspacePage());
-  const [previousWorkspacePage, setPreviousWorkspacePage] = useState<NonSettingsWorkspacePage>(() => readStoredPreviousWorkspacePage());
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('runtime');
   const [userConfigState, setUserConfigState] = useState<UserConfigState>({
     defaultModel: '',
@@ -426,15 +375,7 @@ function App() {
     modelsLoading: false,
   });
 
-  const [, setWorkspaceSettings] = useState<{
-    runtimeBaseUrl: string;
-  }>({
-    runtimeBaseUrl: DEFAULT_RUNTIME_BASE_URL,
-  });
-
   const [settingsState, setSettingsState] = useState<StudioSettingsState>(createEmptyStudioSettings());
-  const [, setSelectedProviderKey] = useState<string | null>(null);
-
 
   const [ornnTestState, setOrnnTestState] = useState<{ status: 'idle' | 'testing' | 'success' | 'error'; message: string }>({ status: 'idle', message: '' });
   const [ornnSkillsCache, setOrnnSkillsCache] = useState<api.OrnnSkillSummary[]>([]);
@@ -451,7 +392,6 @@ function App() {
     text: string;
     type: 'success' | 'error' | 'info';
   } | null>(null);
-  const [, setStorageWarning] = useState<string | null>(null);
 
   const toastTimerRef = useRef<number | null>(null);
 
@@ -511,18 +451,6 @@ function App() {
       // Ignore storage errors in restricted browser contexts.
     }
   }, [workspacePage]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(PREVIOUS_WORKSPACE_PAGE_STORAGE_KEY, previousWorkspacePage);
-    } catch {
-      // Ignore storage errors in restricted browser contexts.
-    }
-  }, [previousWorkspacePage]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -621,17 +549,14 @@ function App() {
       }
 
       const [
-        contextResult,
         settingsResult,
         userConfigResult,
       ] = await Promise.allSettled([
-        api.app.getContext(),
         api.settings.get(),
         api.userConfig.get(),
       ]);
 
       const bootstrapFailures = [
-        { label: 'app context', result: contextResult },
         { label: 'studio settings', result: settingsResult },
         { label: 'user config', result: userConfigResult },
       ].flatMap(item =>
@@ -641,7 +566,6 @@ function App() {
 
       const authFailure = bootstrapFailures.find(item => isAuthResponseInvalid(item.error));
       if (authFailure) {
-        setStorageWarning(null);
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -660,9 +584,7 @@ function App() {
       const chronoStorageFailures = bootstrapFailures.filter(item => api.isChronoStorageServiceError(item.error));
       const nonChronoStorageFailures = bootstrapFailures.filter(item => !api.isChronoStorageServiceError(item.error));
       const nextStorageWarning = summarizeChronoStorageWarning(chronoStorageFailures);
-      setStorageWarning(nextStorageWarning);
 
-      const context = contextResult.status === 'fulfilled' ? contextResult.value : null;
       const settings = settingsResult.status === 'fulfilled' ? settingsResult.value : null;
       const userConfigData = userConfigResult.status === 'fulfilled' ? userConfigResult.value : null;
 
@@ -673,9 +595,6 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runtimeBaseUrl: nextRuntime }),
       }).catch(() => {});
-
-      setAppContext(resolveAppContextState(context));
-      setWorkspaceSettings({ runtimeBaseUrl: nextRuntime });
 
       hydrateSettings(settings, {
         ...runtimeConfig,
@@ -698,7 +617,6 @@ function App() {
       }
     } catch (error: any) {
       if (isAuthResponseInvalid(error)) {
-        setStorageWarning(null);
         setAuthSession(prev => ({
           ...prev,
           loading: false,
@@ -711,9 +629,7 @@ function App() {
       }
 
       if (api.isChronoStorageServiceError(error)) {
-        const message = api.getChronoStorageServiceErrorMessage(error);
-        setStorageWarning(message);
-        flash(message, 'error');
+        flash(api.getChronoStorageServiceErrorMessage(error), 'error');
       }
 
       setAuthSession(prev => ({
@@ -770,7 +686,6 @@ function App() {
       defaultModel: String(userConfigData?.defaultModel || '').trim(),
       preferredLlmRoute: normalizeUserLlmRoute(userConfigData?.preferredLlmRoute),
     }));
-    setSelectedProviderKey(providers[0]?.key || null);
     setRuntimeTestState({
       status: 'idle',
       message: '',
@@ -789,15 +704,12 @@ function App() {
   }
 
   function openSettingsPage(section: SettingsSection = 'runtime') {
-    if (workspacePage !== 'settings') {
-      setPreviousWorkspacePage(workspacePage);
-    }
     setWorkspacePage('settings');
     setSettingsSection(section);
   }
 
   function closeSettingsPage() {
-    setWorkspacePage(previousWorkspacePage);
+    setWorkspacePage('console');
   }
 
   async function handleSaveSettings() {
@@ -847,10 +759,6 @@ function App() {
         preferredLlmRoute: userConfigState.preferredLlmRoute,
         ...runtimeConfig,
       });
-      setWorkspaceSettings(prev => ({
-        ...prev,
-        runtimeBaseUrl: activeRuntimeUrl,
-      }));
       flash('Settings saved', 'success');
     } catch (error: any) {
       flash(error?.message || 'Failed to save settings', 'error');
