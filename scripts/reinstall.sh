@@ -45,6 +45,29 @@ PACKAGE_ID="Aexon"
 CLI_PROJECT="$REPO_ROOT/src/Aexon.Cli/Aexon.Cli.csproj"
 PACKAGE_OUTPUT="$REPO_ROOT/artifacts/packages"
 
+echo "==> Building Aexon.Commands frontend (chat + workbench)..."
+FRONTEND_DIR="$REPO_ROOT/src/Aexon.Commands/Frontend"
+if [[ ! -f "$FRONTEND_DIR/package.json" ]]; then
+  echo "Frontend directory not found at $FRONTEND_DIR" >&2
+  exit 1
+fi
+
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm not found on PATH. Install Node.js (>= 20) to build the frontend." >&2
+  exit 1
+fi
+
+(
+  cd "$FRONTEND_DIR"
+  if [[ -f package-lock.json ]]; then
+    npm ci --ignore-scripts
+  else
+    npm install --ignore-scripts
+  fi
+  npm run build
+)
+echo "==> Frontend build complete."
+
 echo "==> Cleaning previous package output"
 rm -rf "$PACKAGE_OUTPUT"
 mkdir -p "$PACKAGE_OUTPUT"
