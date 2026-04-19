@@ -90,17 +90,14 @@ for (const entry of topEntries) {
   const entryPath = path.join(wwwroot, entry);
   if (!fs.statSync(entryPath).isDirectory()) continue;
 
-  // Mirror entryPath/* into <subdir>/<entry>/* for each target subdir,
+  // Mirror entryPath/** into <subdir>/<entry>/** for each target subdir,
   // preserving the directory name so app.js's '/<entry>/<file>' URLs work.
-  for (const f of fs.readdirSync(entryPath)) {
-    const src = path.join(entryPath, f);
-    for (const dest of targetSubdirs) {
-      const destDir = path.join(wwwroot, dest, entry);
-      fs.mkdirSync(destDir, { recursive: true });
-      fs.copyFileSync(src, path.join(destDir, f));
-    }
-    fs.unlinkSync(src);
+  // Use cpSync for recursive copies (chunk dirs are usually flat, but
+  // public/ assets can have nested subdirectories like js/, styles/).
+  for (const dest of targetSubdirs) {
+    const destDir = path.join(wwwroot, dest, entry);
+    fs.cpSync(entryPath, destDir, { recursive: true });
   }
-  fs.rmdirSync(entryPath);
+  fs.rmSync(entryPath, { recursive: true, force: true });
   console.log(`relocate: ${entry}/ mirrored into subdirs (path preserved)`);
 }

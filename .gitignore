@@ -2,6 +2,10 @@
 **/bin/
 **/obj/
 
+## Tool-local state (worktrees, transcripts)
+.claude/
+.claire/
+
 ## Test results and coverage
 **/TestResults/
 coverage/
