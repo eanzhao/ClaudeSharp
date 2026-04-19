@@ -90,6 +90,10 @@ public sealed class AevatarCommand(
                 await SendOneShotAsync(rest, context);
                 return;
 
+            case "chat":
+                await RunChatWebAsync(rest, context);
+                return;
+
             case "web":
                 await RunWebAsync(rest, context);
                 return;
@@ -101,11 +105,14 @@ public sealed class AevatarCommand(
         }
     }
 
-    // ── Web UI subcommand ──
+    // ── Web UI subcommands ──
 
     private async Task RunWebAsync(string args, CommandContext context)
     {
-        var (port, noBrowser, error) = ParseWebFlags(args);
+        const int defaultPort = 6689;
+        const string webRootSubdir = "aevatar-workbench";
+
+        var (port, noBrowser, error) = ParseWebFlags(args, defaultPort);
         if (error is not null)
         {
             context.WriteLine(error);
@@ -118,7 +125,7 @@ public sealed class AevatarCommand(
 
         try
         {
-            await AevatarWebHost.RunAsync(port, baseUrl, noBrowser, context.CancellationToken);
+            await AevatarWebHost.RunAsync(port, baseUrl, webRootSubdir, noBrowser, context.CancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -126,9 +133,35 @@ public sealed class AevatarCommand(
         }
     }
 
-    private static (int Port, bool NoBrowser, string? Error) ParseWebFlags(string args)
+    private async Task RunChatWebAsync(string args, CommandContext context)
     {
-        var port = 6688;
+        const int defaultPort = 6688;
+        const string webRootSubdir = "aevatar-chat";
+
+        var (port, noBrowser, error) = ParseWebFlags(args, defaultPort);
+        if (error is not null)
+        {
+            context.WriteLine(error);
+            context.WriteLine("  Usage: /aevatar chat [--port <n>] [--no-browser]");
+            return;
+        }
+
+        var settings = settingsStore.Load();
+        var baseUrl = AevatarChatSettingsStore.ResolveBaseUrl(settings, @override: null);
+
+        try
+        {
+            await AevatarWebHost.RunAsync(port, baseUrl, webRootSubdir, noBrowser, context.CancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            WriteError(context, ex);
+        }
+    }
+
+    internal static (int Port, bool NoBrowser, string? Error) ParseWebFlags(string args, int defaultPort)
+    {
+        var port = defaultPort;
         var noBrowser = false;
 
         if (string.IsNullOrWhiteSpace(args))
@@ -1199,7 +1232,8 @@ public sealed class AevatarCommand(
         context.WriteLine("    /aevatar config set-url <url>           persist aevatar API base URL");
         context.WriteLine("    /aevatar config set-scope <scopeId>     persist scope id");
         context.WriteLine("    /aevatar config clear                   clear persisted base URL");
-        context.WriteLine("    /aevatar web [--port N] [--no-browser]  start workflow studio web UI (mainnet default)");
+        context.WriteLine("    /aevatar chat [--port N] [--no-browser]   start chat-only web UI (default port 6688)");
+        context.WriteLine("    /aevatar web  [--port N] [--no-browser]   start Service Workbench prototype (default port 6689)");
     }
 
     internal static (string head, string rest) SplitHead(string value)
