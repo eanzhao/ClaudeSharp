@@ -386,6 +386,13 @@ The tokens.css file uses `data-accent`, `data-theme`, `data-density` attributes 
 
 Captured here so future spec authors don't have to re-do the survey. Source: agent run `2026-04-19`, against `~/Code/aevatar/src/`. **None of these gaps are in scope for this spec — they're for the future "wire the Workbench to real backend" spec.**
 
+Hard-blocker gaps tracked upstream:
+- [aevatarAI/aevatar#242](https://github.com/aevatarAI/aevatar/issues/242) — AGUI: `thinking` / `ctx.change` / `handoff` / `retry` event types
+- [aevatarAI/aevatar#243](https://github.com/aevatarAI/aevatar/issues/243) — first-class Provenance metadata on read endpoints
+- [aevatarAI/aevatar#244](https://github.com/aevatarAI/aevatar/issues/244) — `BindingDto` fields + `:rotate` endpoint
+- [aevatarAI/aevatar#245](https://github.com/aevatarAI/aevatar/issues/245) — `runs/{a}:compare/{b}` and `services/{id}/health` aggregate
+- [aevatarAI/aevatar#246](https://github.com/aevatarAI/aevatar/issues/246) — generic HIL approval submit (clarify or add)
+
 ### Counts
 - ✅ Supported: 18
 - ⚠ Partial: 12
