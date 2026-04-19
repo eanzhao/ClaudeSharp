@@ -1,4 +1,4 @@
-/* ─── Aevatar Workflow Studio – API client ─── */
+/* ─── Aevatar Chat Console – API client ─── */
 
 import { getAccessToken } from './auth/nyxid';
 
@@ -136,89 +136,6 @@ async function request<T>(path: string, opts?: RequestInit): Promise<T> {
   };
 }
 
-export type ScopeScriptCommandAcceptedHandle = {
-  actorId: string;
-  commandId: string;
-  correlationId: string;
-};
-
-export type ScopeScriptAcceptedSummary = {
-  scopeId: string;
-  scriptId: string;
-  catalogActorId: string;
-  definitionActorId: string;
-  revisionId: string;
-  sourceHash: string;
-  acceptedAt: string;
-  proposalId: string;
-  expectedBaseRevision: string;
-};
-
-export type AppScopeScriptSaveAcceptedResponse = {
-  acceptedScript: ScopeScriptAcceptedSummary;
-  submittedSource: {
-    sourceText: string;
-    definitionActorId: string;
-    revision: string;
-    sourceHash: string;
-  };
-  definitionCommand: ScopeScriptCommandAcceptedHandle;
-  catalogCommand: ScopeScriptCommandAcceptedHandle;
-  scopeId: string;
-  scriptId: string;
-  revisionId: string;
-  catalogActorId: string;
-  definitionActorId: string;
-  sourceHash: string;
-  acceptedAt: string;
-  proposalId: string;
-  expectedBaseRevision: string;
-};
-
-export type AppScopeScriptSaveObservationRequest = {
-  revisionId: string;
-  definitionActorId: string;
-  sourceHash: string;
-  proposalId: string;
-  expectedBaseRevision: string;
-  acceptedAt: string;
-};
-
-export type AppScopeScriptSaveObservationResult = {
-  scopeId: string;
-  scriptId: string;
-  status: 'pending' | 'applied' | 'rejected';
-  message: string;
-  currentScript: any | null;
-  isTerminal: boolean;
-};
-
-async function requestText(path: string, opts?: RequestInit): Promise<string> {
-  const headers = createRequestHeaders(opts);
-  const res = await fetch(`${BASE}${path}`, {
-    ...opts,
-    headers,
-    credentials: 'include',
-  });
-
-  const contentType = res.headers.get('content-type');
-  if (!res.ok) {
-    return parseErrorResponse(res);
-  }
-
-  if (res.redirected || isHtmlContentType(contentType)) {
-    notifyAuthRequired({
-      loginUrl: res.redirected ? res.url : null,
-      message: 'API returned HTML instead of the requested file. Sign-in may be required.',
-    });
-    throw {
-      status: res.redirected ? 401 : res.status,
-      message: 'API returned HTML instead of the requested file. Sign-in may be required.',
-    };
-  }
-
-  return res.text();
-}
 
 export function isChronoStorageServiceError(error: any) {
   return Boolean(
@@ -309,93 +226,9 @@ async function streamSse(
   }
 }
 
-function normalizeAssistantFrame(frame: any) {
-  if (!frame || typeof frame !== 'object') {
-    return null;
-  }
-
-  if (frame.type) {
-    return frame;
-  }
-
-  if (frame.textMessageContent) {
-    return {
-      type: 'TEXT_MESSAGE_CONTENT',
-      delta: frame.textMessageContent.delta || '',
-    };
-  }
-
-  if (frame.textMessageReasoning) {
-    return {
-      type: 'TEXT_MESSAGE_REASONING',
-      delta: frame.textMessageReasoning.delta || '',
-    };
-  }
-
-  if (frame.textMessageEnd) {
-    return {
-      type: 'TEXT_MESSAGE_END',
-      message: frame.textMessageEnd.message || '',
-      delta: frame.textMessageEnd.delta || '',
-    };
-  }
-
-  if (frame.runError) {
-    return {
-      type: 'RUN_ERROR',
-      message: frame.runError.message || 'Assistant run failed.',
-    };
-  }
-
-  return frame;
-}
-
-/* ─── Editor ─── */
-export const editor = {
-  parseYaml:     (yaml: string, availableWorkflowNames?: string[]) => request<any>('/editor/parse-yaml',     { method: 'POST', body: JSON.stringify({ yaml, availableWorkflowNames }) }),
-  serializeYaml: (document: any, availableWorkflowNames?: string[]) => request<any>('/editor/serialize-yaml', { method: 'POST', body: JSON.stringify({ document, availableWorkflowNames }) }),
-  validate:      (document: any, availableWorkflowNames?: string[]) => request<any>('/editor/validate',       { method: 'POST', body: JSON.stringify({ document, availableWorkflowNames }) }),
-  normalize:     (document: any, availableWorkflowNames?: string[]) => request<any>('/editor/normalize',      { method: 'POST', body: JSON.stringify({ document, availableWorkflowNames }) }),
-  diff:          (a: any, b: any) => request<any>('/editor/diff',         { method: 'POST', body: JSON.stringify({ before: a, after: b }) }),
-};
-
 /* ─── Workspace ─── */
 export const workspace = {
-  getSettings:    ()              => request<any>('/workspace'),
-  updateSettings: (data: any)     => request<any>('/workspace/settings', { method: 'PUT', body: JSON.stringify(data) }),
-  addDirectory:   (data: any)     => request<any>('/workspace/directories', { method: 'POST', body: JSON.stringify(data) }),
-  removeDirectory:(id: string)    => request<any>(`/workspace/directories/${id}`, { method: 'DELETE' }),
-  listWorkflows:  ()              => request<any[]>('/workspace/workflows'),
-  getWorkflow:    (id: string)    => request<any>(`/workspace/workflows/${id}`),
-  saveWorkflow:   (data: any)     => request<any>('/workspace/workflows', { method: 'POST', body: JSON.stringify(data) }),
-};
-
-/* ─── Connectors ─── */
-export const connectors = {
-  getCatalog:  ()          => request<any>('/connectors'),
-  saveCatalog: (data: any) => request<any>('/connectors', { method: 'PUT', body: JSON.stringify(data) }),
-  importCatalog: (file: File) => {
-    const form = new FormData();
-    form.set('file', file, file.name);
-    return request<any>('/connectors/import', { method: 'POST', body: form });
-  },
-  getDraft:    ()          => request<any>('/connectors/draft'),
-  saveDraft:   (data: any) => request<any>('/connectors/draft', { method: 'PUT', body: JSON.stringify(data) }),
-  deleteDraft: ()          => request<void>('/connectors/draft', { method: 'DELETE' }),
-};
-
-/* ─── Roles ─── */
-export const roles = {
-  getCatalog:  ()          => request<any>('/roles'),
-  saveCatalog: (data: any) => request<any>('/roles', { method: 'PUT', body: JSON.stringify(data) }),
-  importCatalog: (file: File) => {
-    const form = new FormData();
-    form.set('file', file, file.name);
-    return request<any>('/roles/import', { method: 'POST', body: form });
-  },
-  getDraft:    ()          => request<any>('/roles/draft'),
-  saveDraft:   (data: any) => request<any>('/roles/draft', { method: 'PUT', body: JSON.stringify(data) }),
-  deleteDraft: ()          => request<void>('/roles/draft', { method: 'DELETE' }),
+  listWorkflows: () => request<any[]>('/workspace/workflows'),
 };
 
 /* ─── Settings ─── */
@@ -417,119 +250,6 @@ export const userConfig = {
   }>('/user-config/models'),
 };
 
-/* ─── Executions (runtime) ─── */
-export const executions = {
-  list:  ()              => request<any[]>('/executions'),
-  get:   (id: string)    => request<any>(`/executions/${id}`),
-  start: (data: any)     => request<any>('/executions', { method: 'POST', body: JSON.stringify(data) }),
-  resume:(id: string, data: any) => request<any>(`/executions/${id}/resume`, { method: 'POST', body: JSON.stringify(data) }),
-  stop:  (id: string, data: any) => request<any>(`/executions/${id}/stop`, { method: 'POST', body: JSON.stringify(data) }),
-};
-
-export const assistant = {
-  authorWorkflow: async (
-    data: {
-      prompt: string;
-      currentYaml?: string;
-      availableWorkflowNames?: string[];
-      metadata?: Record<string, string>;
-    },
-    options?: {
-      signal?: AbortSignal;
-      onText?: (text: string) => void;
-      onReasoning?: (text: string) => void;
-    },
-  ) => {
-    let text = '';
-    let reasoning = '';
-    await streamSse('/app/workflow-generator', data, frame => {
-      const normalized = normalizeAssistantFrame(frame);
-      if (!normalized) {
-        return;
-      }
-
-      if (normalized.type === 'TEXT_MESSAGE_CONTENT') {
-        text += normalized.delta || '';
-        options?.onText?.(text);
-        return;
-      }
-
-      if (normalized.type === 'TEXT_MESSAGE_REASONING') {
-        reasoning += normalized.delta || '';
-        options?.onReasoning?.(reasoning);
-        return;
-      }
-
-      if (normalized.type === 'TEXT_MESSAGE_END') {
-        text = text || normalized.message || normalized.delta || '';
-        options?.onText?.(text);
-        return;
-      }
-
-      if (normalized.type === 'RUN_ERROR') {
-        throw new Error(normalized.message || 'Assistant run failed.');
-      }
-    }, options?.signal);
-
-    return text;
-  },
-  authorScript: async (
-    data: {
-      prompt: string;
-      currentSource?: string;
-      currentPackage?: any;
-      currentFilePath?: string;
-      metadata?: Record<string, string>;
-    },
-    options?: {
-      signal?: AbortSignal;
-      onText?: (text: string) => void;
-      onReasoning?: (text: string) => void;
-    },
-  ) => {
-    let text = '';
-    let reasoning = '';
-    let scriptPackage: any = null;
-    let currentFilePath = '';
-    await streamSse('/app/scripts/generator', data, frame => {
-      const normalized = normalizeAssistantFrame(frame);
-      if (!normalized) {
-        return;
-      }
-
-      if (normalized.type === 'TEXT_MESSAGE_CONTENT') {
-        text += normalized.delta || '';
-        options?.onText?.(text);
-        return;
-      }
-
-      if (normalized.type === 'TEXT_MESSAGE_REASONING') {
-        reasoning += normalized.delta || '';
-        options?.onReasoning?.(reasoning);
-        return;
-      }
-
-      if (normalized.type === 'TEXT_MESSAGE_END') {
-        text = text || normalized.message || normalized.delta || '';
-        scriptPackage = normalized.scriptPackage || null;
-        currentFilePath = normalized.currentFilePath || '';
-        options?.onText?.(text);
-        return;
-      }
-
-      if (normalized.type === 'RUN_ERROR') {
-        throw new Error(normalized.message || 'Assistant run failed.');
-      }
-    }, options?.signal);
-
-    return {
-      text,
-      scriptPackage,
-      currentFilePath,
-    };
-  },
-};
-
 export const auth = {
   getSession: () => request<any>('/auth/me'),
 };
@@ -539,18 +259,6 @@ export const scope = {
   /** GET /api/scopes/{scopeId}/binding — read current default scope binding */
   getBinding: (scopeId: string) =>
     request<any>(`/scopes/${enc(scopeId)}/binding`),
-
-  /** PUT /api/scopes/{scopeId}/binding — bind workflow as a scope service */
-  bindWorkflow: (scopeId: string, workflowYamls: string[], displayName?: string, serviceId?: string) =>
-    request<any>(`/scopes/${enc(scopeId)}/binding`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        implementationKind: 'workflow',
-        ...(displayName ? { displayName } : {}),
-        ...(serviceId ? { serviceId } : {}),
-        workflowYamls,
-      }),
-    }),
 
   /** PUT /api/scopes/{scopeId}/binding — bind a static GAgent as a scope service */
   bindGAgent: (
@@ -573,60 +281,6 @@ export const scope = {
         },
       }),
     }),
-
-  /** PUT /api/scopes/{scopeId}/binding — bind a script as a scope service */
-  bindScript: (
-    scopeId: string,
-    scriptId: string,
-    displayName?: string,
-    serviceId?: string,
-    scriptRevision?: string,
-  ) =>
-    request<any>(`/scopes/${enc(scopeId)}/binding`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        implementationKind: 'script',
-        ...(displayName ? { displayName } : {}),
-        ...(serviceId ? { serviceId } : {}),
-        script: {
-          scriptId,
-          ...(scriptRevision ? { scriptRevision } : {}),
-        },
-      }),
-    }),
-
-  /** POST /api/scopes/{scopeId}/workflow/draft-run — draft run with inline bundle, SSE */
-  streamDraftRun: (
-    scopeId: string,
-    prompt: string,
-    workflowYamls?: string[],
-    onFrame?: (frame: any) => void,
-    signal?: AbortSignal,
-  ) => {
-    const body: any = { prompt };
-    if (workflowYamls?.length) body.workflowYamls = workflowYamls;
-    return streamSse(`/scopes/${enc(scopeId)}/workflow/draft-run`, body, onFrame ?? (() => {}), signal);
-  },
-
-  /** POST /api/scopes/{scopeId}/invoke/chat:stream — scope-level default chat, SSE */
-  streamDefaultChat: (
-    scopeId: string,
-    prompt: string,
-    actorId?: string,
-    sessionId?: string,
-    onFrame?: (frame: any) => void,
-    signal?: AbortSignal,
-    headers?: Record<string, string>,
-  ) => {
-    const body: any = { prompt };
-    if (actorId) body.actorId = actorId;
-    if (sessionId) body.sessionId = sessionId;
-    if (headers && Object.keys(headers).length > 0) body.headers = headers;
-    return streamSse(
-      `/scopes/${enc(scopeId)}/invoke/chat:stream`,
-      body, onFrame ?? (() => {}), signal,
-    );
-  },
 
   /** POST /api/scopes/{scopeId}/services/{serviceId}/invoke/{endpointId}:stream — service invoke, SSE */
   streamInvoke: (
@@ -670,13 +324,7 @@ export const scope = {
   getActorSnapshot: (actorId: string) =>
     request<any>(`/actors/${enc(actorId)}`),
 
-  /** GET /api/actors/{actorId}/timeline — run logs timeline */
-  getActorTimeline: (actorId: string, take = 50) =>
-    request<any>(`/actors/${enc(actorId)}/timeline?take=${take}`),
 };
-
-// Keep legacy alias for backward compat in App.tsx
-export const runtime = scope;
 
 /* ─── NyxID Chat APIs (runtime) ─── */
 export const nyxidChat = {
@@ -780,46 +428,6 @@ export const chatHistory = {
     }),
 };
 
-/* ─── GAgent APIs (runtime) ─── */
-export const gagent = {
-  /** GET /api/scopes/gagent-types — list available GAgent types */
-  listTypes: () =>
-    request<Array<{ typeName: string; fullName: string; assemblyName: string }>>('/scopes/gagent-types'),
-
-  /** GET /api/scopes/{scopeId}/gagent-actors — list persisted actor entries */
-  listActors: (scopeId: string) =>
-    request<Array<{ gAgentType: string; actorIds: string[] }>>(`/scopes/${enc(scopeId)}/gagent-actors`),
-
-  /** POST /api/scopes/{scopeId}/gagent-actors — persist a new actor ID entry */
-  addActor: (scopeId: string, gagentType: string, actorId: string) =>
-    request<void>(`/scopes/${enc(scopeId)}/gagent-actors`, {
-      method: 'POST',
-      body: JSON.stringify({ gagentType, actorId }),
-    }),
-
-  /** DELETE /api/scopes/{scopeId}/gagent-actors/{actorId} — remove an actor entry */
-  removeActor: (scopeId: string, gagentType: string, actorId: string) =>
-    request<void>(`/scopes/${enc(scopeId)}/gagent-actors/${enc(actorId)}?gagentType=${enc(gagentType)}`, {
-      method: 'DELETE',
-    }),
-
-  /** POST /api/scopes/{scopeId}/gagent/draft-run — draft-run a GAgent (SSE) */
-  streamDraftRun: (
-    scopeId: string,
-    actorTypeName: string,
-    prompt: string,
-    preferredActorId?: string,
-    onFrame?: (frame: any) => void,
-    signal?: AbortSignal,
-  ) =>
-    streamSse(
-      `/scopes/${enc(scopeId)}/gagent/draft-run`,
-      { actorTypeName, prompt, preferredActorId: preferredActorId || null },
-      onFrame ?? (() => {}),
-      signal,
-    ),
-};
-
 function enc(value: string) {
   return encodeURIComponent(value.trim());
 }
@@ -869,26 +477,10 @@ export const ornn = {
   },
 };
 
-/* ─── Explorer (manifest-based chrono-storage) ─── */
+/* ─── Explorer (attachment upload only) ─── */
 const encodeExplorerKey = (key: string) => key.split('/').map(segment => encodeURIComponent(segment)).join('/');
 
 export const explorer = {
-  getManifest: () => request<{ version: number; files: Array<{ key: string; type: string; name?: string; updatedAt?: string }> }>('/explorer/manifest'),
-  getFile: (key: string) => requestText(`/explorer/files/${encodeExplorerKey(key)}`),
-  getFileUrl: (key: string) => `${BASE}/explorer/files/${encodeExplorerKey(key)}`,
-  getFileBlob: async (key: string): Promise<Blob> => {
-    const resp = await fetch(`${BASE}/explorer/files/${encodeExplorerKey(key)}`, {
-      headers: getAuthHeaders(),
-      credentials: 'include',
-    });
-    if (!resp.ok) throw new Error(`Failed to fetch file: ${resp.status}`);
-    return resp.blob();
-  },
-  putFile: (key: string, content: string) => request<void>(`/explorer/files/${encodeExplorerKey(key)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'text/plain' },
-    body: content,
-  }),
   uploadFile: async (key: string, file: File): Promise<{ key: string; size: number; contentType: string }> => {
     const form = new FormData();
     form.append('file', file);
@@ -901,27 +493,4 @@ export const explorer = {
     if (!resp.ok) throw new Error(`Upload failed: ${resp.status}`);
     return resp.json();
   },
-  deleteFile: (key: string) => request<void>(`/explorer/files/${encodeExplorerKey(key)}`, {
-    method: 'DELETE',
-  }),
-};
-
-export const app = {
-  getContext: () => request<any>('/app/context'),
-  validateDraftScript: (data: any, signal?: AbortSignal) => request<any>('/app/scripts/validate', { method: 'POST', body: JSON.stringify(data), signal }),
-  listScripts: (includeSource = false) => request<any>(`/app/scripts?includeSource=${includeSource ? 'true' : 'false'}`),
-  getScript: (scriptId: string) => request<any>(`/app/scripts/${encodeURIComponent(scriptId)}`),
-  getScriptCatalog: (scriptId: string) => request<any>(`/app/scripts/${encodeURIComponent(scriptId)}/catalog`),
-  listScriptRuntimes: (take = 24) => request<any>(`/app/scripts/runtimes?take=${take}`),
-  getEvolutionDecision: (proposalId: string) => request<any>(`/app/scripts/evolutions/${encodeURIComponent(proposalId)}`),
-  getRuntimeReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
-  saveScript: (data: any) => request<AppScopeScriptSaveAcceptedResponse>('/app/scripts', { method: 'POST', body: JSON.stringify(data) }),
-  observeScriptSave: (scriptId: string, data: AppScopeScriptSaveObservationRequest) =>
-    request<AppScopeScriptSaveObservationResult>(`/app/scripts/${encodeURIComponent(scriptId)}/save-observation`, { method: 'POST', body: JSON.stringify(data) }),
-  runDraftScript: (scopeId: string, data: any) => request<any>(`/scopes/${enc(scopeId)}/scripts/draft-run`, { method: 'POST', body: JSON.stringify(data) }),
-};
-
-export const scripts = {
-  getReadModel: (actorId: string) => request<any>(`/app/scripts/runtimes/${encodeURIComponent(actorId)}/readmodel`),
-  proposeEvolution: (data: any) => request<any>('/app/scripts/evolutions/proposals', { method: 'POST', body: JSON.stringify(data) }),
 };
