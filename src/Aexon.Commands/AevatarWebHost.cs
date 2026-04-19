@@ -13,16 +13,19 @@ using Microsoft.Extensions.Logging;
 namespace Aexon.Commands;
 
 /// <summary>
-/// In-process web host that serves the aevatar workflow studio frontend and
-/// reverse-proxies <c>/api/*</c> to a remote aevatar backend. Ported from the
-/// upstream <c>aevatar app</c> command, trimmed down for aexon's simpler
-/// "single remote backend" use case (no local-vs-remote routing split).
+/// In-process web host that serves one of aexon's aevatar frontends
+/// (chat console at <c>wwwroot/aevatar-chat/</c> or Service Workbench at
+/// <c>wwwroot/aevatar-workbench/</c>, picked by the <c>webRootSubdir</c>
+/// argument) and reverse-proxies <c>/api/*</c> to a remote aevatar backend.
+/// Ported from the upstream <c>aevatar app</c> command, trimmed down for
+/// aexon's simpler "single remote backend" use case (no local-vs-remote
+/// routing split).
 /// </summary>
 /// <remarks>
 /// Excluded from coverage — the entire class boots Kestrel, opens browsers,
 /// and proxies HTTP traffic. Unit-testing it in isolation is not productive;
-/// behavioral correctness is verified by running <c>aexon aevatar web</c>
-/// against mainnet.
+/// behavioral correctness is verified by running <c>aexon aevatar chat</c>
+/// or <c>aexon aevatar web</c> against mainnet.
 /// </remarks>
 [ExcludeFromCodeCoverage]
 internal static class AevatarWebHost

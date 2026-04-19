@@ -1520,9 +1520,9 @@ function AppAuthenticationGate(props: {
                 <Shield size={22} />
               </div>
               <div>
-                <div className="text-[28px] font-semibold leading-tight text-gray-900">Sign in to open Workflow Studio</div>
+                <div className="text-[28px] font-semibold leading-tight text-gray-900">Sign in to open the Console</div>
                 <div className="mt-3 max-w-[520px] text-[14px] leading-6 text-gray-500">
-                  Studio content, workflow execution, and scope-backed assets are only available after {props.providerDisplayName || 'NyxID'} authentication succeeds.
+                  The chat console and scope-backed settings are only available after {props.providerDisplayName || 'NyxID'} authentication succeeds.
                 </div>
               </div>
             </div>
