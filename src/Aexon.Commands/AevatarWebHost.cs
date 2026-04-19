@@ -50,7 +50,7 @@ internal static class AevatarWebHost
 
         try
         {
-            await StartOnceAsync(port, noBrowser, webRootPath, cancellationToken);
+            await StartOnceAsync(port, noBrowser, webRootPath, webRootSubdir, cancellationToken);
             return;
         }
         catch (Exception ex) when (IsAddressInUse(ex))
@@ -69,13 +69,14 @@ internal static class AevatarWebHost
 
         // Second and final attempt — if it still fails, let the exception propagate so
         // the caller can surface it to the user.
-        await StartOnceAsync(port, noBrowser, webRootPath, cancellationToken);
+        await StartOnceAsync(port, noBrowser, webRootPath, webRootSubdir, cancellationToken);
     }
 
     private static async Task StartOnceAsync(
         int port,
         bool noBrowser,
         string webRootPath,
+        string webRootSubdir,
         CancellationToken cancellationToken)
     {
         var baseDir = AppContext.BaseDirectory;
@@ -94,7 +95,7 @@ internal static class AevatarWebHost
         var app = builder.Build();
         var localUrl = $"http://localhost:{port}";
 
-        PrintBanner(localUrl, _currentApiBaseUrl, webRootPath);
+        PrintBanner(localUrl, _currentApiBaseUrl, webRootPath, webRootSubdir);
 
         app.Lifetime.ApplicationStarted.Register(() =>
         {
@@ -410,10 +411,18 @@ internal static class AevatarWebHost
                ?? candidates[0];
     }
 
-    private static void PrintBanner(string url, string apiBaseUrl, string webRootPath)
+    private static void PrintBanner(string url, string apiBaseUrl, string webRootPath, string webRootSubdir)
     {
+        // Map the wwwroot subdir back to the user-visible subcommand name.
+        var subcommand = webRootSubdir switch
+        {
+            "aevatar-chat" => "chat",
+            "aevatar-workbench" => "web",
+            _ => "web",
+        };
+
         Console.WriteLine();
-        Console.WriteLine("  aexon aevatar web");
+        Console.WriteLine($"  aexon aevatar {subcommand}");
         Console.WriteLine($"  Web UI:   {url}");
         Console.WriteLine($"  API:      {apiBaseUrl}");
         Console.WriteLine($"  WebRoot:  {webRootPath}");
