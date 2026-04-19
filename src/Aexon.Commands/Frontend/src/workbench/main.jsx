@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client';
 
 // Bridge UMD-style globals expected by the design's JSX files
 // (which were originally written for React UMD + Babel-standalone).
+// The design's components reference both `React.useState(...)` and bare
+// `useState(...)` / `useEffect(...)`, so we expose all four — removing
+// any of them would break specific files.
 window.React = React;
 window.ReactDOM = ReactDOM;
 window.useState = useState;

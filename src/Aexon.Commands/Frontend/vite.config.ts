@@ -59,7 +59,7 @@ export default defineConfig({
         // by scripts/relocate-html.js.
         entryFileNames: 'aevatar-[name]/app.js',
         chunkFileNames: 'aevatar-[name]/[name]-[hash].js',
-        assetFileNames: 'staging/[name][extname]',
+        assetFileNames: 'staging/[name]-[hash][extname]',
       },
     },
   },

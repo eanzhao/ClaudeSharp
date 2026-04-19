@@ -67,6 +67,20 @@ if (fs.existsSync(staging)) {
 // Rollup's shared-chunk naming when chunkFileNames uses [name]) into both
 // target subdirs, rewrite the HTML hrefs, then delete the stray dir.
 const topEntries = fs.readdirSync(wwwroot);
+const otherDirs = topEntries.filter(
+  (entry) =>
+    !targetSubdirs.includes(entry) &&
+    fs.statSync(path.join(wwwroot, entry)).isDirectory(),
+);
+if (otherDirs.length > 0) {
+  console.warn(
+    `relocate: WARNING — found ${otherDirs.length} unknown chunk dir(s): ` +
+    `${otherDirs.join(', ')}. ` +
+    `Copying contents to BOTH entry subdirs as a safe default. ` +
+    `If these are per-entry chunks (not shared), refine vite.config.ts ` +
+    `chunkFileNames to land them in the owning entry subdir.`
+  );
+}
 for (const entry of topEntries) {
   if (targetSubdirs.includes(entry)) continue;   // already handled
   const entryPath = path.join(wwwroot, entry);
